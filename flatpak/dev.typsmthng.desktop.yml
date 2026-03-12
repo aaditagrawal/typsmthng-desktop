@@ -1,0 +1,32 @@
+app-id: dev.typsmthng.desktop
+runtime: org.freedesktop.Platform
+runtime-version: "23.08"
+sdk: org.freedesktop.Sdk
+command: typsmthng
+
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --share=network
+  - --filesystem=home
+  - --device=dri
+
+modules:
+  - name: typsmthng
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 typsmthng -t /app/bin/
+      - cp -r views /app/bin/views 2>/dev/null || true
+      - cp -r bun /app/bin/bun 2>/dev/null || true
+      - install -Dm644 dev.typsmthng.desktop.desktop -t /app/share/applications/
+      - install -Dm644 icon.png /app/share/icons/hicolor/256x256/apps/dev.typsmthng.desktop.png
+    sources:
+      - type: dir
+        path: ../build/typsmthng
+      - type: file
+        path: dev.typsmthng.desktop.desktop
+      - type: file
+        path: ../assets/icon.png
+        dest-filename: icon.png
