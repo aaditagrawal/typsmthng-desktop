@@ -9,8 +9,10 @@ const resolveSourceLocBatchBackendMock = vi.fn()
 const compileToPdfBackendMock = vi.fn()
 const ensurePackagesForCompileBackendMock = vi.fn()
 const isCompilerReadyBackendMock = vi.fn(() => false)
+const mountLivePreviewBackendMock = vi.fn()
 const settingsState = {
   systemFontsEnabled: false,
+  googleFontsEnabled: true,
 }
 
 vi.mock('comlink', () => ({
@@ -32,18 +34,20 @@ vi.mock('./compiler-backend', () => ({
   compileToPdfBackend: compileToPdfBackendMock,
   ensurePackagesForCompileBackend: ensurePackagesForCompileBackendMock,
   isCompilerReadyBackend: isCompilerReadyBackendMock,
+  mountLivePreviewBackend: mountLivePreviewBackendMock,
 }))
 
-function installWindow(): void {
+function installWindow(overrides?: Partial<Window>): void {
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
-        localStorage: {
-          getItem: vi.fn(() => null),
-        },
-        queryLocalFonts: undefined,
+      localStorage: {
+        getItem: vi.fn(() => null),
       },
-    })
+      queryLocalFonts: undefined,
+      ...overrides,
+    },
+  })
 }
 
 async function loadModule() {
@@ -56,7 +60,9 @@ describe('compiler-client', () => {
     vi.clearAllMocks()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     settingsState.systemFontsEnabled = false
+    settingsState.googleFontsEnabled = true
     installWindow()
+    globalThis.fetch = vi.fn(async () => new Response('')) as unknown as typeof fetch
     Reflect.deleteProperty(globalThis, 'Worker')
     initCompilerBackendMock.mockResolvedValue(undefined)
     compileTypstBackendMock.mockResolvedValue({
@@ -71,6 +77,10 @@ describe('compiler-client', () => {
     compileToPdfBackendMock.mockResolvedValue(new Uint8Array([7]))
     ensurePackagesForCompileBackendMock.mockResolvedValue(undefined)
     isCompilerReadyBackendMock.mockReturnValue(false)
+    mountLivePreviewBackendMock.mockResolvedValue({
+      dispose: vi.fn(),
+      refresh: vi.fn(),
+    })
   })
 
   it('falls back to the backend when workers are unavailable', async () => {
@@ -114,13 +124,13 @@ describe('compiler-client', () => {
     const mod = await loadModule()
     const result = await mod.compileTypstClient('worker-source')
 
-    expect(workerApi.initCompiler).toHaveBeenCalledWith({ systemFontData: [] })
+    expect(workerApi.initCompiler).toHaveBeenCalledWith({ fontData: [] })
     expect(workerApi.compileTypst).toHaveBeenCalledWith('worker-source', undefined, '/main.typ', undefined)
     expect(compileTypstBackendMock).not.toHaveBeenCalled()
     expect(result.svg).toBe('<svg>worker</svg>')
   })
 
-  it('loads matching local fonts when system font support is enabled', async () => {
+  it('loads matching local fonts and Google Fonts when support is enabled', async () => {
     settingsState.systemFontsEnabled = true
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
@@ -134,27 +144,81 @@ describe('compiler-client', () => {
             fullName: 'SF Pro Text Regular',
             postscriptName: 'SFProText-Regular',
             style: 'Regular',
-            blob: vi.fn().mockResolvedValue(new Blob([new Uint8Array([1, 2, 3])])),
-          },
-          {
-            family: 'Helvetica',
-            fullName: 'Helvetica Regular',
-            postscriptName: 'Helvetica-Regular',
-            style: 'Regular',
-            blob: vi.fn().mockResolvedValue(new Blob([new Uint8Array([4, 5, 6])])),
+            blob: vi.fn().mockResolvedValue({
+              arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]).buffer),
+            }),
           },
         ]),
       },
     })
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('https://fonts.googleapis.com/css?family=Inter')) {
+        return new Response('@font-face { src: url(https://fonts.gstatic.com/s/inter/test.woff2); }')
+      }
+      if (url === 'https://fonts.gstatic.com/s/inter/test.woff2') {
+        return new Response(new Uint8Array([4, 5, 6]))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    const mod = await loadModule()
+    await mod.compileTypstClient('#set text(font: "SF Pro Text")\n#set text(font: "Inter")\nHello')
+
+    expect(configureCompilerBackendMock).toHaveBeenCalledWith({
+      fontData: [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])],
+    })
+    expect(initCompilerBackendMock).toHaveBeenCalledTimes(1)
+    expect(compileTypstBackendMock).toHaveBeenCalled()
+  })
+
+  it('passes cached font data into worker init without clearing it', async () => {
+    settingsState.systemFontsEnabled = true
+    installWindow({
+      queryLocalFonts: vi.fn().mockResolvedValue([
+        {
+          family: 'SF Pro Text',
+          fullName: 'SF Pro Text Regular',
+          postscriptName: 'SFProText-Regular',
+          style: 'Regular',
+          blob: vi.fn().mockResolvedValue({
+            arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([9, 8, 7]).buffer),
+          }),
+        },
+      ]),
+    } as Partial<Window>)
+
+    const workerApi = {
+      initCompiler: vi.fn().mockResolvedValue(undefined),
+      compileTypst: vi.fn().mockResolvedValue({
+        svg: '<svg>worker</svg>',
+        vectorData: new Uint8Array([3]),
+        pageDimensions: [{ width: 320, height: 240 }],
+        diagnostics: [],
+        success: true,
+      }),
+      resolveSourceLoc: vi.fn().mockResolvedValue('worker-loc'),
+      resolveSourceLocBatch: vi.fn().mockResolvedValue(['worker-a']),
+      compileToPdf: vi.fn().mockResolvedValue(new Uint8Array([5])),
+      ensurePackagesForCompile: vi.fn().mockResolvedValue(undefined),
+      isCompilerReady: vi.fn().mockReturnValue(true),
+    }
+    class MockWorker {
+      terminate = vi.fn()
+    }
+
+    Object.defineProperty(globalThis, 'Worker', {
+      configurable: true,
+      value: MockWorker,
+    })
+    wrapMock.mockReturnValue(workerApi)
 
     const mod = await loadModule()
     await mod.compileTypstClient('#set text(font: "SF Pro Text")\nHello')
 
-    expect(configureCompilerBackendMock).toHaveBeenCalledWith({
-      systemFontData: [new Uint8Array([1, 2, 3])],
+    expect(workerApi.initCompiler).toHaveBeenCalledWith({
+      fontData: [new Uint8Array([9, 8, 7])],
     })
-    expect(initCompilerBackendMock).toHaveBeenCalledTimes(1)
-    expect(compileTypstBackendMock).toHaveBeenCalled()
   })
 
   it('terminates a failing worker and falls back to backend calls', async () => {

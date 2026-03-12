@@ -172,6 +172,7 @@ export function SettingsModal() {
     vimMode, setVimMode,
     pageSize, setPageSize,
     systemFontsEnabled, setSystemFontsEnabled,
+    googleFontsEnabled, setGoogleFontsEnabled,
     translucent, setTranslucent,
   } = useSettingsStore(useShallow((s) => ({
     open: s.settingsOpen, setOpen: s.setSettingsOpen,
@@ -184,19 +185,27 @@ export function SettingsModal() {
     vimMode: s.vimMode, setVimMode: s.setVimMode,
     pageSize: s.pageSize, setPageSize: s.setPageSize,
     systemFontsEnabled: s.systemFontsEnabled, setSystemFontsEnabled: s.setSystemFontsEnabled,
+    googleFontsEnabled: s.googleFontsEnabled, setGoogleFontsEnabled: s.setGoogleFontsEnabled,
     translucent: s.translucent, setTranslucent: s.setTranslucent,
   })))
 
   const backdropRef = useRef<HTMLDivElement>(null)
 
   const handleClose = useCallback(() => setOpen(false), [setOpen])
-  const handleSystemFontsChange = useCallback((enabled: boolean) => {
-    setSystemFontsEnabled(enabled)
+  const forceRecompile = useCallback(() => {
     void forceCompile(
       useEditorStore.getState().source,
       useProjectStore.getState().currentFilePath,
     )
-  }, [setSystemFontsEnabled])
+  }, [])
+  const handleSystemFontsChange = useCallback((enabled: boolean) => {
+    setSystemFontsEnabled(enabled)
+    forceRecompile()
+  }, [forceRecompile, setSystemFontsEnabled])
+  const handleGoogleFontsChange = useCallback((enabled: boolean) => {
+    setGoogleFontsEnabled(enabled)
+    forceRecompile()
+  }, [forceRecompile, setGoogleFontsEnabled])
 
   useEffect(() => {
     if (!open) return
@@ -376,6 +385,13 @@ export function SettingsModal() {
 
           <SettingRow label="System Fonts" description="Allow Typst documents to use installed local fonts">
             <Toggle checked={systemFontsEnabled} onChange={handleSystemFontsChange} />
+          </SettingRow>
+
+          <SettingRow
+            label="Google Fonts"
+            description={'Auto-import declared Google Font families, like font: "Inter"'}
+          >
+            <Toggle checked={googleFontsEnabled} onChange={handleGoogleFontsChange} />
           </SettingRow>
 
           <SectionLabel>Compiler</SectionLabel>

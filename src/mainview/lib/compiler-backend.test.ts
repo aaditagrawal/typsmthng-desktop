@@ -103,11 +103,11 @@ describe('compiler-backend', () => {
     expect(withPackageRegistryMock).toHaveBeenCalled()
   })
 
-  it('includes configured system fonts in the compiler font loader', async () => {
+  it('includes configured external fonts in the compiler font loader', async () => {
     const mod = await loadModule()
     const localFont = new Uint8Array([8, 6, 7, 5, 3, 0, 9])
 
-    mod.configureCompilerBackend({ systemFontData: [localFont] })
+    mod.configureCompilerBackend({ fontData: [localFont] })
     await mod.initCompilerBackend()
 
     expect(loadFontsMock).toHaveBeenCalledWith([localFont], { assets: ['text'] })
