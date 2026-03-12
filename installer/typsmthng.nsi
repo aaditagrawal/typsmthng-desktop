@@ -22,7 +22,7 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Copy application files
-  File /r "${BUILD_DIR}\typsmthng\*.*"
+  File /r "${BUILD_DIR}\*.*"
 
   ; Create uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
