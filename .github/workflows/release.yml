@@ -65,7 +65,7 @@ jobs:
             platform: macos
             arch: arm64
           - label: macOS x64
-            runner: macos-13
+            runner: macos-15
             platform: macos
             arch: x64
           - label: Linux x64 (AppImage)
