@@ -6,9 +6,6 @@ InstallDir "$LOCALAPPDATA\typsmthng"
 InstallDirRegKey HKCU "Software\typsmthng" "InstallDir"
 RequestExecutionLevel user
 
-!define MUI_ICON "${BUILD_DIR}\icon.ico"
-!define MUI_UNICON "${BUILD_DIR}\icon.ico"
-
 ; Pages
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -31,11 +28,6 @@ Section "Install"
   CreateDirectory "$SMPROGRAMS\typsmthng"
   CreateShortcut "$SMPROGRAMS\typsmthng\typsmthng.lnk" "$INSTDIR\typsmthng.exe"
   CreateShortcut "$SMPROGRAMS\typsmthng\Uninstall.lnk" "$INSTDIR\uninstall.exe"
-
-  ; Desktop shortcut (optional, controlled by /DESKTOP flag)
-  ${If} ${FileExists} "$DESKTOP"
-    CreateShortcut "$DESKTOP\typsmthng.lnk" "$INSTDIR\typsmthng.exe"
-  ${EndIf}
 
   ; Registry entries for Add/Remove Programs
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" \
