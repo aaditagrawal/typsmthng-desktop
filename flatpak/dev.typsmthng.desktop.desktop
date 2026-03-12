@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=typsmthng
-Comment=Folder-backed Typst editor
-Exec=typsmthng
-Icon=dev.typsmthng.desktop
-Type=Application
-Categories=Office;TextEditor;

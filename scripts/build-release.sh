@@ -48,18 +48,7 @@ case "$PLATFORM" in
     bash "$SCRIPTS_DIR/package-macos.sh" "$ARCH"
     ;;
   linux)
-    case "${FORMAT:-appimage}" in
-      appimage)
-        bash "$SCRIPTS_DIR/package-linux-appimage.sh"
-        ;;
-      flatpak)
-        bash "$SCRIPTS_DIR/package-linux-flatpak.sh"
-        ;;
-      *)
-        echo "Unknown Linux format: $FORMAT"
-        exit 1
-        ;;
-    esac
+    bash "$SCRIPTS_DIR/package-linux-appimage.sh"
     ;;
   win)
     bash "$SCRIPTS_DIR/package-windows.sh"
