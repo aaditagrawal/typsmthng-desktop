@@ -31,6 +31,7 @@ interface Settings {
   vimMode: boolean
   pageSize: PageSize
   systemFontsEnabled: boolean
+  googleFontsEnabled: boolean
   translucent: boolean
 }
 
@@ -45,6 +46,7 @@ interface SettingsState extends Settings {
   setVimMode: (enabled: boolean) => void
   setPageSize: (size: PageSize) => void
   setSystemFontsEnabled: (enabled: boolean) => void
+  setGoogleFontsEnabled: (enabled: boolean) => void
   setTranslucent: (enabled: boolean) => void
   setSettingsOpen: (open: boolean) => void
   loadSettings: () => Promise<void>
@@ -60,6 +62,7 @@ const defaults: Settings = {
   vimMode: false,
   pageSize: 'auto',
   systemFontsEnabled: false,
+  googleFontsEnabled: true,
   translucent: true,
 }
 
@@ -90,6 +93,7 @@ function getPersistedFields(state: SettingsState): Settings {
     vimMode: state.vimMode,
     pageSize: state.pageSize,
     systemFontsEnabled: state.systemFontsEnabled,
+    googleFontsEnabled: state.googleFontsEnabled,
     translucent: state.translucent,
   }
 }
@@ -146,6 +150,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     persistSettings(getPersistedFields({ ...get(), systemFontsEnabled }))
   },
 
+  setGoogleFontsEnabled: (googleFontsEnabled) => {
+    set({ googleFontsEnabled })
+    persistSettings(getPersistedFields({ ...get(), googleFontsEnabled }))
+  },
+
   setTranslucent: (translucent) => {
     set({ translucent })
     persistSettings(getPersistedFields({ ...get(), translucent }))
@@ -167,6 +176,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           vimMode: saved.vimMode ?? defaults.vimMode,
           pageSize: saved.pageSize ?? defaults.pageSize,
           systemFontsEnabled: saved.systemFontsEnabled ?? defaults.systemFontsEnabled,
+          googleFontsEnabled: saved.googleFontsEnabled ?? defaults.googleFontsEnabled,
           translucent: saved.translucent ?? defaults.translucent,
         })
         useUIStore.getState().setTheme(saved.theme ?? defaults.theme)

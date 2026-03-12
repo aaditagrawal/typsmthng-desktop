@@ -122,9 +122,13 @@ async function getLocalFontsIndex(): Promise<Map<string, LocalFontDescriptor[]>>
   return localFontsIndexPromise
 }
 
-async function loadSystemFontData(families: string[]): Promise<{ key: string; data: Uint8Array[] }> {
+async function loadSystemFontData(families: string[]): Promise<{
+  key: string
+  data: Uint8Array[]
+  matchedFamilies: string[]
+}> {
   if (families.length === 0) {
-    return { key: '', data: [] }
+    return { key: '', data: [], matchedFamilies: [] }
   }
 
   const fontIndex = await getLocalFontsIndex()
@@ -133,7 +137,7 @@ async function loadSystemFontData(families: string[]): Promise<{ key: string; da
     .filter((family, index, allFamilies) => fontIndex.has(family) && allFamilies.indexOf(family) === index)
 
   if (matchedFamilies.length === 0) {
-    return { key: '', data: [] }
+    return { key: '', data: [], matchedFamilies: [] }
   }
 
   const dataChunks = await Promise.all(
@@ -153,6 +157,7 @@ async function loadSystemFontData(families: string[]): Promise<{ key: string; da
   return {
     key: matchedFamilies.sort().join('\n'),
     data: dataChunks.flat(),
+    matchedFamilies,
   }
 }
 
@@ -261,9 +266,12 @@ export async function loadDeclaredFontData(
 
   const systemFonts = options.systemFontsEnabled
     ? await loadSystemFontData(families)
-    : { key: '', data: [] as Uint8Array[] }
+    : { key: '', data: [] as Uint8Array[], matchedFamilies: [] as string[] }
+  const googleCandidates = families.filter(
+    (family) => !systemFonts.matchedFamilies.includes(normalizeFontFamily(family)),
+  )
   const googleFonts = options.googleFontsEnabled
-    ? await loadGoogleFontData(families)
+    ? await loadGoogleFontData(googleCandidates)
     : { key: '', data: [] as Uint8Array[] }
 
   const keyParts = []
