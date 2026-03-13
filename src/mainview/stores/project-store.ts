@@ -277,7 +277,7 @@ function updateWindowTitle() {
     void desktopRpc.request.setWindowTitle({ title: "typsmthng" })
     return
   }
-  const fileName = currentFilePath.split("/").pop() ?? ""
+  const fileName = basenameOf(currentFilePath)
   void desktopRpc.request.setWindowTitle({
     title: `${project.name} — ${fileName} — typsmthng`,
   })
@@ -520,6 +520,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         saveStatus: "saved",
       });
     }
+    updateWindowTitle();
   },
 
   createProject: async (name, scaffold) => {
