@@ -16,6 +16,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { compileToPdf, ensurePackagesForCompile } from '@/lib/compiler'
 import { useSettingsStore } from '@/stores/settings-store'
+import { isMacOS } from '@/lib/platform'
 import { applyPagePreamble, ensureCompilerReady } from '@/lib/compile-manager'
 import { findPreviewImportSpecs } from '@/lib/universe-registry'
 
@@ -114,7 +115,7 @@ export function Toolbar() {
       } as React.CSSProperties}
     >
       {/* Left section — extra left padding for macOS traffic lights */}
-      <div className="flex items-center gap-1 shrink-0 electrobun-webkit-app-region-no-drag" style={{ paddingLeft: '84px', paddingRight: '12px' } as React.CSSProperties}>
+      <div className="flex items-center gap-1 shrink-0 electrobun-webkit-app-region-no-drag" style={{ paddingLeft: isMacOS ? '84px' : '16px', paddingRight: '12px', position: 'relative', zIndex: 10 } as React.CSSProperties}>
         <button
           className="inline-flex items-center justify-center shrink-0"
           onClick={() => useProjectStore.getState().goHome()}
@@ -195,7 +196,7 @@ export function Toolbar() {
       </div>
 
       {/* Right section */}
-      <div className="flex items-center gap-1 pl-3 pr-5 shrink-0 electrobun-webkit-app-region-no-drag">
+      <div className="flex items-center gap-1 pl-3 pr-5 shrink-0 electrobun-webkit-app-region-no-drag" style={{ position: 'relative', zIndex: 10 }}>
         <button
           className="toolbar-button"
           title={currentFavorite ? 'Unfavorite vault' : 'Favorite vault'}

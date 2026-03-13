@@ -6,6 +6,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import type { PageSize } from '@/stores/settings-store'
 import { forceCompile } from '@/lib/compile-manager'
+import { isLinux } from '@/lib/platform'
 
 type Theme = 'light' | 'dark' | 'system'
 
@@ -354,9 +355,11 @@ export function SettingsModal() {
             <ThemeSegment value={theme} onChange={setTheme} />
           </SettingRow>
 
-          <SettingRow label="Translucent" description="Frosted glass window appearance">
-            <Toggle checked={translucent} onChange={setTranslucent} />
-          </SettingRow>
+          {!isLinux && (
+            <SettingRow label="Translucent" description="Frosted glass window appearance">
+              <Toggle checked={translucent} onChange={setTranslucent} />
+            </SettingRow>
+          )}
 
           <SectionLabel>Document</SectionLabel>
 

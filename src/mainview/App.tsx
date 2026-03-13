@@ -4,6 +4,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useUIStore } from '@/stores/ui-store'
 import { preloadWorkspaceShell } from '@/components/workspace/preload'
+import { isLinux } from '@/lib/platform'
 
 const HomeShell = lazy(() => import('@/components/home/home-shell'))
 const WorkspaceShell = lazy(() => import('@/components/workspace/workspace-shell'))
@@ -44,7 +45,7 @@ export default function App() {
   }, [loadProjects])
 
   useEffect(() => {
-    document.documentElement.classList.toggle('opaque', !translucent)
+    document.documentElement.classList.toggle('opaque', isLinux || !translucent)
   }, [translucent])
 
   useEffect(() => {
