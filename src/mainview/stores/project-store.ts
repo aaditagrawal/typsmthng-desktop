@@ -270,6 +270,19 @@ function replaceEntryPreservingOrder(entries: ProjectFile[], nextEntry: ProjectF
   return nextEntries;
 }
 
+function updateWindowTitle() {
+  const { currentProjectId, currentFilePath, projects } = useProjectStore.getState()
+  const project = projects.find((p) => p.id === currentProjectId)
+  if (!project || !currentFilePath) {
+    void desktopRpc.request.setWindowTitle({ title: "typsmthng" })
+    return
+  }
+  const fileName = currentFilePath.split("/").pop() ?? ""
+  void desktopRpc.request.setWindowTitle({
+    title: `${project.name} — ${fileName} — typsmthng`,
+  })
+}
+
 function applyMetadataState(metadata: AppMetadata) {
   useProjectStore.setState((state) => ({
     metadata,
@@ -287,6 +300,7 @@ function clearSelectionState() {
   }));
 
   useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved" });
+  updateWindowTitle()
 }
 
 async function hydrateFile(rootPath: string, filePath: string): Promise<void> {
@@ -349,6 +363,8 @@ async function applyVault(project: Project | null): Promise<void> {
       path: project.mainFile,
     });
   }
+
+  updateWindowTitle()
 }
 
 function bindSubscriptions() {
@@ -628,6 +644,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const entry = project.files.find((candidate) => candidate.path === filePath);
     set({ currentFilePath: filePath, activeConflict: null });
     void desktopRpc.request.persistLastFile({ rootPath: project.rootPath, path: filePath });
+    updateWindowTitle();
 
     if (entry && (entry.kind ?? "file") === "file" && !entry.loaded) {
       void hydrateFile(project.rootPath, filePath);

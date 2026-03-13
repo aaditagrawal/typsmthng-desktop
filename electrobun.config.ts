@@ -15,10 +15,12 @@ export default {
       "dist/index.html": "views/mainview/index.html",
       "dist/assets": "views/mainview/assets",
       "src/bun/libMacWindowEffects.dylib": "bun/libMacWindowEffects.dylib",
+      "assets/icon.png": "Resources/appIcon.png",
     },
     watchIgnore: ["dist/**"],
     mac: {
       bundleCEF: false,
+      icons: "icon.iconset",
     },
     linux: {
       bundleCEF: false,

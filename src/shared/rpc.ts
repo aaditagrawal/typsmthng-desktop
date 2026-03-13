@@ -227,6 +227,10 @@ export type DesktopRPC = {
         params: { rootPath: string; includeHidden: boolean };
         response: { fileCount: number };
       };
+      setWindowTitle: {
+        params: { title: string };
+        response: { ok: true };
+      };
     };
   }>;
   webview: RPCSchema<{

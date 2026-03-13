@@ -103,6 +103,10 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 				vaultService.getCompileBundle(rootPath, currentFilePath, liveSource),
 			getVaultStats: ({ rootPath, includeHidden }) =>
 				vaultService.getVaultStats(rootPath, includeHidden),
+			setWindowTitle: ({ title }) => {
+				requireMainWindow().setTitle(title);
+				return { ok: true as const };
+			},
 		},
 	},
 });
@@ -221,8 +225,8 @@ mainWindow = new BrowserWindow<DesktopBunRPC>({
 		width: storedWindowState?.width ?? DEFAULT_FRAME.width,
 		height: storedWindowState?.height ?? DEFAULT_FRAME.height,
 	},
-	titleBarStyle: "hiddenInset",
-	transparent: true,
+	titleBarStyle: isMacOS ? "hiddenInset" : "hidden",
+	transparent: isMacOS,
 	rpc,
 });
 
