@@ -357,14 +357,18 @@ async function applyVault(project: Project | null): Promise<void> {
     saveStatus: "saved",
   });
 
-  if (project?.rootPath) {
-    await desktopRpc.request.persistLastFile({
-      rootPath: project.rootPath,
-      path: project.mainFile,
-    });
+  try {
+    if (project?.rootPath) {
+      await desktopRpc.request.persistLastFile({
+        rootPath: project.rootPath,
+        path: project.mainFile,
+      });
+    }
+  } catch (error) {
+    console.error("Failed to persist last file:", error);
+  } finally {
+    updateWindowTitle();
   }
-
-  updateWindowTitle()
 }
 
 function bindSubscriptions() {
