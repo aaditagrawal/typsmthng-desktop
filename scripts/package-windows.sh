@@ -20,6 +20,17 @@ if [[ ! -d "$PLATFORM_DIR" ]]; then
   echo "==> Found build output at $PLATFORM_DIR"
 fi
 
+# The app lives inside a subdirectory named after the app
+APP_DIR="$PLATFORM_DIR/$APP_NAME"
+if [[ ! -d "$APP_DIR" ]]; then
+  APP_DIR=$(find "$PLATFORM_DIR" -maxdepth 1 -type d ! -name "$(basename "$PLATFORM_DIR")" 2>/dev/null | head -1)
+  if [[ -z "$APP_DIR" ]]; then
+    APP_DIR="$PLATFORM_DIR"
+  fi
+fi
+
+echo "==> Electrobun app directory: $APP_DIR"
+
 INSTALLER_NAME="${APP_NAME}-${VERSION}-win-x64-setup.exe"
 NSI_SCRIPT="$ROOT_DIR/installer/typsmthng.nsi"
 
@@ -34,7 +45,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "==> Building Windows installer"
 makensis \
   -DVERSION="$VERSION" \
-  -DBUILD_DIR="$PLATFORM_DIR" \
+  -DBUILD_DIR="$APP_DIR" \
   -DOUTPUT_DIR="$OUTPUT_DIR" \
   -DOUTPUT_NAME="$INSTALLER_NAME" \
   "$NSI_SCRIPT"
