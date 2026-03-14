@@ -4,7 +4,8 @@ import { useProjectStore } from '@/stores/project-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useUIStore } from '@/stores/ui-store'
 import { preloadWorkspaceShell } from '@/components/workspace/preload'
-import { isLinux } from '@/lib/platform'
+import { isLinux, isMacOS } from '@/lib/platform'
+import { desktopRpc } from '@/lib/desktop-rpc'
 
 const HomeShell = lazy(() => import('@/components/home/home-shell'))
 const WorkspaceShell = lazy(() => import('@/components/workspace/workspace-shell'))
@@ -58,6 +59,10 @@ export default function App() {
         e.preventDefault()
         const { commandSearchOpen, setCommandSearchOpen } = useUIStore.getState()
         setCommandSearchOpen(!commandSearchOpen)
+      }
+      if ((isMacOS && e.metaKey && e.key === 'q') || (!isMacOS && e.ctrlKey && e.key === 'q')) {
+        e.preventDefault()
+        void desktopRpc.request.quitApp()
       }
     }
     window.addEventListener('keydown', handleKeyDown)

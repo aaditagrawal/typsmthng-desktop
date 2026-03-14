@@ -3,7 +3,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import type { PageSize } from '@/stores/settings-store'
-import { initCompiler, compileTypst, ensurePackagesForCompile, isCompilerReady } from './compiler'
+import { initCompiler, compileTypst, ensurePackagesForCompile, getPackageRuntimeEpoch } from './compiler'
 import { applyPackageImportCompatRewrites } from './package-compat'
 import { normalizeExtension } from './file-classification'
 import { perfMark, perfMeasure, perfSample } from './perf'
@@ -156,10 +156,21 @@ function effectiveCompileDelay(baseDelay: number): number {
 }
 
 export async function ensureCompilerReady(): Promise<void> {
-  if (isCompilerReady()) return
+  const store = useCompileStore.getState()
+  store.setCompilerReady(false)
   if (initPromise) return initPromise
 
   initPromise = initCompiler()
+    .then(() => {
+      useCompileStore.getState().setCompilerReady(true)
+    })
+    .catch((err) => {
+      useCompileStore.getState().setCompilerReady(false)
+      throw err
+    })
+    .finally(() => {
+      initPromise = null
+    })
   return initPromise
 }
 
@@ -221,8 +232,6 @@ async function doCompile(request: CompileRequest): Promise<void> {
   const totalStart = perfMark()
 
   try {
-    await ensureCompilerReady()
-
     const inputStart = perfMark()
     const sourcePath = request.sourcePath ?? useProjectStore.getState().currentFilePath
     if (sourcePath && normalizeExtension(sourcePath) !== '.typ') {
@@ -256,6 +265,8 @@ async function doCompile(request: CompileRequest): Promise<void> {
       requestId: request.requestId,
     })
 
+    await ensureCompilerReadyForSource(transformedMainSource, transformedExtraFiles)
+
     const packageStart = perfMark()
     const packageSpecs = new Set<string>()
     const activePaths = new Set<string>()
@@ -271,7 +282,7 @@ async function doCompile(request: CompileRequest): Promise<void> {
 
     if (packageSpecs.size > 0) {
       const specList = [...packageSpecs].sort()
-      const ensureKey = specList.join('|')
+      const ensureKey = `${getPackageRuntimeEpoch()}|${specList.join('|')}`
       if (ensureKey !== lastEnsuredPackagesKey) {
         try {
           await ensurePackagesForCompile(specList)
@@ -381,6 +392,33 @@ async function doCompile(request: CompileRequest): Promise<void> {
       scheduleDeferredCompile(next)
     }
   }
+}
+
+async function ensureCompilerReadyForSource(
+  source: string,
+  extraFiles: Array<{ path: string; content: string }>,
+): Promise<void> {
+  const store = useCompileStore.getState()
+  store.setCompilerReady(false)
+
+  if (initPromise) {
+    await initPromise
+    return
+  }
+
+  initPromise = initCompiler(source, extraFiles)
+    .then(() => {
+      useCompileStore.getState().setCompilerReady(true)
+    })
+    .catch((err) => {
+      useCompileStore.getState().setCompilerReady(false)
+      throw err
+    })
+    .finally(() => {
+      initPromise = null
+    })
+
+  return initPromise
 }
 
 export function requestCompile(source: string, sourcePath?: string | null): void {

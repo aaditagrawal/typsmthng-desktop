@@ -149,7 +149,7 @@ export function createEditorTheme(theme: 'light' | 'dark'): Extension {
     '.cm-gutters': {
       backgroundColor: isDark ? '#141414' : '#ffffff',
       color: isDark ? '#525252' : '#a3a3a3',
-      borderRight: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
+      border: 'none',
     },
     '.cm-activeLineGutter': {
       backgroundColor: 'transparent',
@@ -181,6 +181,10 @@ export function createEditorTheme(theme: 'light' | 'dark'): Extension {
       textDecorationColor: isDark ? '#CCA700' : '#BF8803',
       backgroundColor: isDark ? 'rgba(204, 167, 0, 0.1)' : 'rgba(191, 136, 3, 0.08)',
       textUnderlineOffset: '3px',
+    },
+    '.cm-indent-markers::before': {
+      bottom: 'auto !important',
+      height: '1lh',
     },
   }, { dark: isDark })
 

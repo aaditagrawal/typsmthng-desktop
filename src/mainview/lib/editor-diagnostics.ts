@@ -24,8 +24,9 @@ const warningMark = Decoration.mark({ class: 'cm-diagnostic-warning' })
 
 /**
  * Parse a Typst diagnostic range string like "19:5-19:31" into
- * { fromLine, fromCol, toLine, toCol } (all 1-based).
+ * { fromLine, fromCol, toLine, toCol } (all 1-based for CodeMirror).
  *
+ * The compiler emits 0-based line and column numbers, so we add 1 to each.
  * Also handles single-position ranges like "19:5" (no end position).
  */
 function parseRange(range: string): { fromLine: number; fromCol: number; toLine: number; toCol: number } | null {
@@ -39,7 +40,7 @@ function parseRange(range: string): { fromLine: number; fromCol: number; toLine:
     const line = parseInt(parts[0], 10)
     const col = parseInt(parts[1], 10)
     if (isNaN(line) || isNaN(col)) return null
-    return { fromLine: line, fromCol: col, toLine: line, toCol: col }
+    return { fromLine: line + 1, fromCol: col + 1, toLine: line + 1, toCol: col + 1 }
   }
 
   const startPart = range.slice(0, dashIdx)
@@ -57,7 +58,7 @@ function parseRange(range: string): { fromLine: number; fromCol: number; toLine:
 
   if (isNaN(fromLine) || isNaN(fromCol) || isNaN(toLine) || isNaN(toCol)) return null
 
-  return { fromLine, fromCol, toLine, toCol }
+  return { fromLine: fromLine + 1, fromCol: fromCol + 1, toLine: toLine + 1, toCol: toCol + 1 }
 }
 
 /**
@@ -118,6 +119,19 @@ export const diagnosticField = StateField.define<DecorationSet>({
 
   provide: (f) => EditorView.decorations.from(f),
 })
+
+/**
+ * Format a 0-based compiler range string as 1-based for display.
+ * "19:5-19:31" → "20:6-20:32"
+ */
+export function formatDisplayRange(range: string): string {
+  const parsed = parseRange(range)
+  if (!parsed) return range
+  if (parsed.fromLine === parsed.toLine && parsed.fromCol === parsed.toCol) {
+    return `${parsed.fromLine}:${parsed.fromCol}`
+  }
+  return `${parsed.fromLine}:${parsed.fromCol}-${parsed.toLine}:${parsed.toCol}`
+}
 
 /**
  * Navigate the editor to the given diagnostic range.

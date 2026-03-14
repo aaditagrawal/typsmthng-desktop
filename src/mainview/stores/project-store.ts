@@ -77,6 +77,7 @@ interface ProjectState {
   selectFile: (path: string) => void;
   createFile: (path: string, content?: string) => Promise<void>;
   createFilesBatch: (entries: Array<{ path: string; content: string }>) => Promise<void>;
+  duplicateFile: (sourcePath: string, targetPath: string) => Promise<void>;
   deleteFile: (path: string) => Promise<void>;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   updateFileContent: (path: string, content: string) => void;
@@ -732,6 +733,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return {
         projects: updateProjectList(state.projects, nextProject),
         currentFilePath: lastPath ?? state.currentFilePath,
+      };
+    });
+  },
+
+  duplicateFile: async (sourcePath, targetPath) => {
+    const project = get().getCurrentProject();
+    if (!project) return;
+
+    const normalizedSource = normalizeRelativePath(sourcePath);
+    const normalizedTarget = normalizeRelativePath(targetPath);
+    const entry = await desktopRpc.request.duplicateFile({
+      rootPath: project.rootPath,
+      sourcePath: normalizedSource,
+      targetPath: normalizedTarget,
+    });
+    if (!entry) return;
+
+    set((state) => {
+      const activeProject = getActiveProject(state);
+      if (!activeProject) return state;
+
+      const nextProject: Project = {
+        ...activeProject,
+        files: replaceEntry(activeProject.files, entry),
+        updatedAt: Date.now(),
+      };
+
+      return {
+        projects: updateProjectList(state.projects, nextProject),
+        currentFilePath: entry.path,
       };
     });
   },

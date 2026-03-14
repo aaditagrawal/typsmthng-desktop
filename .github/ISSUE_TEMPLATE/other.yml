@@ -1,0 +1,10 @@
+name: Other
+description: Something that doesn't fit the other categories
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Describe your issue, question, or suggestion.
+    validations:
+      required: true

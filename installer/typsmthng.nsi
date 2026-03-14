@@ -1,4 +1,6 @@
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
+!include "WinMessages.nsh"
 
 Name "typsmthng"
 OutFile "${OUTPUT_DIR}\${OUTPUT_NAME}"
@@ -39,6 +41,20 @@ Section "Install"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" \
     "Publisher" "typsmthng"
   WriteRegStr HKCU "Software\typsmthng" "InstallDir" "$INSTDIR"
+
+  ; File association for .typ files
+  WriteRegStr HKCU "Software\Classes\.typ" "" "typsmthng.typ"
+  WriteRegStr HKCU "Software\Classes\typsmthng.typ" "" "Typst Document"
+  WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\typsmthng.exe" "%1"'
+
+  ; Add to user PATH
+  ReadRegStr $0 HKCU "Environment" "Path"
+  ${If} $0 != ""
+    WriteRegExpandStr HKCU "Environment" "Path" "$0;$INSTDIR"
+  ${Else}
+    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR"
+  ${EndIf}
+  SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
 
 Section "Uninstall"
@@ -49,7 +65,14 @@ Section "Uninstall"
   RMDir /r "$SMPROGRAMS\typsmthng"
   Delete "$DESKTOP\typsmthng.lnk"
 
+  ; Remove file association
+  DeleteRegKey HKCU "Software\Classes\.typ"
+  DeleteRegKey HKCU "Software\Classes\typsmthng.typ"
+
   ; Remove registry entries
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng"
   DeleteRegKey HKCU "Software\typsmthng"
+
+  ; Note: PATH cleanup is intentionally skipped to avoid corrupting PATH entries
+  SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const initCompilerMock = vi.fn()
 const compileTypstMock = vi.fn()
 const ensurePackagesForCompileMock = vi.fn()
-const isCompilerReadyMock = vi.fn()
+const getPackageRuntimeEpochMock = vi.fn(() => 0)
 const applyPackageImportCompatRewritesMock = vi.fn((source: string) => source)
 const perfMarkMock = vi.fn(() => 0)
 const perfMeasureMock = vi.fn(() => ({ ms: 10 }))
@@ -22,7 +22,7 @@ vi.mock('./compiler', () => ({
   initCompiler: initCompilerMock,
   compileTypst: compileTypstMock,
   ensurePackagesForCompile: ensurePackagesForCompileMock,
-  isCompilerReady: isCompilerReadyMock,
+  getPackageRuntimeEpoch: getPackageRuntimeEpochMock,
 }))
 
 vi.mock('./package-compat', () => ({
@@ -97,7 +97,7 @@ describe('compile-manager', () => {
 
     initCompilerMock.mockResolvedValue(undefined)
     ensurePackagesForCompileMock.mockResolvedValue(undefined)
-    isCompilerReadyMock.mockReturnValue(true)
+    getPackageRuntimeEpochMock.mockReturnValue(0)
     compileTypstMock.mockResolvedValue({
       svg: '<svg />',
       vectorData: new Uint8Array([1]),
@@ -171,6 +171,9 @@ describe('compile-manager', () => {
     await compileManager.forceCompile('live source', 'main.typ')
 
     expect(projectState.getCompileBundle).toHaveBeenCalledWith('live source', 'main.typ')
+    expect(initCompilerMock).toHaveBeenCalledWith('@preview/example:1.0.0\nHello', [
+      { path: '/chapter.typ', content: '#import "@preview/example:1.0.0": demo' },
+    ])
     expect(ensurePackagesForCompileMock).toHaveBeenCalledWith(['@preview/example:1.0.0'])
     expect(compileTypstMock).toHaveBeenCalledWith(
       '#set page(paper: "a4")\n@preview/example:1.0.0\nHello',
@@ -203,6 +206,25 @@ describe('compile-manager', () => {
     expect(compileTypstMock).not.toHaveBeenCalled()
     expect(useCompileStore.getState().status).toBe('error')
     expect(useCompileStore.getState().diagnostics[0]?.message).toContain('Failed to resolve package dependencies: network down')
+  })
+
+  it('re-hydrates packages after the compiler runtime changes', async () => {
+    projectState.getCompileBundle.mockResolvedValue({
+      mainPath: '/main.typ',
+      mainSource: '@preview/rendercv:0.2.0\nHello',
+      extraFiles: [],
+      extraBinaryFiles: [],
+    })
+    getPackageRuntimeEpochMock.mockReturnValueOnce(0).mockReturnValueOnce(1)
+
+    const { compileManager } = await loadHarness()
+
+    await compileManager.forceCompile('live source', 'main.typ')
+    await compileManager.forceCompile('live source', 'main.typ')
+
+    expect(ensurePackagesForCompileMock).toHaveBeenCalledTimes(2)
+    expect(ensurePackagesForCompileMock).toHaveBeenNthCalledWith(1, ['@preview/rendercv:0.2.0'])
+    expect(ensurePackagesForCompileMock).toHaveBeenNthCalledWith(2, ['@preview/rendercv:0.2.0'])
   })
 
   it('debounces scheduled compiles when auto-compile is enabled', async () => {

@@ -439,6 +439,11 @@ async function fetchLatestIndexFromNetwork(): Promise<UniverseIndexCache> {
   return cache
 }
 
+async function forceRefreshIndex(): Promise<UniverseIndexCache> {
+  inMemoryIndex = null
+  return fetchLatestIndexFromNetwork()
+}
+
 async function getIndexCache(): Promise<UniverseIndexCache> {
   const now = Date.now()
 
@@ -817,7 +822,16 @@ export async function fetchTemplateScaffold(spec: ResolvedSpec): Promise<Project
 
 async function resolveMaybeVersionless(spec: ParsedSpec): Promise<ResolvedSpec> {
   if (spec.version) return toResolvedSpec(spec)
-  return resolveSpec(`@${spec.namespace}/${spec.name}`)
+  try {
+    return await resolveSpec(`@${spec.namespace}/${spec.name}`)
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.includes('failed to find package')) {
+      throw err
+    }
+
+    await forceRefreshIndex()
+    return resolveSpec(`@${spec.namespace}/${spec.name}`)
+  }
 }
 
 async function mapLimit<T, U>(

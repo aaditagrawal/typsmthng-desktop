@@ -2,6 +2,7 @@ import {
   compileToPdfClient,
   compileTypstClient,
   ensurePackagesForCompileClient,
+  getPackageRuntimeEpochClient,
   initCompilerClient,
   isCompilerReadyClient,
   mountLivePreviewClient,
@@ -18,3 +19,4 @@ export const compileToPdf = compileToPdfClient
 export const ensurePackagesForCompile = ensurePackagesForCompileClient
 export const mountLivePreview = mountLivePreviewClient
 export const isCompilerReady = isCompilerReadyClient
+export const getPackageRuntimeEpoch = getPackageRuntimeEpochClient

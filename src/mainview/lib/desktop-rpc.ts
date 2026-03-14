@@ -5,6 +5,7 @@ import type {
 	DesktopRPC,
 	ExternalVaultEvent,
 } from "../../shared/rpc";
+import type { UpdateState } from "../../shared/update-types";
 
 type ExternalVaultEventsPayload = {
 	rootPath: string;
@@ -18,6 +19,7 @@ const externalVaultListeners = new Set<
 >();
 const metadataListeners = new Set<(metadata: AppMetadata) => void>();
 const activeVaultClosedListeners = new Set<() => void>();
+const updateStateListeners = new Set<(state: UpdateState) => void>();
 
 function subscribe<T>(
 	listeners: Set<(value: T) => void>,
@@ -32,6 +34,11 @@ function subscribe<T>(
 const desktopRpc = Electroview.defineRPC<DesktopRPC>({
 	handlers: {
 		messages: {
+			updateStateChanged(state) {
+				for (const listener of updateStateListeners) {
+					listener(state);
+				}
+			},
 			externalVaultEvents(payload) {
 				for (const listener of externalVaultListeners) {
 					listener(payload);
@@ -70,6 +77,12 @@ export function onActiveVaultClosed(listener: () => void): Unsubscribe {
 	return () => {
 		activeVaultClosedListeners.delete(listener);
 	};
+}
+
+export function onUpdateStateChanged(
+	listener: (state: UpdateState) => void,
+): Unsubscribe {
+	return subscribe(updateStateListeners, listener);
 }
 
 export { desktopRpc, electroview };

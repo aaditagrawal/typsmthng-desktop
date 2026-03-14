@@ -59,12 +59,19 @@ cp -R "$APP_DIR" "$APPDIR/usr/$APP_NAME"
 cat > "$APPDIR/$APP_NAME.desktop" <<DESKTOP
 [Desktop Entry]
 Name=typsmthng
-Exec=$APP_NAME
+Exec=$APP_NAME %f
 Icon=$APP_NAME
 Type=Application
 Categories=Office;TextEditor;
 Comment=Folder-backed Typst editor
+MimeType=text/x-typst;
 DESKTOP
+
+# Install MIME type definition for .typ files
+mkdir -p "$APPDIR/usr/share/mime/packages"
+if [[ -f "$ROOT_DIR/assets/typst.xml" ]]; then
+  cp "$ROOT_DIR/assets/typst.xml" "$APPDIR/usr/share/mime/packages/typsmthng-typst.xml"
+fi
 
 # Copy icon or create placeholder
 ICON_SRC="$APP_DIR/Resources/appIcon.png"
