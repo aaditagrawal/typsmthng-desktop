@@ -251,6 +251,7 @@ export function TypstEditor() {
       ref={editorRef}
       className="h-full w-full overflow-hidden"
       style={{ background: 'var(--bg-surface)' }}
+      // Suppress native context menu — CodeMirror handles its own interactions
       onContextMenu={(e) => e.preventDefault()}
     />
   )

@@ -42,7 +42,9 @@ Section "Install"
     "Publisher" "typsmthng"
   WriteRegStr HKCU "Software\typsmthng" "InstallDir" "$INSTDIR"
 
-  ; File association for .typ files
+  ; File association for .typ files — save previous association for restore on uninstall
+  ReadRegStr $0 HKCU "Software\Classes\.typ" ""
+  WriteRegStr HKCU "Software\typsmthng" "PrevTypAssoc" "$0"
   WriteRegStr HKCU "Software\Classes\.typ" "" "typsmthng.typ"
   WriteRegStr HKCU "Software\Classes\typsmthng.typ" "" "Typst Document"
   WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\typsmthng.exe" "%1"'
@@ -65,8 +67,16 @@ Section "Uninstall"
   RMDir /r "$SMPROGRAMS\typsmthng"
   Delete "$DESKTOP\typsmthng.lnk"
 
-  ; Remove file association
-  DeleteRegKey HKCU "Software\Classes\.typ"
+  ; Remove file association — restore previous association if we set it
+  ReadRegStr $0 HKCU "Software\Classes\.typ" ""
+  ${If} $0 == "typsmthng.typ"
+    ReadRegStr $1 HKCU "Software\typsmthng" "PrevTypAssoc"
+    ${If} $1 != ""
+      WriteRegStr HKCU "Software\Classes\.typ" "" "$1"
+    ${Else}
+      DeleteRegValue HKCU "Software\Classes\.typ" ""
+    ${EndIf}
+  ${EndIf}
   DeleteRegKey HKCU "Software\Classes\typsmthng.typ"
 
   ; Remove registry entries

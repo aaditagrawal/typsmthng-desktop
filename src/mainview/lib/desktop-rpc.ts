@@ -32,6 +32,7 @@ function subscribe<T>(
 }
 
 const desktopRpc = Electroview.defineRPC<DesktopRPC>({
+	maxRequestTime: 5 * 60 * 1000,
 	handlers: {
 		messages: {
 			updateStateChanged(state) {
