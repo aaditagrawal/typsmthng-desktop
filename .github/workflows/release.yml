@@ -45,7 +45,7 @@ jobs:
           echo "Version: $VERSION (prerelease=$PRERELEASE)"
 
       - name: Install Bun
-        run: curl -fsSL https://bun.sh/install | bash && echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+        uses: oven-sh/setup-bun@v2
 
       - name: Quality checks
         run: |
@@ -83,16 +83,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Bun (Unix)
-        if: runner.os != 'Windows'
-        run: curl -fsSL https://bun.sh/install | bash && echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-
-      - name: Install Bun (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          irm https://bun.sh/install.ps1 | iex
-          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.bun\bin"
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

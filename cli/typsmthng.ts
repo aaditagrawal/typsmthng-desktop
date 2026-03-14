@@ -5,7 +5,9 @@ import { connect } from "node:net";
 import { execSync, spawn } from "node:child_process";
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
-const SOCKET_PATH = HOME ? `${HOME}/.typsmthng/cli.sock` : "";
+const SOCKET_PATH = process.platform === "win32"
+	? "\\\\.\\pipe\\typsmthng-cli"
+	: HOME ? `${HOME}/.typsmthng/cli.sock` : "";
 const arg = process.argv[2];
 
 if (!arg) {
@@ -44,6 +46,11 @@ if (stat.isFile()) {
 const message = JSON.stringify({ action: "open", path: vaultPath, selectFile });
 
 // Try connecting to running instance via IPC socket
+if (!SOCKET_PATH) {
+	console.error("typsmthng: could not determine home directory");
+	process.exit(1);
+}
+
 const client = connect(SOCKET_PATH);
 
 client.on("connect", () => {

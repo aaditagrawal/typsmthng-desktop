@@ -362,11 +362,13 @@ const framePersistTimer = setInterval(() => {
 }, WINDOW_STATE_PERSIST_MS);
 
 // --- IPC socket server for CLI ---
-const SOCKET_DIR = join(
-	process.env.HOME ?? process.env.USERPROFILE ?? "/tmp",
-	".typsmthng",
-);
-const SOCKET_PATH = join(SOCKET_DIR, "cli.sock");
+const isWindows = process.platform === "win32";
+const SOCKET_DIR = isWindows
+	? ""
+	: join(process.env.HOME ?? process.env.USERPROFILE ?? "/tmp", ".typsmthng");
+const SOCKET_PATH = isWindows
+	? "\\\\.\\pipe\\typsmthng-cli"
+	: join(SOCKET_DIR, "cli.sock");
 
 let cliServer: ReturnType<typeof createServer> | null = null;
 
@@ -382,10 +384,12 @@ async function handleOpenFromCli(vaultPath: string, selectFile: string | null) {
 }
 
 function startCliServer() {
-	mkdirSync(SOCKET_DIR, { recursive: true });
-	try {
-		rmSync(SOCKET_PATH);
-	} catch {}
+	if (!isWindows) {
+		mkdirSync(SOCKET_DIR, { recursive: true });
+		try {
+			rmSync(SOCKET_PATH);
+		} catch {}
+	}
 
 	cliServer = createServer((conn) => {
 		let data = "";
@@ -416,9 +420,11 @@ mainWindow.on("close", () => {
 	void persistWindowFrame();
 	if (cliServer) {
 		cliServer.close();
-		try {
-			rmSync(SOCKET_PATH);
-		} catch {}
+		if (!isWindows) {
+			try {
+				rmSync(SOCKET_PATH);
+			} catch {}
+		}
 	}
 });
 
