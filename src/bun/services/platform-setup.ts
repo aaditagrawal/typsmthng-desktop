@@ -178,6 +178,10 @@ async function setupWindows(): Promise<void> {
 			// Extract current PATH value from reg query output
 			const match = pathResult.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
 			const currentPath = match?.[1]?.trim() ?? "";
+			if (currentPath.length + instDir.length + 1 > 2000) {
+				console.warn("PATH is too long, skipping addition");
+				return;
+			}
 			const newPath = currentPath ? `${currentPath};${instDir}` : instDir;
 			execSync(`reg add "HKCU\\Environment" /v Path /t REG_EXPAND_SZ /d "${newPath}" /f`, { stdio: "ignore" });
 			// Broadcast environment change

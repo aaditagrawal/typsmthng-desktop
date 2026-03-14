@@ -4,7 +4,8 @@ import { existsSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { execSync, spawn } from "node:child_process";
 
-const SOCKET_PATH = `${process.env.HOME}/.typsmthng/cli.sock`;
+const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
+const SOCKET_PATH = HOME ? `${HOME}/.typsmthng/cli.sock` : "";
 const arg = process.argv[2];
 
 if (!arg) {
@@ -59,15 +60,20 @@ client.on("error", () => {
 	const platform = process.platform;
 
 	if (platform === "darwin") {
-		// macOS: use open command
-		try {
-			execSync(`open -a typsmthng --args "${vaultPath}"${selectFile ? ` --select "${selectFile}"` : ""}`, {
-				stdio: "inherit",
-			});
-		} catch {
+		// macOS: use open command with spawn for safe argument handling
+		const openArgs = ["-a", "typsmthng", "--args", vaultPath];
+		if (selectFile) {
+			openArgs.push("--select", selectFile);
+		}
+		const child = spawn("open", openArgs, { stdio: "inherit" });
+		child.on("error", () => {
 			console.error("typsmthng: failed to launch app. Is it installed?");
 			process.exit(1);
-		}
+		});
+		child.on("close", (code) => {
+			process.exit(code ?? 0);
+		});
+		return;
 	} else if (platform === "linux") {
 		// Linux: try to find the binary
 		const candidates = [

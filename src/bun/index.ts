@@ -2,7 +2,7 @@ import { ApplicationMenu, BrowserView, BrowserWindow, Updater } from "electrobun
 import { dlopen, FFIType } from "bun:ffi";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { DesktopRPC } from "../shared/rpc";
 import type { UpdateState } from "../shared/update-types";
@@ -128,7 +128,7 @@ function parseStartupArgs(): { vaultPath: string | null; selectFile: string | nu
 						vaultPath = resolved;
 					} else if (stat.isFile() && resolved.endsWith(".typ")) {
 						vaultPath = dirname(resolved);
-						selectFile = resolved.split("/").pop() ?? null;
+						selectFile = basename(resolved);
 					}
 				}
 			} catch {}
@@ -214,8 +214,11 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 					await Updater.applyUpdate();
 				}
 			},
-			quitApp: () => {
-				process.exit(0);
+			quitApp: async () => {
+				try {
+					await vaultService.flushWrites({});
+				} catch {}
+				mainWindow?.close();
 			},
 		},
 	},

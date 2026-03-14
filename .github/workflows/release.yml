@@ -89,9 +89,10 @@ jobs:
 
       - name: Install Bun (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          powershell -c "irm bun.sh/install.ps1 | iex"
-          echo "$env:USERPROFILE\.bun\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          irm https://bun.sh/install.ps1 | iex
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.bun\bin"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

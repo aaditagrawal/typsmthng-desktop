@@ -26,7 +26,9 @@ export function StatusBar() {
   )
   const saveStatus = useEditorStore((s) => s.saveStatus)
   const vimMode = useSettingsStore((s) => s.vimMode)
-  const compilerLabel = compileStatus === 'compiling' || !compilerReady ? 'Compiling' : 'Compiler Ready'
+  const compilerLabel = compileStatus === 'compiling'
+    ? 'Compiling'
+    : (compilerReady ? 'Compiler Ready' : 'Compiler Initializing')
 
   return (
     <footer
