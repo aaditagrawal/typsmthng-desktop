@@ -6,6 +6,7 @@ import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightSty
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { typst } from 'codemirror-lang-typst'
+import { indentationMarkers } from '@replit/codemirror-indentation-markers'
 import { vim } from '@replit/codemirror-vim'
 import { useUIStore } from '@/stores/ui-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -97,6 +98,16 @@ export function TypstEditor() {
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         EditorView.lineWrapping,
         typst(),
+        indentationMarkers({
+          hideFirstIndent: false,
+          colors: {
+            light: 'rgba(0, 0, 0, 0.1)',
+            dark: 'rgba(255, 255, 255, 0.1)',
+            activeLight: 'rgba(0, 0, 0, 0.18)',
+            activeDark: 'rgba(255, 255, 255, 0.18)',
+          },
+          thickness: 1,
+        }),
         vimCompartment.of(useSettingsStore.getState().vimMode ? vim() : []),
         themeCompartment.of(createEditorTheme(useUIStore.getState().resolvedTheme)),
         sourceHighlightField,
@@ -240,6 +251,8 @@ export function TypstEditor() {
       ref={editorRef}
       className="h-full w-full overflow-hidden"
       style={{ background: 'var(--bg-surface)' }}
+      // Suppress native context menu — CodeMirror handles its own interactions
+      onContextMenu={(e) => e.preventDefault()}
     />
   )
 }

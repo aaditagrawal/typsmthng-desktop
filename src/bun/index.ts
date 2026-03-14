@@ -1,10 +1,13 @@
 import { ApplicationMenu, BrowserView, BrowserWindow, Updater } from "electrobun/bun";
 import { dlopen, FFIType } from "bun:ffi";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { createServer } from "node:net";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { DesktopRPC } from "../shared/rpc";
+import type { UpdateState } from "../shared/update-types";
 import { VaultService } from "./services/vault-service";
+import { runPlatformSetup } from "./services/platform-setup";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -40,6 +43,101 @@ async function getMainViewUrl(): Promise<string> {
 
 const isMacOS = process.platform === "darwin";
 const vaultService = new VaultService();
+
+// --- Update state machine ---
+let updateState: UpdateState = {
+	status: "idle",
+	currentVersion: "0.1.0",
+	availableVersion: null,
+	error: null,
+};
+
+function broadcastUpdateState() {
+	try {
+		mainWindow?.webview.rpc?.send.updateStateChanged(updateState);
+	} catch {}
+}
+
+function setUpdateState(patch: Partial<UpdateState>) {
+	updateState = { ...updateState, ...patch };
+	broadcastUpdateState();
+}
+
+async function performUpdateCheck(): Promise<UpdateState> {
+	try {
+		const channel = await Updater.localInfo.channel();
+		if (channel === "dev") {
+			setUpdateState({ status: "disabled" });
+			return updateState;
+		}
+
+		setUpdateState({ status: "checking", error: null });
+		const info = await Updater.checkForUpdate();
+
+		if (info.updateAvailable) {
+			setUpdateState({
+				status: "available",
+				availableVersion: info.version ?? null,
+			});
+		} else {
+			setUpdateState({ status: "up-to-date" });
+		}
+	} catch (error) {
+		setUpdateState({
+			status: "error",
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+	return updateState;
+}
+
+async function performUpdateDownload(): Promise<UpdateState> {
+	if (updateState.status !== "available") return updateState;
+
+	try {
+		setUpdateState({ status: "downloading" });
+		await Updater.downloadUpdate();
+		setUpdateState({ status: "ready" });
+		console.log("Update downloaded, will apply on next restart");
+	} catch (error) {
+		setUpdateState({
+			status: "error",
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+	return updateState;
+}
+
+// --- CLI argument parsing ---
+function parseStartupArgs(): { vaultPath: string | null; selectFile: string | null } {
+	const args = process.argv.slice(1);
+	let vaultPath: string | null = null;
+	let selectFile: string | null = null;
+
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--select" && i + 1 < args.length) {
+			selectFile = args[++i];
+		} else if (!arg.startsWith("-") && !arg.endsWith(".ts") && !arg.endsWith(".js")) {
+			// Skip the bun script path itself
+			try {
+				const resolved = resolve(arg);
+				if (existsSync(resolved)) {
+					const stat = statSync(resolved);
+					if (stat.isDirectory()) {
+						vaultPath = resolved;
+					} else if (stat.isFile() && resolved.endsWith(".typ")) {
+						vaultPath = dirname(resolved);
+						selectFile = basename(resolved);
+					}
+				}
+			} catch {}
+		}
+	}
+
+	return { vaultPath, selectFile };
+}
+
 let mainWindow:
 	| BrowserWindow<ReturnType<typeof BrowserView.defineRPC<DesktopRPC>>>
 	| null = null;
@@ -76,6 +174,8 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 				vaultService.addBinaryFilesBatch(rootPath, entries),
 			createFolder: ({ rootPath, path }) =>
 				vaultService.createFolder(rootPath, path),
+			duplicateFile: ({ rootPath, sourcePath, targetPath }) =>
+				vaultService.duplicateFile(rootPath, sourcePath, targetPath),
 			renamePath: ({ rootPath, oldPath, newPath }) =>
 				vaultService.renamePath(rootPath, oldPath, newPath),
 			deletePath: ({ rootPath, path }) =>
@@ -106,6 +206,19 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 			setWindowTitle: ({ title }) => {
 				requireMainWindow().setTitle(title);
 				return { ok: true as const };
+			},
+			checkForUpdate: () => performUpdateCheck(),
+			downloadUpdate: () => performUpdateDownload(),
+			applyUpdate: async () => {
+				if (updateState.status === "ready") {
+					await Updater.applyUpdate();
+				}
+			},
+			quitApp: async () => {
+				try {
+					await vaultService.flushWrites({});
+				} catch {}
+				mainWindow?.close();
 			},
 		},
 	},
@@ -248,26 +361,91 @@ const framePersistTimer = setInterval(() => {
 	void persistWindowFrame();
 }, WINDOW_STATE_PERSIST_MS);
 
+// --- IPC socket server for CLI ---
+const isWindows = process.platform === "win32";
+const SOCKET_DIR = isWindows
+	? ""
+	: join(process.env.HOME ?? process.env.USERPROFILE ?? "/tmp", ".typsmthng");
+const SOCKET_PATH = isWindows
+	? "\\\\.\\pipe\\typsmthng-cli"
+	: join(SOCKET_DIR, "cli.sock");
+
+let cliServer: ReturnType<typeof createServer> | null = null;
+
+async function handleOpenFromCli(vaultPath: string, selectFile: string | null) {
+	const window = requireMainWindow();
+	const vault = await vaultService.openRecentVault(vaultPath, window);
+	if (vault && selectFile) {
+		try {
+			await vaultService.persistLastFile(vaultPath, selectFile);
+		} catch {}
+	}
+	window.focus();
+}
+
+function startCliServer() {
+	if (!isWindows) {
+		mkdirSync(SOCKET_DIR, { recursive: true });
+		try {
+			rmSync(SOCKET_PATH);
+		} catch {}
+	}
+
+	cliServer = createServer((conn) => {
+		let data = "";
+		conn.on("data", (chunk) => {
+			data += chunk.toString();
+		});
+		conn.on("end", () => {
+			try {
+				const msg = JSON.parse(data);
+				if (msg.action === "open" && msg.path) {
+					void handleOpenFromCli(msg.path, msg.selectFile ?? null);
+				}
+			} catch {}
+		});
+	});
+
+	cliServer.on("error", (err) => {
+		console.warn("CLI server error:", err);
+	});
+
+	cliServer.listen(SOCKET_PATH);
+}
+
+startCliServer();
+
 mainWindow.on("close", () => {
 	clearInterval(framePersistTimer);
 	void persistWindowFrame();
+	if (cliServer) {
+		cliServer.close();
+		if (!isWindows) {
+			try {
+				rmSync(SOCKET_PATH);
+			} catch {}
+		}
+	}
 });
 
-// Check for updates (non-blocking)
-(async () => {
-	try {
-		const channel = await Updater.localInfo.channel();
-		if (channel === "dev") return;
+// Platform integration (CLI symlink, .desktop file, MIME type)
+void runPlatformSetup();
 
-		const updateInfo = await Updater.checkForUpdate();
-		if (updateInfo.updateAvailable) {
-			console.log(`Update available: ${updateInfo.version}`);
-			await Updater.downloadUpdate();
-			console.log("Update downloaded, will apply on next restart");
-		}
-	} catch (error) {
-		console.warn("Update check failed:", error);
+// Check for updates (non-blocking, with UI feedback)
+setTimeout(async () => {
+	const state = await performUpdateCheck();
+	if (state.status === "available") {
+		await performUpdateDownload();
 	}
-})();
+}, 15_000);
+
+// Handle startup arguments (e.g. `typsmthng /path/to/vault`)
+const startupArgs = parseStartupArgs();
+if (startupArgs.vaultPath) {
+	void (async () => {
+		await vaultService.waitUntilReady();
+		await handleOpenFromCli(startupArgs.vaultPath!, startupArgs.selectFile);
+	})();
+}
 
 console.log("typsmthng desktop window ready");

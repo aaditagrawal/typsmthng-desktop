@@ -47,8 +47,12 @@ let compilerReady = false
 let backendInitPromise: Promise<void> | null = null
 let currentCompilerConfigKey = ''
 let currentFontData: Uint8Array[] = []
+let packageRuntimeEpoch = 0
 
 function resetWorkerTransport(): void {
+  if (worker || workerApi) {
+    packageRuntimeEpoch += 1
+  }
   if (worker) {
     worker.terminate()
     worker = null
@@ -156,6 +160,7 @@ export async function initCompilerClient(
   if (source) {
     await ensureCompilerConfig(source, extraFiles)
   }
+  if (compilerReady) return
 
   await callWithFallback(
     async (api) => {
@@ -244,4 +249,8 @@ export async function mountLivePreviewClient(
 
 export function isCompilerReadyClient(): boolean {
   return compilerReady || isCompilerReadyBackend()
+}
+
+export function getPackageRuntimeEpochClient(): number {
+  return packageRuntimeEpoch
 }

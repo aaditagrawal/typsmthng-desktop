@@ -20,7 +20,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - id: version
         run: |
@@ -44,9 +44,8 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (prerelease=$PRERELEASE)"
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Quality checks
         run: |
@@ -82,11 +81,10 @@ jobs:
     name: Build ${{ matrix.label }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -122,7 +120,7 @@ jobs:
         run: bash scripts/package-windows.sh
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.format || 'default' }}
           path: build/release/*
@@ -132,8 +130,10 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
           pattern: release-*
@@ -143,10 +143,15 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.preflight.outputs.version }}
-          name: v${{ needs.preflight.outputs.version }}
-          prerelease: ${{ needs.preflight.outputs.prerelease == 'true' }}
-          generate_release_notes: true
-          files: artifacts/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ needs.preflight.outputs.version }}"
+          PRERELEASE="${{ needs.preflight.outputs.prerelease }}"
+
+          FLAGS=(--generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            FLAGS+=(--prerelease)
+          fi
+
+          gh release create "$TAG" --title "$TAG" "${FLAGS[@]}" artifacts/*

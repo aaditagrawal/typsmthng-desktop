@@ -16,7 +16,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { compileToPdf, ensurePackagesForCompile } from '@/lib/compiler'
 import { useSettingsStore } from '@/stores/settings-store'
-import { isMacOS } from '@/lib/platform'
+import { isMacOS, revealLabel } from '@/lib/platform'
 import { applyPagePreamble, ensureCompilerReady } from '@/lib/compile-manager'
 import { findPreviewImportSpecs } from '@/lib/universe-registry'
 
@@ -108,14 +108,14 @@ export function Toolbar() {
 
   return (
     <header
-      className="flex items-center h-10 shrink-0 select-none electrobun-webkit-app-region-drag"
+      className="flex items-center h-10 shrink-0 select-none"
       style={{
         background: 'var(--bg-surface)',
         borderBottom: '1px solid var(--border-default)',
       } as React.CSSProperties}
     >
       {/* Left section — extra left padding for macOS traffic lights */}
-      <div className="flex items-center gap-1 shrink-0 electrobun-webkit-app-region-no-drag" style={{ paddingLeft: isMacOS ? '84px' : '16px', paddingRight: '12px', position: 'relative', zIndex: 10 } as React.CSSProperties}>
+      <div className="flex items-center gap-1 shrink-0" style={{ paddingLeft: isMacOS ? '84px' : '16px', paddingRight: '12px', position: 'relative', zIndex: 10 } as React.CSSProperties}>
         <button
           className="inline-flex items-center justify-center shrink-0"
           onClick={() => useProjectStore.getState().goHome()}
@@ -154,7 +154,7 @@ export function Toolbar() {
         </button>
         <button
           className="toolbar-button"
-          title="Reveal in Finder"
+          title={revealLabel}
           onClick={() => void useProjectStore.getState().revealCurrentProjectInFinder()}
           disabled={!currentProjectId}
         >
@@ -170,8 +170,8 @@ export function Toolbar() {
         <ThemeToggle />
       </div>
 
-      {/* Center — file tab */}
-      <div className="flex-1 flex justify-center">
+      {/* Center — file tab (drag region for window move) */}
+      <div className="flex-1 flex justify-center electrobun-webkit-app-region-drag">
         <div
           className="flex items-center gap-2"
           style={{
@@ -196,7 +196,7 @@ export function Toolbar() {
       </div>
 
       {/* Right section */}
-      <div className="flex items-center gap-1 pl-3 pr-5 shrink-0 electrobun-webkit-app-region-no-drag" style={{ position: 'relative', zIndex: 10 }}>
+      <div className="flex items-center gap-1 pl-3 pr-5 shrink-0" style={{ position: 'relative', zIndex: 10 }}>
         <button
           className="toolbar-button"
           title={currentFavorite ? 'Unfavorite vault' : 'Favorite vault'}
@@ -209,7 +209,7 @@ export function Toolbar() {
             style={{ color: currentFavorite ? 'var(--accent)' : undefined }}
           />
         </button>
-        <button className="toolbar-button" style={{ marginRight: '8px' }} title="Download PDF" onClick={() => void handleDownloadPdf()}>
+        <button className="toolbar-button" title="Download PDF" onClick={() => void handleDownloadPdf()}>
           <Download size={16} />
         </button>
       </div>

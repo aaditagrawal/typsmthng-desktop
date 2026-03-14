@@ -1,4 +1,5 @@
 import type { RPCSchema } from "electrobun/bun";
+import type { UpdateState } from "./update-types";
 
 export interface ProjectTemplateMeta {
   source: "typst-universe" | "built-in";
@@ -179,6 +180,10 @@ export type DesktopRPC = {
         params: { rootPath: string; path: string };
         response: { ok: true };
       };
+      duplicateFile: {
+        params: { rootPath: string; sourcePath: string; targetPath: string };
+        response: VaultFileEntry | null;
+      };
       renamePath: {
         params: { rootPath: string; oldPath: string; newPath: string };
         response: { ok: true };
@@ -231,10 +236,27 @@ export type DesktopRPC = {
         params: { title: string };
         response: { ok: true };
       };
+      checkForUpdate: {
+        params: void;
+        response: UpdateState;
+      };
+      downloadUpdate: {
+        params: void;
+        response: UpdateState;
+      };
+      applyUpdate: {
+        params: void;
+        response: void;
+      };
+      quitApp: {
+        params: void;
+        response: void;
+      };
     };
   }>;
   webview: RPCSchema<{
     messages: {
+      updateStateChanged: UpdateState;
       externalVaultEvents: {
         rootPath: string;
         events: ExternalVaultEvent[];

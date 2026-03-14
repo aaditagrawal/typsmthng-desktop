@@ -9,7 +9,7 @@ import { resolveSourceLocBatch } from '@/lib/compiler'
 import { forceCompile, getInjectedPreambleLineCount } from '@/lib/compile-manager'
 import { normalizeExtension } from '@/lib/file-classification'
 import { estimateFallbackLine, findApproxSourceLine, parseSourceSpanToRange } from '@/lib/preview-mapping'
-import { jumpToDiagnostic } from '@/lib/editor-diagnostics'
+import { jumpToDiagnostic, formatDisplayRange } from '@/lib/editor-diagnostics'
 import { perfMark, perfMeasure } from '@/lib/perf'
 import { LiveDomPreview } from '@/components/preview/live-dom-preview'
 import {
@@ -1666,7 +1666,7 @@ export function PreviewPanel() {
               >
                 <AlertCircle size={12} className="shrink-0 mt-0.5" style={{ color: 'var(--status-error)' }} />
                 <span style={{ color: 'var(--text-secondary)' }}>
-                  {d.path && <span style={{ color: 'var(--text-tertiary)' }}>{d.path}:{d.range} </span>}
+                  {d.path && <span style={{ color: 'var(--text-tertiary)' }}>{d.path}:{formatDisplayRange(d.range)} </span>}
                   {d.message}
                 </span>
               </div>

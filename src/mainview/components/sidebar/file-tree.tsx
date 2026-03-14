@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   FileCode2,
   FileImage,
   FilePlus2,
@@ -19,6 +20,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { ContextMenu, type ContextMenuAction } from '@/components/ui/context-menu'
 import { shouldTreatUploadAsText } from '@/lib/file-classification'
+import { revealLabel } from '@/lib/platform'
 import { useProjectStore, type ProjectFile } from '@/stores/project-store'
 
 function fileIcon(name: string): LucideIcon {
@@ -173,6 +175,27 @@ function flattenTree(nodes: TreeNode[], expanded: Set<string>, depth = 0): FlatN
   return items
 }
 
+function buildDuplicatePath(existingPaths: Iterable<string>, path: string): string {
+  const taken = new Set(existingPaths)
+  const directory = parentPath(path)
+  const fileName = basename(path)
+  const dotIndex = fileName.lastIndexOf('.')
+  const hasExtension = dotIndex > 0
+  const baseName = hasExtension ? fileName.slice(0, dotIndex) : fileName
+  const extension = hasExtension ? fileName.slice(dotIndex) : ''
+
+  let attempt = 0
+  while (true) {
+    const suffix = attempt === 0 ? ' copy' : ` copy ${attempt + 1}`
+    const candidateName = `${baseName}${suffix}${extension}`
+    const candidatePath = directory ? `${directory}/${candidateName}` : candidateName
+    if (!taken.has(candidatePath)) {
+      return candidatePath
+    }
+    attempt += 1
+  }
+}
+
 async function processImportedFiles(files: FileList | File[], basePath: string): Promise<void> {
   const textEntries: Array<{ path: string; content: string }> = []
   const binaryEntries: Array<{ path: string; data: Uint8Array }> = []
@@ -206,6 +229,7 @@ export function FileTree() {
   const selectFile = useProjectStore((s) => s.selectFile)
   const createFile = useProjectStore((s) => s.createFile)
   const createFolder = useProjectStore((s) => s.createFolder)
+  const duplicateFile = useProjectStore((s) => s.duplicateFile)
   const deleteFile = useProjectStore((s) => s.deleteFile)
   const deleteFolder = useProjectStore((s) => s.deleteFolder)
   const renameFile = useProjectStore((s) => s.renameFile)
@@ -285,9 +309,20 @@ export function FileTree() {
     }
   }
 
+  const duplicateNode = async (node: TreeNode) => {
+    if (node.kind !== 'file' || !currentProject) return
+    const nextPath = buildDuplicatePath(
+      currentProject.files
+        .filter((entry) => (entry.kind ?? 'file') === 'file')
+        .map((entry) => entry.path),
+      node.path,
+    )
+    await duplicateFile(node.path, nextPath)
+  }
+
   const actionsForNode = (node: TreeNode): ContextMenuAction[] => [
     {
-      label: 'Reveal in Finder',
+      label: revealLabel,
       icon: <FolderSearch size={12} />,
       onClick: () => {
         void revealPathInFinder(node.path)
@@ -300,6 +335,17 @@ export function FileTree() {
         void renameNode(node)
       },
     },
+    ...(node.kind === 'file'
+      ? [
+          {
+            label: 'Duplicate',
+            icon: <Copy size={12} />,
+            onClick: () => {
+              void duplicateNode(node)
+            },
+          },
+        ]
+      : []),
     ...(node.kind === 'directory'
       ? [
           {
@@ -402,7 +448,7 @@ export function FileTree() {
         <button
           className="toolbar-button"
           style={{ width: '26px', height: '26px' }}
-          title="Reveal vault in Finder"
+          title={revealLabel}
           onClick={() => void useProjectStore.getState().revealCurrentProjectInFinder()}
         >
           <FolderSearch size={13} />
@@ -444,7 +490,8 @@ export function FileTree() {
               <button
                 key={row.node.path}
                 type="button"
-                className="flex w-full items-center gap-2 px-3 text-left transition"
+                className="file-tree-row flex w-full items-center gap-2 px-3 text-left transition"
+                data-active={isActive || undefined}
                 style={{
                   position: shouldVirtualize ? 'absolute' : 'relative',
                   left: 0,

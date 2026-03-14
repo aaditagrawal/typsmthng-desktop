@@ -185,6 +185,18 @@ export class VaultService {
     if (!selectedParent) return null;
 
     const rootPath = path.join(selectedParent, name);
+
+    // Check if directory exists and already has content — open as existing vault
+    // instead of overwriting to prevent data loss (GitHub issue #8)
+    try {
+      const entries = await fs.readdir(rootPath);
+      if (entries.length > 0) {
+        return this.openVault(rootPath, window);
+      }
+    } catch {
+      // Directory doesn't exist yet — proceed with creation
+    }
+
     await fs.mkdir(rootPath, { recursive: true });
 
     const scaffold = params.scaffold ?? this.createBlankScaffold(name);
@@ -287,6 +299,18 @@ export class VaultService {
     await fs.mkdir(path.join(rootPath, folderPath), { recursive: true });
     this.indexService.invalidate(rootPath);
     return { ok: true };
+  }
+
+  async duplicateFile(
+    rootPath: string,
+    sourcePath: string,
+    targetPath: string,
+  ): Promise<VaultFileEntry | null> {
+    await fs.mkdir(path.dirname(path.join(rootPath, targetPath)), { recursive: true });
+    await fs.copyFile(path.join(rootPath, sourcePath), path.join(rootPath, targetPath));
+    this.indexService.invalidate(rootPath);
+    this.contentCache.get(rootPath)?.delete(targetPath);
+    return this.readFileEntry(rootPath, targetPath, true);
   }
 
   async renamePath(rootPath: string, oldPath: string, newPath: string): Promise<{ ok: true }> {

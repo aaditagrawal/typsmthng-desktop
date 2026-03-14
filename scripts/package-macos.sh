@@ -34,6 +34,11 @@ if [[ ! -d "$APP_BUNDLE" ]]; then
   fi
 fi
 
+# Patch Info.plist for .typ file association
+if [[ -f "$ROOT_DIR/scripts/post-build-macos.sh" ]]; then
+  bash "$ROOT_DIR/scripts/post-build-macos.sh" "$ARCH"
+fi
+
 DMG_NAME="${APP_NAME}-${VERSION}-macos-${ARCH}.dmg"
 ZIP_NAME="${APP_NAME}-${VERSION}-macos-${ARCH}.zip"
 

@@ -17,6 +17,7 @@
         "@myriaddreamin/typst-ts-renderer": "^0.7.0-rc2",
         "@myriaddreamin/typst-ts-web-compiler": "^0.7.0-rc2",
         "@myriaddreamin/typst.ts": "^0.7.0-rc2",
+        "@replit/codemirror-indentation-markers": "^6.5.3",
         "@replit/codemirror-vim": "^6.3.0",
         "@unified-latex/unified-latex-util-parse": "^1.8.3",
         "@unified-latex/unified-latex-util-visit": "^1.8.3",
@@ -199,6 +200,8 @@
     "@myriaddreamin/typst-ts-web-compiler": ["@myriaddreamin/typst-ts-web-compiler@0.7.0-rc2", "", {}, "sha512-WFO/ecKUfeclld5uDxyjgpnIafKpp2LrS6T1vY+CHaSxCm099AneAQIYFg+OtX+NbFpJsLGCBFSw/qppJJmBAw=="],
 
     "@myriaddreamin/typst.ts": ["@myriaddreamin/typst.ts@0.7.0-rc2", "", { "dependencies": { "idb": "^7.1.1" }, "peerDependencies": { "@myriaddreamin/typst-ts-renderer": "^0.7.0-rc2", "@myriaddreamin/typst-ts-web-compiler": "^0.7.0-rc2" }, "optionalPeers": ["@myriaddreamin/typst-ts-renderer", "@myriaddreamin/typst-ts-web-compiler"] }, "sha512-VM8JqsRcL3AEJ5cuPBn/YvnGTXK/BRPlxdGB2bR48Of/8OIGaPiunv2QfZBIMBBrtbTygUOtAY9BZvkS1AFqgA=="],
+
+    "@replit/codemirror-indentation-markers": ["@replit/codemirror-indentation-markers@6.5.3", "", { "peerDependencies": { "@codemirror/language": "^6.0.0", "@codemirror/state": "^6.0.0", "@codemirror/view": "^6.0.0" } }, "sha512-hL5Sfvw3C1vgg7GolLe/uxX5T3tmgOA3ZzqlMv47zjU1ON51pzNWiVbS22oh6crYhtVhv8b3gdXwoYp++2ilHw=="],
 
     "@replit/codemirror-vim": ["@replit/codemirror-vim@6.3.0", "", { "peerDependencies": { "@codemirror/commands": "6.x.x", "@codemirror/language": "6.x.x", "@codemirror/search": "6.x.x", "@codemirror/state": "6.x.x", "@codemirror/view": "6.x.x" } }, "sha512-aTx931ULAMuJx6xLf7KQDOL7CxD+Sa05FktTDrtLaSy53uj01ll3Zf17JdKsriER248oS55GBzg0CfCTjEneAQ=="],
 

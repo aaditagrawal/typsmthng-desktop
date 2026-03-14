@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { Panel, Group, Separator } from 'react-resizable-panels'
 import { Toolbar } from '@/components/layout/toolbar'
+import { UpdateBanner } from '@/components/layout/update-banner'
 import { StatusBar } from '@/components/layout/status-bar'
 import { TypstEditor } from '@/components/editor/typst-editor'
 import { PreviewPanel } from '@/components/preview/preview-panel'
@@ -126,6 +127,7 @@ export default function WorkspaceShell() {
     <ErrorBoundary fallbackMessage="The application encountered an unexpected error.">
       <div className="flex flex-col h-full w-full" style={{ background: 'var(--bg-app)' }}>
         <Toolbar />
+        <UpdateBanner />
         <ConflictBanner />
         <div className="flex flex-1 min-h-0">
           {sidebarOpen && (

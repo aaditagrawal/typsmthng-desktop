@@ -302,6 +302,13 @@ body {
   border-color: var(--accent);
 }
 
+/* ── File tree rows ── */
+.file-tree-row:hover:not([data-active]) {
+  background: color-mix(in srgb, var(--accent) 6%, transparent) !important;
+  border-left-color: color-mix(in srgb, var(--accent) 40%, transparent) !important;
+  color: var(--text-primary) !important;
+}
+
 /* ── Preview page SVG ── */
 .preview-page svg {
   width: 100%;

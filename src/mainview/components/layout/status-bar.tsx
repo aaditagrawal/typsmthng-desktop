@@ -15,8 +15,10 @@ export function StatusBar() {
   const { cursorLine, cursorCol } = useUIStore(
     useShallow((s) => ({ cursorLine: s.cursorLine, cursorCol: s.cursorCol })),
   )
-  const { compileTime, errors, warnings } = useCompileStore(
+  const { compileStatus, compilerReady, compileTime, errors, warnings } = useCompileStore(
     useShallow((s) => ({
+      compileStatus: s.status,
+      compilerReady: s.compilerReady,
       compileTime: s.compileTime,
       errors: s.errorCount,
       warnings: s.warningCount,
@@ -24,6 +26,9 @@ export function StatusBar() {
   )
   const saveStatus = useEditorStore((s) => s.saveStatus)
   const vimMode = useSettingsStore((s) => s.vimMode)
+  const compilerLabel = compileStatus === 'compiling'
+    ? 'Compiling'
+    : (compilerReady ? 'Compiler Ready' : 'Compiler Initializing')
 
   return (
     <footer
@@ -42,17 +47,7 @@ export function StatusBar() {
       }}
     >
       <div className="flex items-center gap-3">
-        <span className="flex items-center gap-1.5">
-          <svg width="8" height="8" viewBox="0 0 8 8">
-            <circle
-              cx="4"
-              cy="4"
-              r="4"
-              fill="var(--status-success)"
-            />
-          </svg>
-          Connected
-        </span>
+        <span>{compilerLabel}</span>
         {saveStatus === 'unsaved' && (
           <span style={{ color: 'var(--accent)', fontWeight: 700 }}>Unsaved</span>
         )}

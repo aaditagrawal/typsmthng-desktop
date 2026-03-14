@@ -459,6 +459,8 @@ export function ProjectPicker({
   const [latexResult, setLatexResult] = useState<LatexImportResult | null>(null)
   const [latexError, setLatexError] = useState<string | null>(null)
   const [latexMenuOpen, setLatexMenuOpen] = useState(false)
+  const [latexConfirmOpen, setLatexConfirmOpen] = useState(false)
+  const [latexConfirmAction, setLatexConfirmAction] = useState<(() => void) | null>(null)
   const importAllInputRef = useRef<HTMLInputElement>(null)
   const [importAllBusy, setImportAllBusy] = useState(false)
   const [importAllResult, setImportAllResult] = useState<string | null>(null)
@@ -803,25 +805,15 @@ export function ProjectPicker({
         {/* ── Header ── */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span
+            <img
+              src={new URL('../../../../assets/icon.png', import.meta.url).href}
+              alt="typsmthng"
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
                 width: '32px',
                 height: '32px',
-                background: 'var(--accent)',
-                color: '#fff',
-                fontFamily: 'var(--font-mono)',
-                fontWeight: 700,
-                fontSize: '18px',
-                lineHeight: 1,
                 borderRadius: '2px',
-                letterSpacing: '-0.02em',
               }}
-            >
-              T
-            </span>
+            />
             <span style={{ fontSize: '17px', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-primary)' }}>
               TYPSMTHNG
             </span>
@@ -1073,9 +1065,9 @@ export function ProjectPicker({
             </LinkBtn>
             {latexMenuOpen && !latexBusy && (
               <LatexImportMenu
-                onTexFiles={() => { setLatexMenuOpen(false); latexFileInputRef.current?.click() }}
-                onZip={() => { setLatexMenuOpen(false); latexZipInputRef.current?.click() }}
-                onFolder={() => { setLatexMenuOpen(false); latexFolderInputRef.current?.click() }}
+                onTexFiles={() => { setLatexMenuOpen(false); setLatexConfirmAction(() => () => latexFileInputRef.current?.click()); setLatexConfirmOpen(true) }}
+                onZip={() => { setLatexMenuOpen(false); setLatexConfirmAction(() => () => latexZipInputRef.current?.click()); setLatexConfirmOpen(true) }}
+                onFolder={() => { setLatexMenuOpen(false); setLatexConfirmAction(() => () => latexFolderInputRef.current?.click()); setLatexConfirmOpen(true) }}
                 onClose={() => setLatexMenuOpen(false)}
               />
             )}
@@ -1925,6 +1917,108 @@ export function ProjectPicker({
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── LaTeX conversion confirmation modal ── */}
+      {latexConfirmOpen && (
+        <div
+          onClick={(event) => { if (event.target === event.currentTarget) { setLatexConfirmOpen(false); setLatexConfirmAction(null) } }}
+          onKeyDown={(event) => { if (event.key === 'Escape') { setLatexConfirmOpen(false); setLatexConfirmAction(null) } }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.6)',
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div
+            style={{
+              background: 'var(--bg-modal)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: '4px',
+              padding: '24px',
+              maxWidth: '420px',
+              width: '90%',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+              <div
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '2px',
+                  background: 'color-mix(in srgb, var(--status-warning) 15%, transparent)',
+                  border: '1px solid color-mix(in srgb, var(--status-warning) 40%, transparent)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--status-warning)',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  flexShrink: 0,
+                }}
+              >
+                !
+              </div>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                LaTeX to Typst Conversion
+              </div>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '20px' }}>
+              This will convert your LaTeX (.tex) files into Typst format and create a new project. The original files will not be modified.
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', lineHeight: 1.5, marginBottom: '20px' }}>
+              Some LaTeX constructs (TikZ, custom macros, complex tables) may need manual adjustment after conversion.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => { setLatexConfirmOpen(false); setLatexConfirmAction(null) }}
+                style={{
+                  height: '32px',
+                  padding: '0 14px',
+                  borderRadius: '2px',
+                  border: '1px solid var(--border-default)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  letterSpacing: '0.03em',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLatexConfirmOpen(false)
+                  latexConfirmAction?.()
+                  setLatexConfirmAction(null)
+                }}
+                style={{
+                  height: '32px',
+                  padding: '0 14px',
+                  borderRadius: '2px',
+                  border: '1px solid var(--accent)',
+                  background: 'var(--accent)',
+                  color: '#fff',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  letterSpacing: '0.03em',
+                  cursor: 'pointer',
+                }}
+              >
+                Continue
+              </button>
             </div>
           </div>
         </div>
