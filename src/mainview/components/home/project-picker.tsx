@@ -483,8 +483,8 @@ export function ProjectPicker({
   }, [showNewInput])
 
   useEffect(() => {
-    const recentVaults = metadata?.recentVaults ?? []
-    const recentVaultByPath = new Map(recentVaults.map((record) => [record.rootPath, record]))
+    const recentProjects = metadata?.recentVaults ?? []
+    const recentProjectByPath = new Map(recentProjects.map((record) => [record.rootPath, record]))
     const pendingProjects = projects.filter((project) => project.files.length === 0)
 
     if (pendingProjects.length === 0) return
@@ -496,10 +496,10 @@ export function ProjectPicker({
 
     void Promise.all(
       missingProjects.map(async (project) => {
-        const recentVault = recentVaultByPath.get(project.rootPath)
+        const recentProject = recentProjectByPath.get(project.rootPath)
         const result = await desktopRpc.request.getVaultStats({
           rootPath: project.rootPath,
-          includeHidden: recentVault?.hiddenFilesVisible ?? false,
+          includeHidden: recentProject?.hiddenFilesVisible ?? false,
         })
         return [project.id, result.fileCount] as const
       }),
@@ -515,7 +515,7 @@ export function ProjectPicker({
         })
       })
       .catch((error) => {
-        console.error('Failed to load vault stats', error)
+        console.error('Failed to load project stats', error)
       })
 
     return () => {

@@ -10,7 +10,7 @@ type Theme = 'light' | 'dark' | 'system'
 export type PageSize = 'a3' | 'a4' | 'a5' | 'a6' | 'us-letter' | 'us-legal' | 'iso-b5' | 'presentation-16-9' | 'auto'
 
 export const PAGE_SIZE_OPTIONS: { label: string; value: PageSize }[] = [
-  { label: 'Auto (default)', value: 'auto' },
+  { label: 'Auto (A4)', value: 'auto' },
   { label: 'A3', value: 'a3' },
   { label: 'A4', value: 'a4' },
   { label: 'A5', value: 'a5' },
@@ -61,7 +61,7 @@ const defaults: Settings = {
   theme: 'dark',
   vimMode: false,
   pageSize: 'auto',
-  systemFontsEnabled: false,
+  systemFontsEnabled: true,
   googleFontsEnabled: true,
   translucent: true,
 }

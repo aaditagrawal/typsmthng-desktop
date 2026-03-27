@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { ChevronLeft, Copy, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Check } from 'lucide-react'
 
 type Platform = 'mac' | 'win' | 'linux'
 type ProjectStart = 'blank' | 'template' | 'latex'
@@ -162,6 +162,285 @@ function ChoiceRow<T extends string>({
   )
 }
 
+/* ── Hierarchy diagram data ────────────────────────────────────────── */
+
+type HierarchyLevel = 'file' | 'project' | 'workspace'
+
+const hierarchyData: Record<HierarchyLevel, { label: string; description: string; detail: string }> = {
+  file: {
+    label: 'FILE',
+    description: 'A single document, image, or asset on disk.',
+    detail: 'Files are real files in a folder on your filesystem. typsmthng watches for changes — edits made externally (in another editor, terminal, or via git) appear in the app automatically. Supported types include .typ sources, images (.png, .jpg, .svg), bibliography files (.bib), and any other asset Typst can reference.',
+  },
+  project: {
+    label: 'PROJECT',
+    description: 'A folder on disk containing all the files for one document.',
+    detail: 'A project is a folder on your machine. When you create a new project, typsmthng creates a folder and populates it with a main.typ file. When you open an existing folder, the app reads its contents and starts watching for changes. Every file inside the folder is part of the project. The folder path is displayed in the sidebar.',
+  },
+  workspace: {
+    label: 'WORKSPACE',
+    description: 'An optional tag for grouping projects on the home screen.',
+    detail: 'Workspaces are a home-screen organization tool — they let you tag projects into groups (e.g. "Thesis", "Course Notes", "Papers"). They do not affect the filesystem. A project can belong to one workspace or none. Workspaces are stored in the app\'s metadata, not in the project folder.',
+  },
+}
+
+function HierarchyDiagram() {
+  const [active, setActive] = useState<HierarchyLevel | null>(null)
+
+  return (
+    <div>
+      {/* Interactive nested boxes */}
+      <div
+        style={{
+          border: `1px solid ${active === 'workspace' ? 'var(--accent)' : 'var(--border-default)'}`,
+          borderRadius: '2px',
+          padding: '10px',
+          cursor: 'pointer',
+          transition: 'border-color 150ms ease',
+          background: active === 'workspace' ? 'color-mix(in srgb, var(--accent) 4%, transparent)' : 'transparent',
+        }}
+        onClick={(e) => { e.stopPropagation(); setActive(active === 'workspace' ? null : 'workspace') }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+          <ChevronRight size={10} style={{ color: active === 'workspace' ? 'var(--accent)' : 'var(--text-tertiary)', transform: active === 'workspace' ? 'rotate(90deg)' : 'none', transition: 'transform 150ms ease' }} />
+          <span style={{ fontSize: '10px', letterSpacing: '0.1em', fontWeight: 700, color: active === 'workspace' ? 'var(--accent)' : 'var(--text-tertiary)' }}>WORKSPACE</span>
+          <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', fontStyle: 'italic' }}>optional grouping</span>
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {/* Project 1 */}
+          <div
+            style={{
+              flex: 1,
+              border: `1px solid ${active === 'project' ? 'var(--accent)' : 'var(--border-default)'}`,
+              borderRadius: '2px',
+              padding: '10px',
+              cursor: 'pointer',
+              transition: 'border-color 150ms ease',
+              background: active === 'project' ? 'color-mix(in srgb, var(--accent) 4%, transparent)' : 'var(--bg-surface)',
+            }}
+            onClick={(e) => { e.stopPropagation(); setActive(active === 'project' ? null : 'project') }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+              <ChevronRight size={10} style={{ color: active === 'project' ? 'var(--accent)' : 'var(--text-tertiary)', transform: active === 'project' ? 'rotate(90deg)' : 'none', transition: 'transform 150ms ease' }} />
+              <span style={{ fontSize: '10px', letterSpacing: '0.1em', fontWeight: 700, color: active === 'project' ? 'var(--accent)' : 'var(--text-tertiary)' }}>PROJECT</span>
+              <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>~/papers/thesis/</span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              {['main.typ', 'chapter1.typ', 'refs.bib'].map((name) => (
+                <div
+                  key={name}
+                  style={{
+                    padding: '4px 8px',
+                    border: `1px solid ${active === 'file' ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                    borderRadius: '2px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: active === 'file' ? 'var(--accent)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    transition: 'border-color 150ms ease, color 150ms ease',
+                    background: active === 'file' ? 'color-mix(in srgb, var(--accent) 4%, transparent)' : 'transparent',
+                  }}
+                  onClick={(e) => { e.stopPropagation(); setActive(active === 'file' ? null : 'file') }}
+                >
+                  {name}
+                </div>
+              ))}
+              <div
+                style={{
+                  padding: '4px 8px',
+                  border: `1px solid ${active === 'file' ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                  borderRadius: '2px',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  color: active === 'file' ? 'var(--accent)' : 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                  transition: 'border-color 150ms ease, color 150ms ease',
+                  background: active === 'file' ? 'color-mix(in srgb, var(--accent) 4%, transparent)' : 'transparent',
+                }}
+                onClick={(e) => { e.stopPropagation(); setActive(active === 'file' ? null : 'file') }}
+              >
+                images/fig.png
+              </div>
+            </div>
+          </div>
+
+          {/* Project 2 (smaller) */}
+          <div
+            style={{
+              flex: 0,
+              minWidth: '120px',
+              border: `1px solid ${active === 'project' ? 'var(--accent)' : 'var(--border-default)'}`,
+              borderRadius: '2px',
+              padding: '10px',
+              cursor: 'pointer',
+              transition: 'border-color 150ms ease',
+              background: active === 'project' ? 'color-mix(in srgb, var(--accent) 4%, transparent)' : 'var(--bg-surface)',
+            }}
+            onClick={(e) => { e.stopPropagation(); setActive(active === 'project' ? null : 'project') }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '10px', letterSpacing: '0.1em', fontWeight: 700, color: active === 'project' ? 'var(--accent)' : 'var(--text-tertiary)' }}>PROJECT</span>
+            </div>
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+              {['main.typ', 'cover.png'].map((name) => (
+                <div
+                  key={name}
+                  style={{
+                    padding: '4px 8px',
+                    border: `1px solid ${active === 'file' ? 'var(--accent)' : 'var(--border-subtle)'}`,
+                    borderRadius: '2px',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-mono)',
+                    color: active === 'file' ? 'var(--accent)' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    transition: 'border-color 150ms ease, color 150ms ease',
+                    background: active === 'file' ? 'color-mix(in srgb, var(--accent) 4%, transparent)' : 'transparent',
+                  }}
+                  onClick={(e) => { e.stopPropagation(); setActive(active === 'file' ? null : 'file') }}
+                >
+                  {name}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Instruction hint */}
+      <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: '8px', textAlign: 'center' }}>
+        Click any level to learn more
+      </div>
+
+      {/* Detail panel */}
+      {active && (
+        <div
+          style={{
+            marginTop: '12px',
+            padding: '14px 16px',
+            background: 'var(--bg-inset)',
+            border: '1px solid var(--accent)',
+            borderLeft: '3px solid var(--accent)',
+            borderRadius: '2px',
+          }}
+        >
+          <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '6px' }}>
+            {hierarchyData[active].label}
+          </div>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+            {hierarchyData[active].description}
+          </div>
+          <div style={{ fontSize: '12px', lineHeight: 1.7, color: 'var(--text-secondary)' }}>
+            {hierarchyData[active].detail}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ── Workflow diagram ──────────────────────────────────────────────── */
+
+type WorkflowStep = 'home' | 'open' | 'edit' | 'preview' | 'export'
+
+const workflowSteps: { id: WorkflowStep; label: string; description: string }[] = [
+  {
+    id: 'home',
+    label: 'HOME',
+    description: 'The home screen lists all your recent projects. Create a new project, open an existing folder from your filesystem, import from a template, or convert a LaTeX project. Projects can be organized into workspaces.',
+  },
+  {
+    id: 'open',
+    label: 'OPEN',
+    description: 'Opening a project reads the folder from disk and starts file-watching. The sidebar populates with the project\'s file tree. The main file opens in the editor automatically. External changes (e.g. from git pull or another editor) are detected and reflected in real-time.',
+  },
+  {
+    id: 'edit',
+    label: 'EDIT',
+    description: 'The editor is a full CodeMirror instance with Typst syntax highlighting. Edits are written to disk via a debounced write queue — changes are saved automatically after a short pause, or immediately with Cmd/Ctrl+S. Multiple files can be open; click the sidebar to switch.',
+  },
+  {
+    id: 'preview',
+    label: 'PREVIEW',
+    description: 'The right panel shows a live-compiled preview of your document. The Typst compiler runs in a web worker and recompiles after each edit. Errors appear in the status bar with line numbers. The preview and editor panels are resizable via a drag handle.',
+  },
+  {
+    id: 'export',
+    label: 'EXPORT',
+    description: 'Download a compiled PDF directly from the toolbar. Since the project is already a folder on disk, your files are always accessible — use Reveal in Finder to open the project folder, or work with the files directly via terminal or other tools.',
+  },
+]
+
+function WorkflowDiagram() {
+  const [active, setActive] = useState<WorkflowStep | null>(null)
+
+  return (
+    <div>
+      {/* Horizontal flow */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0', justifyContent: 'center', flexWrap: 'wrap' }}>
+        {workflowSteps.map((step, i) => (
+          <Fragment key={step.id}>
+            <button
+              onClick={() => setActive(active === step.id ? null : step.id)}
+              style={{
+                padding: '8px 16px',
+                border: `1px solid ${active === step.id ? 'var(--accent)' : 'var(--border-default)'}`,
+                borderRadius: '2px',
+                background: active === step.id ? 'var(--accent-muted)' : 'var(--bg-surface)',
+                color: active === step.id ? 'var(--accent)' : 'var(--text-secondary)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '11px',
+                fontWeight: active === step.id ? 700 : 400,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                cursor: 'pointer',
+                transition: 'all 150ms ease',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {step.label}
+            </button>
+            {i < workflowSteps.length - 1 && (
+              <div style={{ padding: '0 4px', color: 'var(--text-tertiary)', fontSize: '12px', flexShrink: 0 }}>
+                <ChevronRight size={14} />
+              </div>
+            )}
+          </Fragment>
+        ))}
+      </div>
+
+      {/* Hint */}
+      <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: '8px', textAlign: 'center' }}>
+        Click a step to see details
+      </div>
+
+      {/* Detail panel */}
+      {active && (
+        <div
+          style={{
+            marginTop: '12px',
+            padding: '14px 16px',
+            background: 'var(--bg-inset)',
+            border: '1px solid var(--accent)',
+            borderLeft: '3px solid var(--accent)',
+            borderRadius: '2px',
+          }}
+        >
+          <div style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--accent)', textTransform: 'uppercase', marginBottom: '8px' }}>
+            {workflowSteps.find((s) => s.id === active)!.label}
+          </div>
+          <div style={{ fontSize: '12px', lineHeight: 1.7, color: 'var(--text-secondary)' }}>
+            {workflowSteps.find((s) => s.id === active)!.description}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ── Main guide page ───────────────────────────────────────────────── */
+
 export function GuidePage({ onBack }: { onBack: () => void }) {
   const [platform, setPlatform] = useState<Platform>(detectPlatform)
   const [projectStart, setProjectStart] = useState<ProjectStart>('blank')
@@ -235,7 +514,7 @@ export function GuidePage({ onBack }: { onBack: () => void }) {
             marginBottom: 0,
           }}
         >
-          A browser-based Typst typesetting editor. Files are stored locally in your browser.
+          A native desktop Typst editor. Projects are folders on your filesystem — your files stay where you put them.
         </p>
 
         {/* Platform toggle */}
@@ -264,6 +543,24 @@ export function GuidePage({ onBack }: { onBack: () => void }) {
             )
           })}
         </div>
+
+        <div style={divider} />
+
+        {/* ── HOW IT ALL FITS TOGETHER ── */}
+        <div style={sectionLabel}>HOW IT ALL FITS TOGETHER</div>
+        <p style={{ ...paragraph, marginBottom: '16px' }}>
+          typsmthng organizes your work into three levels. Click each layer in the diagram to learn what it is and how it works.
+        </p>
+        <HierarchyDiagram />
+
+        <div style={divider} />
+
+        {/* ── YOUR WORKFLOW ── */}
+        <div style={sectionLabel}>YOUR WORKFLOW</div>
+        <p style={{ ...paragraph, marginBottom: '16px' }}>
+          The typical editing flow from start to finish. Click any step to see what happens.
+        </p>
+        <WorkflowDiagram />
 
         <div style={divider} />
 
@@ -325,7 +622,7 @@ export function GuidePage({ onBack }: { onBack: () => void }) {
               {[
                 <><strong style={{ color: 'var(--text-primary)' }}>.tex files</strong> — pick one or more .tex files from your machine.</>,
                 <><strong style={{ color: 'var(--text-primary)' }}>.zip archive</strong> — a zip of your LaTeX project, including images and bibliography files.</>,
-                <><strong style={{ color: 'var(--text-primary)' }}>Folder</strong> — select a whole directory; the browser uploads everything inside.</>,
+                <><strong style={{ color: 'var(--text-primary)' }}>Folder</strong> — select a whole directory.</>,
               ].map((item, i) => (
                 <li key={i} style={{ fontSize: '12px', lineHeight: 1.7, color: 'var(--text-secondary)', marginBottom: '4px' }}>
                   {item}
@@ -462,7 +759,7 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
 
         {exportTarget === 'files' && (
           <p style={{ ...paragraph, marginBottom: 0 }}>
-            Click the <strong style={{ color: 'var(--text-primary)' }}>folder-out icon</strong> in the toolbar. A <span style={inlineCode}>.zip</span> of all project files downloads immediately. The archive includes every file in the project: .typ sources, images, bibliography files, anything you have added. To restore it, click the folder-in icon and select the zip — it imports as a new project.
+            Your project files are already on disk — use <strong style={{ color: 'var(--text-primary)' }}>Reveal in {platform === 'mac' ? 'Finder' : platform === 'win' ? 'Explorer' : 'File Manager'}</strong> (magnifying glass icon in the toolbar) to open the project folder directly. You can copy, zip, or version-control the folder with any tool.
           </p>
         )}
 
@@ -477,10 +774,10 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
         {/* ── STORAGE AND DATA ── */}
         <div style={sectionLabel}>STORAGE AND DATA</div>
         <p style={paragraph}>
-          All projects live in IndexedDB in the browser. Nothing is sent to any server.
+          Projects are regular folders on your filesystem. typsmthng does not move, copy, or sync your files — it reads and writes directly to the folder you opened.
         </p>
         <p style={paragraph}>
-          Clearing browser data or using incognito mode will delete your projects. Export projects as .zip before clearing browser data.
+          App metadata (recent projects list, favorites, settings) is stored in a local config file managed by the app. Deleting a project from the home screen only removes it from the recent list; the folder on disk is not affected.
         </p>
 
         <div style={divider} />
@@ -491,8 +788,12 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
         <div>
           {[
             {
-              q: 'Can I use this offline?',
-              a: 'Yes. typsmthng is a PWA; after the first load it works without an internet connection. Typst Universe package searches require a connection.',
+              q: 'Where are my files stored?',
+              a: 'In the folder you created or opened. typsmthng reads and writes directly to disk. Use Reveal in Finder to see the folder.',
+            },
+            {
+              q: 'Can I edit files outside of typsmthng?',
+              a: 'Yes. The app watches the project folder for changes. Edits from other editors, terminal commands, or git operations are picked up automatically.',
             },
             {
               q: 'Why does the preview show an error?',
@@ -504,7 +805,7 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
               custom: (
                 <>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '8px' }}>
-                    Upload an image file via the sidebar, then reference it:
+                    Drop an image file onto the sidebar, or copy it into the project folder directly. Then reference it:
                   </div>
                   <CodeBlock style={{ fontSize: '12px' }}>{`#image("filename.png")`}</CodeBlock>
                 </>
@@ -515,7 +816,7 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
               a: null,
               custom: (
                 <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-                  Yes. Add files via the sidebar. Pull them into your main document with{' '}
+                  Yes. Add files via the sidebar or directly in the folder. Pull them into your main document with{' '}
                   <span style={inlineCode}>{`#include "other-file.typ"`}</span>.
                 </div>
               ),
@@ -536,7 +837,7 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
             },
             {
               q: 'Can I collaborate with others?',
-              a: 'Not currently. Export the project as .zip, send it to a collaborator, and they can import it on their end.',
+              a: 'Not built-in, but since projects are just folders you can use git, Dropbox, or any file-sync tool to share them.',
             },
             {
               q: 'Does typsmthng support packages that fetch data at compile time?',
@@ -576,7 +877,7 @@ $ x^2 + y^2 = z^2 $`}</CodeBlock>
             paddingBottom: '24px',
           }}
         >
-          typsmthng stores all data locally in your browser.
+          typsmthng stores project files on your local filesystem.
         </div>
       </div>
     </div>

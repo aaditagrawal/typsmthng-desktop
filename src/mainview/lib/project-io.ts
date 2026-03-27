@@ -1,5 +1,5 @@
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { useProjectStore, type ProjectFile } from '@/stores/project-store'
+import { useProjectStore, type ProjectFile, type ProjectScaffold } from '@/stores/project-store'
 import { isKnownTextPath, isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst, type ConversionResult, type ConversionWarning } from '@/lib/latex-converter'
 
@@ -9,6 +9,27 @@ export interface LatexImportResult {
   texFilesConverted: number
   warnings: ConversionWarning[]
   metadata: ConversionResult['metadata']
+}
+
+function resolveImportedMainFile(projectFiles: ProjectFile[]): string {
+  return projectFiles.find((f) => f.path === '/main.typ')?.path
+    || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
+    || projectFiles[0]?.path
+    || '/main.typ'
+}
+
+async function createImportedProject(projectName: string, projectFiles: ProjectFile[]): Promise<string> {
+  const scaffold: ProjectScaffold = {
+    files: projectFiles.map((file) => ({
+      path: file.path,
+      content: file.content,
+      isBinary: file.isBinary,
+      binaryData: file.binaryData,
+    })),
+    mainFile: resolveImportedMainFile(projectFiles),
+  }
+
+  return useProjectStore.getState().createProject(projectName, scaffold)
 }
 
 export async function exportProject(): Promise<void> {
@@ -141,28 +162,18 @@ export async function importAllProjects(file: File): Promise<number> {
 
     if (projectFiles.length === 0) continue
 
-    const mainFile = projectFiles.find((f) => f.path === '/main.typ')?.path
-      || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
-      || projectFiles[0]?.path
-
-    const id = await store.createProject(folderName)
-
-    useProjectStore.setState((s) => ({
-      projects: s.projects.map((p) =>
-        p.id === id
-          ? { ...p, files: projectFiles, mainFile, updatedAt: Date.now() }
-          : p
-      ),
-    }))
-
-    // Save each project to IDB
-    const project = useProjectStore.getState().projects.find((p) => p.id === id)
-    if (project) {
-      const { set: idbSetFn, createStore: createStoreFn } = await import('idb-keyval')
-      const pStore = createStoreFn('typsmthng-projects', 'projects')
-      await idbSetFn(project.id, project, pStore)
+    const id = await store.createProject(folderName, {
+      files: projectFiles.map((projectFile) => ({
+        path: projectFile.path,
+        content: projectFile.content,
+        isBinary: projectFile.isBinary,
+        binaryData: projectFile.binaryData,
+      })),
+      mainFile: resolveImportedMainFile(projectFiles),
+    })
+    if (id) {
+      imported++
     }
-    imported++
   }
 
   // Go back to home after import
@@ -201,9 +212,15 @@ export async function importProject(file: File): Promise<void> {
       let filePath = fullPath
 
       if (isLatexPath(path)) {
-        const result = await convertLatexToTypst(content)
-        content = result.typst
-        filePath = fullPath.replace(/\.tex$/i, '.typ')
+        try {
+          const result = await convertLatexToTypst(content)
+          content = result.typst
+          filePath = fullPath.replace(/\.tex$/i, '.typ')
+        } catch (err) {
+          console.warn(`LaTeX conversion failed for "${path}":`, err)
+          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
+        }
       }
 
       projectFiles.push({
@@ -225,25 +242,7 @@ export async function importProject(file: File): Promise<void> {
 
   if (projectFiles.length === 0) return
 
-  // Create project via store
-  const store = useProjectStore.getState()
-  const id = await store.createProject(projectName)
-
-  // Replace the default main.typ with imported files
-  const mainFile = projectFiles.find((f) => f.path === '/main.typ')?.path
-    || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
-    || projectFiles[0]?.path
-
-  useProjectStore.setState((s) => ({
-    projects: s.projects.map((p) =>
-      p.id === id
-        ? { ...p, files: projectFiles, mainFile, updatedAt: Date.now() }
-        : p
-    ),
-    currentFilePath: mainFile,
-  }))
-
-  await store.saveCurrentProject()
+  await createImportedProject(projectName, projectFiles)
 }
 
 /** Import a LaTeX project from .tex files, a .zip, or a folder of files.
@@ -261,16 +260,30 @@ export async function importLatexProject(
 
     if (isLatexPath(file.name)) {
       const source = await file.text()
-      const result = await convertLatexToTypst(source)
       const typPath = path.replace(/\.tex$/i, '.typ')
-      projectFiles.push({
-        path: typPath,
-        content: result.typst,
-        isBinary: false,
-        lastModified: Date.now(),
-      })
-      allWarnings.push(...result.warnings)
-      if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
+      try {
+        const result = await convertLatexToTypst(source)
+        projectFiles.push({
+          path: typPath,
+          content: result.typst,
+          isBinary: false,
+          lastModified: Date.now(),
+        })
+        allWarnings.push(...result.warnings)
+        if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
+      } catch (err) {
+        console.warn(`LaTeX conversion failed for "${file.name}":`, err)
+        allWarnings.push({
+          message: `Conversion failed for ${file.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
+          construct: file.name,
+        })
+        projectFiles.push({
+          path: typPath,
+          content: `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${source.replace(/\*\//g, '* /')} */\n`,
+          isBinary: false,
+          lastModified: Date.now(),
+        })
+      }
       texCount++
     } else if (shouldTreatUploadAsText(file)) {
       const content = await file.text()
@@ -302,23 +315,7 @@ export async function importLatexProject(
       ? files.find((f) => isLatexPath(f.file.name))!.file.name.replace(/\.tex$/i, '')
       : `LaTeX Import (${texCount} files)`)
 
-  const mainFile = projectFiles.find((f) => f.path === '/main.typ')?.path
-    || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
-    || projectFiles[0]?.path
-
-  const store = useProjectStore.getState()
-  const id = await store.createProject(projectName)
-
-  useProjectStore.setState((s) => ({
-    projects: s.projects.map((p) =>
-      p.id === id
-        ? { ...p, files: projectFiles, mainFile, updatedAt: Date.now() }
-        : p
-    ),
-    currentFilePath: mainFile,
-  }))
-
-  await store.saveCurrentProject()
+  await createImportedProject(projectName, projectFiles)
 
   return {
     projectName,
@@ -355,12 +352,23 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
       let filePath = fullPath
 
       if (isLatexPath(path)) {
-        const result = await convertLatexToTypst(content)
-        content = result.typst
-        filePath = fullPath.replace(/\.tex$/i, '.typ')
-        allWarnings.push(...result.warnings)
-        if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
-        texCount++
+        try {
+          const result = await convertLatexToTypst(content)
+          content = result.typst
+          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          allWarnings.push(...result.warnings)
+          if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
+          texCount++
+        } catch (err) {
+          console.warn(`LaTeX conversion failed for "${path}":`, err)
+          allWarnings.push({
+            message: `Conversion failed for ${path}: ${err instanceof Error ? err.message : 'unknown error'}`,
+            construct: path,
+          })
+          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
+          texCount++
+        }
       }
 
       projectFiles.push({ path: filePath, content, isBinary: false, lastModified: Date.now() })
@@ -376,23 +384,7 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
   const projectName = lastMeta.title
     || file.name.replace(/\.zip$/i, '')
 
-  const mainFile = projectFiles.find((f) => f.path === '/main.typ')?.path
-    || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
-    || projectFiles[0]?.path
-
-  const store = useProjectStore.getState()
-  const id = await store.createProject(projectName)
-
-  useProjectStore.setState((s) => ({
-    projects: s.projects.map((p) =>
-      p.id === id
-        ? { ...p, files: projectFiles, mainFile, updatedAt: Date.now() }
-        : p
-    ),
-    currentFilePath: mainFile,
-  }))
-
-  await store.saveCurrentProject()
+  await createImportedProject(projectName, projectFiles)
 
   return {
     projectName,

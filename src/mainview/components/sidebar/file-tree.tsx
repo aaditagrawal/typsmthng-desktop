@@ -164,6 +164,16 @@ function buildTree(files: ProjectFile[]): TreeNode[] {
   return uniqueRoots
 }
 
+function structureSignature(files: ProjectFile[]): string {
+  let signature = ''
+  for (const file of files) {
+    const normalized = normalizePath(file.path)
+    if (!normalized || normalized.startsWith('.typsmthng/')) continue
+    signature += `${normalized}:${file.kind ?? 'file'}:${file.name ?? ''}|`
+  }
+  return signature
+}
+
 function flattenTree(nodes: TreeNode[], expanded: Set<string>, depth = 0): FlatNode[] {
   const items: FlatNode[] = []
   for (const node of nodes) {
@@ -245,7 +255,8 @@ export function FileTree() {
   const [viewportHeight, setViewportHeight] = useState(480)
   const [dragActive, setDragActive] = useState(false)
 
-  const tree = useMemo(() => buildTree(currentProject?.files ?? []), [currentProject?.files])
+  const treeSignature = useMemo(() => structureSignature(currentProject?.files ?? []), [currentProject?.files])
+  const tree = useMemo(() => buildTree(currentProject?.files ?? []), [currentProject?.files, treeSignature])
   const rows = useMemo(() => flattenTree(tree, expanded), [expanded, tree])
 
   useEffect(() => {
@@ -387,7 +398,7 @@ export function FileTree() {
   if (!currentProject) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-center" style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-        Open a vault to browse files.
+        Open a project to browse files.
       </div>
     )
   }

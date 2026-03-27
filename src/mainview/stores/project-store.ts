@@ -61,7 +61,7 @@ interface ProjectState {
   loading: boolean;
   hasSelectedProject: boolean;
   activeConflict: FileConflictState | null;
-  openVaultDialog: () => Promise<string | null>;
+  openProjectDialog: () => Promise<string | null>;
   loadProjects: () => Promise<void>;
   createProject: (name: string, scaffold?: ProjectScaffold) => Promise<string>;
   deleteProject: (id: string) => Promise<void>;
@@ -72,7 +72,7 @@ interface ProjectState {
   assignProjectsToHomeWorkspace: (projectIds: string[], workspaceId: string | null) => Promise<void>;
   setSelectedHomeWorkspace: (id: string | null) => Promise<void>;
   selectProject: (id: string) => void;
-  openRecentVault: (rootPath: string) => Promise<void>;
+  openRecentProject: (rootPath: string) => Promise<void>;
   goHome: () => void;
   selectFile: (path: string) => void;
   createFile: (path: string, content?: string) => Promise<void>;
@@ -102,6 +102,11 @@ interface ProjectState {
 }
 
 let subscriptionsBound = false;
+let selectionPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSelectionPersist: { rootPath: string; path: string | null } | null = null;
+let windowTitleTimer: ReturnType<typeof setTimeout> | null = null;
+const SELECTION_PERSIST_DEBOUNCE_MS = 120;
+const WINDOW_TITLE_DEBOUNCE_MS = 60;
 
 function basenameOf(input: string): string {
   const normalized = input.replace(/\\/g, "/");
@@ -284,6 +289,29 @@ function updateWindowTitle() {
   })
 }
 
+function scheduleWindowTitleUpdate() {
+  if (windowTitleTimer) clearTimeout(windowTitleTimer)
+  windowTitleTimer = setTimeout(() => {
+    windowTitleTimer = null
+    updateWindowTitle()
+  }, WINDOW_TITLE_DEBOUNCE_MS)
+}
+
+function schedulePersistLastFile(rootPath: string, path: string | null) {
+  pendingSelectionPersist = { rootPath, path }
+  if (selectionPersistTimer) clearTimeout(selectionPersistTimer)
+  selectionPersistTimer = setTimeout(() => {
+    selectionPersistTimer = null
+    const pending = pendingSelectionPersist
+    pendingSelectionPersist = null
+    if (!pending) return
+    void desktopRpc.request.persistLastFile({
+      rootPath: pending.rootPath,
+      path: pending.path,
+    })
+  }, SELECTION_PERSIST_DEBOUNCE_MS)
+}
+
 function applyMetadataState(metadata: AppMetadata) {
   useProjectStore.setState((state) => ({
     metadata,
@@ -301,7 +329,7 @@ function clearSelectionState() {
   }));
 
   useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved" });
-  updateWindowTitle()
+  scheduleWindowTitleUpdate()
 }
 
 async function hydrateFile(rootPath: string, filePath: string): Promise<void> {
@@ -324,7 +352,7 @@ async function hydrateFile(rootPath: string, filePath: string): Promise<void> {
   });
 }
 
-async function applyVault(project: Project | null): Promise<void> {
+async function applyProject(project: Project | null): Promise<void> {
   useProjectStore.setState((state) => {
     if (!project) {
       return {
@@ -368,7 +396,7 @@ async function applyVault(project: Project | null): Promise<void> {
   } catch (error) {
     console.error("Failed to persist last file:", error);
   } finally {
-    updateWindowTitle();
+    scheduleWindowTitleUpdate();
   }
 }
 
@@ -490,32 +518,32 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   hasSelectedProject: false,
   activeConflict: null,
 
-  openVaultDialog: async () => {
-    const vault = await desktopRpc.request.openVaultDialog();
-    await applyVault(vault);
-    return vault?.id ?? null;
+  openProjectDialog: async () => {
+    const project = await desktopRpc.request.openVaultDialog();
+    await applyProject(project);
+    return project?.id ?? null;
   },
 
   loadProjects: async () => {
     bindSubscriptions();
     await desktopRpc.request.waitUntilReady();
     const bootstrap = await desktopRpc.request.getBootstrapState();
-    const activeVault = bootstrap.activeVault;
+    const activeProject = bootstrap.activeVault;
 
     set({
       metadata: bootstrap.metadata,
-      projects: mergeProjects(bootstrap.metadata, activeVault),
-      currentProjectId: activeVault?.id ?? null,
-      currentFilePath: activeVault?.mainFile ?? null,
-      hasSelectedProject: Boolean(activeVault),
+      projects: mergeProjects(bootstrap.metadata, activeProject),
+      currentProjectId: activeProject?.id ?? null,
+      currentFilePath: activeProject?.mainFile ?? null,
+      hasSelectedProject: Boolean(activeProject),
       loading: false,
       activeConflict: null,
     });
 
-    if (activeVault) {
-      const mainTextFile = activeVault.files.find(
+    if (activeProject) {
+      const mainTextFile = activeProject.files.find(
         (entry) =>
-          entry.path === activeVault.mainFile &&
+          entry.path === activeProject.mainFile &&
           (entry.kind ?? "file") === "file" &&
           !entry.isBinary,
       );
@@ -529,13 +557,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   createProject: async (name, scaffold) => {
-    const vault = await desktopRpc.request.createVault({
+    const project = await desktopRpc.request.createVault({
       name,
       scaffold: normalizeScaffold(scaffold),
     });
-    if (!vault) return "";
-    await applyVault(vault);
-    return vault.id;
+    if (!project) return "";
+    await applyProject(project);
+    return project.id;
   },
 
   deleteProject: async (id) => {
@@ -606,12 +634,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   selectProject: (id) => {
-    void get().openRecentVault(id);
+    void get().openRecentProject(id);
   },
 
-  openRecentVault: async (rootPath) => {
-    const vault = await desktopRpc.request.openRecentVault({ rootPath });
-    await applyVault(vault);
+  openRecentProject: async (rootPath) => {
+    const project = await desktopRpc.request.openRecentVault({ rootPath });
+    await applyProject(project);
   },
 
   goHome: () => {
@@ -638,7 +666,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         await desktopRpc.request.flushWrites({ rootPath: project.rootPath });
         await desktopRpc.request.closeVault();
       } catch (error) {
-        console.error("Failed to close vault while returning home:", error);
+        console.error("Failed to close project while returning home:", error);
       }
     })();
   },
@@ -649,8 +677,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const entry = project.files.find((candidate) => candidate.path === filePath);
     set({ currentFilePath: filePath, activeConflict: null });
-    void desktopRpc.request.persistLastFile({ rootPath: project.rootPath, path: filePath });
-    updateWindowTitle();
+    schedulePersistLastFile(project.rootPath, filePath);
+    scheduleWindowTitleUpdate();
 
     if (entry && (entry.kind ?? "file") === "file" && !entry.loaded) {
       void hydrateFile(project.rootPath, filePath);
@@ -1115,7 +1143,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       value,
     });
     applyMetadataState(result.metadata);
-    await applyVault(result.vault);
+    await applyProject(result.vault);
   },
 
   revealCurrentProjectInFinder: async () => {

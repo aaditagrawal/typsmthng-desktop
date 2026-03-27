@@ -29,13 +29,13 @@ const TEXT_RESULT_LIMIT = 18
 export function CommandSearch() {
   const open = useUIStore((s) => s.commandSearchOpen)
   const setOpen = useUIStore((s) => s.setCommandSearchOpen)
-  const { currentProjectId, currentVaultName, includeHidden } = useProjectStore(
+  const { currentProjectId, currentProjectName, includeHidden } = useProjectStore(
     useShallow((s) => {
-      const currentVault = s.metadata?.recentVaults.find((vault) => vault.rootPath === s.currentProjectId) ?? null
+      const currentProject = s.metadata?.recentVaults.find((vault) => vault.rootPath === s.currentProjectId) ?? null
       return {
         currentProjectId: s.currentProjectId,
-        currentVaultName: currentVault?.name ?? null,
-        includeHidden: currentVault?.hiddenFilesVisible ?? false,
+        currentProjectName: currentProject?.name ?? null,
+        includeHidden: currentProject?.hiddenFilesVisible ?? false,
       }
     }),
   )
@@ -193,7 +193,7 @@ export function CommandSearch() {
             }}
           />
           <div style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            {searching ? 'searching' : currentVaultName ?? 'no vault'}
+            {searching ? 'searching' : currentProjectName ?? 'no project'}
           </div>
         </div>
 
@@ -209,7 +209,7 @@ export function CommandSearch() {
                 textTransform: 'uppercase',
               }}
             >
-              {query.trim() ? 'No matches yet.' : 'Start typing to search the active vault.'}
+              {query.trim() ? 'No matches yet.' : 'Start typing to search the active project.'}
             </div>
           ) : (
             <>

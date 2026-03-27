@@ -147,8 +147,8 @@ export function Toolbar() {
         </button>
         <button
           className="toolbar-button"
-          title="Open vault"
-          onClick={() => void useProjectStore.getState().openVaultDialog()}
+          title="Open project"
+          onClick={() => void useProjectStore.getState().openProjectDialog()}
         >
           <FolderOpen size={16} />
         </button>
@@ -199,7 +199,7 @@ export function Toolbar() {
       <div className="flex items-center gap-1 pl-3 pr-5 shrink-0" style={{ position: 'relative', zIndex: 10 }}>
         <button
           className="toolbar-button"
-          title={currentFavorite ? 'Unfavorite vault' : 'Favorite vault'}
+          title={currentFavorite ? 'Unfavorite project' : 'Favorite project'}
           onClick={() => currentProjectId && void useProjectStore.getState().toggleFavoriteProject(currentProjectId)}
           disabled={!currentProjectId}
         >

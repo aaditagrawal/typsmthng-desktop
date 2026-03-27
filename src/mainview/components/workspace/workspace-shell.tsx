@@ -77,6 +77,8 @@ function ConflictBanner() {
 function SidebarResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
   const dragging = useRef(false)
   const lastX = useRef(0)
+  const frameRef = useRef<number | null>(null)
+  const pendingDeltaRef = useRef(0)
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -87,10 +89,28 @@ function SidebarResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
       if (!dragging.current) return
       const delta = ev.clientX - lastX.current
       lastX.current = ev.clientX
-      onDrag(delta)
+      pendingDeltaRef.current += delta
+      if (frameRef.current !== null) return
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = null
+        const pendingDelta = pendingDeltaRef.current
+        pendingDeltaRef.current = 0
+        if (pendingDelta !== 0) {
+          onDrag(pendingDelta)
+        }
+      })
     }
     const onMouseUp = () => {
       dragging.current = false
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current)
+        frameRef.current = null
+      }
+      const pendingDelta = pendingDeltaRef.current
+      pendingDeltaRef.current = 0
+      if (pendingDelta !== 0) {
+        onDrag(pendingDelta)
+      }
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
