@@ -1,8 +1,9 @@
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { useProjectStore, type ProjectFile, type ProjectScaffold } from '@/stores/project-store'
+import { useProjectStore, type Project, type ProjectFile, type ProjectScaffold } from '@/stores/project-store'
 import { isKnownTextPath, isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst, type ConversionResult, type ConversionWarning } from '@/lib/latex-converter'
 import { downloadBlob } from '@/lib/download-blob'
+import { desktopRpc } from '@/lib/desktop-rpc'
 
 function latexConversionFallback(source: string): string {
   return `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${source.replace(/\*\//g, '* /')} */\n`
@@ -70,28 +71,50 @@ async function createImportedProject(projectName: string, projectFiles: ProjectF
   return id
 }
 
+async function collectProjectExportFiles(project: Project): Promise<Record<string, Uint8Array>> {
+  const files: Record<string, Uint8Array> = {}
+
+  if (project.files.length > 0) {
+    for (const file of project.files) {
+      const zipPath = file.path.startsWith('/') ? file.path.slice(1) : file.path
+      if (zipPath.endsWith('.folder')) continue
+      if (file.isBinary && file.binaryData) {
+        files[zipPath] = file.binaryData
+      } else {
+        files[zipPath] = strToU8(file.content)
+      }
+    }
+    return files
+  }
+
+  const bundle = await desktopRpc.request.getVaultExportBundle({ rootPath: project.rootPath })
+  if (!bundle) {
+    throw new Error(`Could not read files for project "${project.name}".`)
+  }
+  for (const file of bundle.files) {
+    const zipPath = file.path.startsWith('/') ? file.path.slice(1) : file.path
+    if (zipPath.endsWith('.folder')) continue
+    if (file.isBinary && file.binaryData) {
+      files[zipPath] = file.binaryData
+    } else {
+      files[zipPath] = strToU8(file.content ?? '')
+    }
+  }
+  return files
+}
+
 export async function exportProject(projectId?: string): Promise<void> {
   const state = useProjectStore.getState()
   const project = projectId
     ? state.projects.find((entry) => entry.id === projectId)
     : state.getCurrentProject()
-  if (!project) return
+  if (!project) {
+    throw new Error(projectId ? 'Selected project was not found.' : 'No project is open to export.')
+  }
 
-  // Build zip file data
-  const files: Record<string, Uint8Array> = {}
-
-  for (const file of project.files) {
-    // Strip leading slash for zip paths
-    const zipPath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-
-    // Skip .folder placeholder files
-    if (zipPath.endsWith('.folder')) continue
-
-    if (file.isBinary && file.binaryData) {
-      files[zipPath] = file.binaryData
-    } else {
-      files[zipPath] = strToU8(file.content)
-    }
+  const files = await collectProjectExportFiles(project)
+  if (Object.keys(files).length === 0) {
+    throw new Error(`Project "${project.name}" has no exportable files.`)
   }
 
   let zipped: Uint8Array
@@ -99,42 +122,62 @@ export async function exportProject(projectId?: string): Promise<void> {
     zipped = zipSync(files)
   } catch (err) {
     console.error('Failed to export project:', err)
-    return
+    throw new Error(`Failed to zip project "${project.name}".`)
   }
   downloadBlob(`${project.name}.zip`, new Blob([zipped as BlobPart], { type: 'application/zip' }))
 }
 
-export async function exportAllProjects(): Promise<void> {
-  const projects = useProjectStore.getState().projects
-  if (projects.length === 0) return
+export async function exportProjects(projectIds: string[]): Promise<void> {
+  const uniqueIds = [...new Set(projectIds)]
+  if (uniqueIds.length === 0) {
+    throw new Error('No projects selected to export.')
+  }
+  if (uniqueIds.length === 1) {
+    await exportProject(uniqueIds[0])
+    return
+  }
 
+  const state = useProjectStore.getState()
   const files: Record<string, Uint8Array> = {}
+  let exported = 0
 
-  for (const project of projects) {
-    const folderName = project.name.replace(/[/\\:*?"<>|]/g, '_')
-    for (const file of project.files) {
-      const filePath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      if (filePath.endsWith('.folder')) continue
-      const zipPath = `${folderName}/${filePath}`
-      if (file.isBinary && file.binaryData) {
-        files[zipPath] = file.binaryData
-      } else {
-        files[zipPath] = strToU8(file.content)
-      }
+  for (const projectId of uniqueIds) {
+    const project = state.projects.find((entry) => entry.id === projectId)
+    if (!project) {
+      throw new Error('One of the selected projects was not found.')
     }
+    const projectFiles = await collectProjectExportFiles(project)
+    if (Object.keys(projectFiles).length === 0) continue
+    const folderName = project.name.replace(/[/\\:*?"<>|]/g, '_')
+    for (const [filePath, data] of Object.entries(projectFiles)) {
+      files[`${folderName}/${filePath}`] = data
+    }
+    exported++
+  }
+
+  if (exported === 0) {
+    throw new Error('Selected projects have no exportable files.')
   }
 
   let zipped: Uint8Array
   try {
     zipped = zipSync(files)
   } catch (err) {
-    console.error('Failed to export all projects:', err)
-    return
+    console.error('Failed to export selected projects:', err)
+    throw new Error('Failed to zip the selected projects.')
   }
   downloadBlob(
-    'typsmthng-all-projects.zip',
+    'typsmthng-selected-projects.zip',
     new Blob([zipped as BlobPart], { type: 'application/zip' }),
   )
+}
+
+export async function exportAllProjects(): Promise<void> {
+  const projects = useProjectStore.getState().projects
+  if (projects.length === 0) {
+    throw new Error('There are no projects to export.')
+  }
+  await exportProjects(projects.map((project) => project.id))
 }
 
 export async function importAllProjects(file: File): Promise<number> {

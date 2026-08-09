@@ -210,6 +210,12 @@ function buildDuplicatePath(existingPaths: Iterable<string>, path: string): stri
 async function processImportedFiles(files: FileList | File[], basePath: string): Promise<void> {
   const textEntries: Array<{ path: string; content: string }> = []
   const binaryEntries: Array<{ path: string; data: Uint8Array }> = []
+  const texPathsToReplace: string[] = []
+  const existingPaths = new Set(
+    (useProjectStore.getState().getCurrentProject()?.files ?? []).map((entry) =>
+      entry.path.replace(/^\/+/, ''),
+    ),
+  )
 
   for (const file of Array.from(files)) {
     const fileWithRelativePath = file as File & { webkitRelativePath?: string }
@@ -230,6 +236,9 @@ async function processImportedFiles(files: FileList | File[], basePath: string):
           path = targetPath.replace(/\.tex$/i, '.typ')
           content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
         }
+        if (path !== targetPath && existingPaths.has(targetPath)) {
+          texPathsToReplace.push(targetPath)
+        }
       }
 
       textEntries.push({ path, content })
@@ -246,6 +255,14 @@ async function processImportedFiles(files: FileList | File[], basePath: string):
   }
   if (binaryEntries.length > 0) {
     await useProjectStore.getState().addBinaryFilesBatch(binaryEntries)
+  }
+  // Dropping .tex writes a converted .typ; remove any leftover original .tex.
+  for (const texPath of texPathsToReplace) {
+    try {
+      await useProjectStore.getState().deleteFile(texPath)
+    } catch (err) {
+      console.warn(`Failed to remove replaced LaTeX source "${texPath}":`, err)
+    }
   }
 }
 

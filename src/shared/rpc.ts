@@ -129,6 +129,18 @@ export interface CreateVaultParams {
   ifExists?: CreateVaultIfExistsPolicy;
 }
 
+export interface VaultExportFile {
+  path: string;
+  isBinary: boolean;
+  content?: string;
+  binaryData?: Uint8Array;
+}
+
+export interface VaultExportBundle {
+  name: string;
+  files: VaultExportFile[];
+}
+
 export type DesktopRPC = {
   bun: RPCSchema<{
     requests: {
@@ -235,6 +247,10 @@ export type DesktopRPC = {
       getVaultStats: {
         params: { rootPath: string; includeHidden: boolean };
         response: { fileCount: number };
+      };
+      getVaultExportBundle: {
+        params: { rootPath: string };
+        response: VaultExportBundle | null;
       };
       setWindowTitle: {
         params: { title: string };

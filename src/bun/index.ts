@@ -203,6 +203,8 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 				vaultService.getCompileBundle(rootPath, currentFilePath, liveSource),
 			getVaultStats: ({ rootPath, includeHidden }) =>
 				vaultService.getVaultStats(rootPath, includeHidden),
+			getVaultExportBundle: ({ rootPath }) =>
+				vaultService.getVaultExportBundle(rootPath),
 			setWindowTitle: ({ title }) => {
 				requireMainWindow().setTitle(title);
 				return { ok: true as const };

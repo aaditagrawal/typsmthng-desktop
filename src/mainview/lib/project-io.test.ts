@@ -25,6 +25,14 @@ vi.mock('@/lib/latex-converter', () => ({
   })),
 }))
 
+vi.mock('@/lib/desktop-rpc', () => ({
+  desktopRpc: {
+    request: {
+      getVaultExportBundle: vi.fn(),
+    },
+  },
+}))
+
 import {
   applyZipCommonRootStrip,
   importAllProjects,

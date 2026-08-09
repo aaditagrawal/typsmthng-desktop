@@ -14,6 +14,7 @@ import {
   type ProjectScaffold,
   type RecentVaultRecord,
   type TextSearchResult,
+  type VaultExportBundle,
   type VaultFileEntry,
   type VaultRecord,
 } from "../../shared/rpc";
@@ -461,6 +462,46 @@ export class VaultService {
   ): Promise<{ fileCount: number }> {
     const index = await this.indexService.getIndex(rootPath, includeHidden);
     return { fileCount: countVisibleFiles(index.entries) };
+  }
+
+  /** Read all vault files from disk for zip export (works for unloaded recent projects). */
+  async getVaultExportBundle(rootPath: string): Promise<VaultExportBundle | null> {
+    try {
+      const metadata = await this.appState.load();
+      const recent = metadata.recentVaults.find((vault) => vault.rootPath === rootPath);
+      const includeHidden = recent?.hiddenFilesVisible ?? false;
+      const index = await this.indexService.getIndex(rootPath, includeHidden);
+      const fileEntries = index.entries.filter(
+        (entry) =>
+          entry.kind === "file"
+          && entry.path !== ".folder"
+          && !entry.path.endsWith("/.folder")
+          && !entry.path.startsWith(".typsmthng/"),
+      );
+
+      const files = (
+        await Promise.all(
+          fileEntries.map(async (entry) => {
+            const loaded = await this.readFileEntry(rootPath, entry.path, false);
+            if (!loaded) return null;
+            return {
+              path: entry.path,
+              isBinary: loaded.isBinary,
+              content: loaded.isBinary ? undefined : loaded.content,
+              binaryData: loaded.isBinary ? loaded.binaryData : undefined,
+            };
+          }),
+        )
+      ).filter((file): file is NonNullable<typeof file> => file !== null);
+
+      return {
+        name: path.basename(rootPath),
+        files,
+      };
+    } catch (error) {
+      console.error("Failed to build vault export bundle", error);
+      return null;
+    }
   }
 
   async persistWindowState(frame: { width: number; height: number; x?: number; y?: number }): Promise<void> {

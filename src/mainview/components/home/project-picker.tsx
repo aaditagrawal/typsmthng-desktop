@@ -17,7 +17,7 @@ import {
 } from '@/lib/builtin-templates'
 import {
   exportAllProjects,
-  exportProject,
+  exportProjects,
   importAllProjects,
   importLatexProject,
   importLatexZip,
@@ -473,6 +473,7 @@ export function ProjectPicker({
   const importProjectInputRef = useRef<HTMLInputElement>(null)
   const [importAllBusy, setImportAllBusy] = useState(false)
   const [importProjectBusy, setImportProjectBusy] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
   const [importAllResult, setImportAllResult] = useState<string | null>(null)
   const [importAllError, setImportAllError] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState(false)
@@ -1544,23 +1545,71 @@ export function ProjectPicker({
             flexWrap: 'wrap',
           }}
         >
-          {projects.length > 0 && (
+          {visibleProjects.length > 0 && (
             <LinkBtn
+              disabled={exportBusy}
+              style={{ ...linkBtnBase, opacity: exportBusy ? 0.6 : 1 }}
               onClick={() => {
-                const targetId = selectedProjectIds[0]
-                  ?? useProjectStore.getState().currentProjectId
-                  ?? visibleProjects[0]?.id
-                  ?? sorted[0]?.id
-                if (!targetId) return
-                void exportProject(targetId)
+                const selectedVisibleIds = selectedProjectIds.filter((id) =>
+                  visibleProjects.some((project) => project.id === id),
+                )
+                const targetIds = selectedVisibleIds.length > 0
+                  ? selectedVisibleIds
+                  : (() => {
+                      const currentId = useProjectStore.getState().currentProjectId
+                      const currentVisible = currentId
+                        && visibleProjects.some((project) => project.id === currentId)
+                        ? currentId
+                        : null
+                      return currentVisible
+                        ? [currentVisible]
+                        : visibleProjects[0]
+                          ? [visibleProjects[0].id]
+                          : []
+                    })()
+                if (targetIds.length === 0) {
+                  setImportAllError('No project in the current view to export.')
+                  return
+                }
+                setExportBusy(true)
+                setImportAllResult(null)
+                setImportAllError(null)
+                void exportProjects(targetIds)
+                  .then(() => {
+                    setImportAllResult(
+                      targetIds.length === 1
+                        ? 'Exported project'
+                        : `Exported ${targetIds.length} projects`,
+                    )
+                  })
+                  .catch((err) => {
+                    setImportAllError(err instanceof Error ? err.message : 'Export failed')
+                  })
+                  .finally(() => { setExportBusy(false) })
               }}
             >
-              <Download size={12} />
-              Export project
+              {exportBusy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+              {selectedProjectIds.filter((id) => visibleProjects.some((project) => project.id === id)).length > 1
+                ? 'Export selected'
+                : 'Export project'}
             </LinkBtn>
           )}
           {projects.length > 0 && (
-            <LinkBtn onClick={() => { void exportAllProjects() }}>
+            <LinkBtn
+              disabled={exportBusy}
+              style={{ ...linkBtnBase, opacity: exportBusy ? 0.6 : 1 }}
+              onClick={() => {
+                setExportBusy(true)
+                setImportAllResult(null)
+                setImportAllError(null)
+                void exportAllProjects()
+                  .then(() => { setImportAllResult('Exported all projects') })
+                  .catch((err) => {
+                    setImportAllError(err instanceof Error ? err.message : 'Export failed')
+                  })
+                  .finally(() => { setExportBusy(false) })
+              }}
+            >
               <Download size={12} />
               Export all
             </LinkBtn>
