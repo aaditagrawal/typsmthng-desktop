@@ -70,7 +70,6 @@ const SIMPLE_COMMANDS: Record<string, string> = {
   newpage: '#pagebreak()',
   clearpage: '#pagebreak()',
   cleardoublepage: '#pagebreak()',
-  maketitle: '',
   noindent: '',
   bigskip: '#v(1em)',
   medskip: '#v(0.5em)',
@@ -89,6 +88,24 @@ const SIMPLE_COMMANDS: Record<string, string> = {
   today: '#datetime.today().display()',
   appendix: '',
 }
+
+/** Macros treated as preamble metadata when scanning document-less sources */
+const PREAMBLE_MACROS = new Set([
+  'documentclass',
+  'usepackage',
+  'title',
+  'author',
+  'date',
+  'bibliographystyle',
+])
+
+const MAKETITLE_TYPST = [
+  '#align(center)[',
+  '  #text(size: 1.5em, weight: "bold")[#document.title]',
+  '  #v(0.75em)',
+  '  #document.author',
+  ']',
+].join('\n')
 
 // ── Math command translations ──
 
@@ -245,16 +262,14 @@ function emitRoot(
     }
   }
 
-  // If no \begin{document}, treat everything as body
+  // If no \begin{document}, still extract leading preamble macros
+  // (title/author/date/etc.) before treating the rest as body.
   if (!hasDocumentEnv) {
-    bodyNodes.push(...preambleNodes.splice(0))
-    bodyNodes.push(...root.content.filter((n) => !preambleNodes.includes(n)))
-    // Reset since we moved everything
+    const split = splitDocumentLessPreamble(root.content)
     preambleNodes.length = 0
+    preambleNodes.push(...split.preamble)
     bodyNodes.length = 0
-    for (const node of root.content) {
-      bodyNodes.push(node)
-    }
+    bodyNodes.push(...split.body)
   }
 
   // Extract preamble metadata
@@ -277,6 +292,38 @@ function emitRoot(
   if (body) parts.push(body)
 
   return parts.join('\n') + '\n'
+}
+
+/**
+ * For sources without \\begin{document}, peel off leading preamble-only
+ * macros (and intervening whitespace/comments) so metadata can still be
+ * extracted and those macros are not re-emitted as body.
+ */
+function splitDocumentLessPreamble(nodes: Ast.Node[]): {
+  preamble: Ast.Node[]
+  body: Ast.Node[]
+} {
+  const preamble: Ast.Node[] = []
+  let i = 0
+
+  for (; i < nodes.length; i++) {
+    const node = nodes[i]
+    if (
+      node.type === 'whitespace' ||
+      node.type === 'parbreak' ||
+      node.type === 'comment'
+    ) {
+      preamble.push(node)
+      continue
+    }
+    if (node.type === 'macro' && PREAMBLE_MACROS.has((node as Ast.Macro).content)) {
+      preamble.push(node)
+      continue
+    }
+    break
+  }
+
+  return { preamble, body: nodes.slice(i) }
 }
 
 function extractPreambleMetadata(
@@ -409,6 +456,9 @@ function emitMacro(
 
   // Special commands with arguments
   switch (name) {
+    case 'maketitle':
+      return `\n${MAKETITLE_TYPST}\n`
+
     case 'underline':
       return `#underline[${args[0] || ''}]`
 
@@ -451,7 +501,7 @@ function emitMacro(
       return `@${args[0] || ''}`
 
     case 'bibliography':
-      return `#bibliography("${args[0] || ''}.bib")`
+      return emitBibliographyCommand(args[0] || '')
 
     case 'bibliographystyle':
       return '' // no typst equivalent
@@ -882,6 +932,32 @@ function emitTableEnv(
 }
 
 // ── Bibliography emitter ──
+
+/** Ensure a bibliography path ends with .bib exactly once. */
+function normalizeBibPath(path: string): string {
+  const trimmed = path.trim()
+  if (!trimmed) return trimmed
+  return trimmed.endsWith('.bib') ? trimmed : `${trimmed}.bib`
+}
+
+/**
+ * Convert \\bibliography{...} to Typst #bibliography(...).
+ * Appends .bib only when missing. Comma-separated lists become a Typst array.
+ */
+function emitBibliographyCommand(raw: string): string {
+  const entries = raw
+    .split(',')
+    .map((s) => normalizeBibPath(s))
+    .filter(Boolean)
+
+  if (entries.length === 0) {
+    return '#bibliography("")'
+  }
+  if (entries.length === 1) {
+    return `#bibliography("${entries[0]}")`
+  }
+  return `#bibliography((${entries.map((e) => `"${e}"`).join(', ')}))`
+}
 
 function emitBibliography(
   env: Ast.Environment,
