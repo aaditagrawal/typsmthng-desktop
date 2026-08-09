@@ -1,28 +1,16 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
+// Prefer Typst/project markers only. Do not treat ancestor `.git` as a vault root —
+// that can resolve a lone .typ under a large git checkout (or $HOME) to the wrong folder.
 const VAULT_ROOT_MARKERS = [
 	"typst.toml",
 	"main.typ",
 	".typsmthng",
-	".git",
 ] as const;
 
 function isVaultRootMarker(dir: string, marker: (typeof VAULT_ROOT_MARKERS)[number]): boolean {
-	const candidate = join(dir, marker);
-	if (!existsSync(candidate)) return false;
-
-	if (marker === ".git") {
-		try {
-			return statSync(candidate).isDirectory();
-		} catch {
-			return false;
-		}
-	}
-
-	// typst.toml / main.typ: any existing entry counts
-	// .typsmthng: file or directory
-	return true;
+	return existsSync(join(dir, marker));
 }
 
 function directoryHasVaultRootMarker(dir: string): boolean {

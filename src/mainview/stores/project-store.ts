@@ -359,7 +359,11 @@ async function hydrateFile(rootPath: string, filePath: string): Promise<void> {
   });
 }
 
+let applyProjectGeneration = 0;
+
 async function applyProject(project: Project | null): Promise<void> {
+  const generation = ++applyProjectGeneration;
+
   useProjectStore.setState((state) => {
     if (!project) {
       return {
@@ -383,6 +387,9 @@ async function applyProject(project: Project | null): Promise<void> {
     };
   });
 
+  // Bail if a newer open/apply started (CLI can emit openVault + resendActiveVault).
+  if (generation !== applyProjectGeneration) return;
+
   const mainTextFile = project?.files.find(
     (entry) => entry.path === project.mainFile && entry.kind === "file" && !entry.isBinary,
   );
@@ -403,7 +410,9 @@ async function applyProject(project: Project | null): Promise<void> {
   } catch (error) {
     console.error("Failed to persist last file:", error);
   } finally {
-    scheduleWindowTitleUpdate();
+    if (generation === applyProjectGeneration) {
+      scheduleWindowTitleUpdate();
+    }
   }
 }
 

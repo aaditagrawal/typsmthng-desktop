@@ -45,15 +45,27 @@ describe("resolveVaultRootFromTypFile", () => {
 		});
 	});
 
-	it("uses a root that only has .git", () => {
+	it("ignores ancestor .git and falls back to the file parent", () => {
 		const root = makeTempRoot();
 		mkdirSync(join(root, ".git"));
 		mkdirSync(join(root, "src"));
 		writeFileSync(join(root, "src", "paper.typ"), "= Paper\n");
 
 		expect(resolveVaultRootFromTypFile(join(root, "src", "paper.typ"))).toEqual({
+			vaultPath: join(root, "src"),
+			selectFile: "paper.typ",
+		});
+	});
+
+	it("uses .typsmthng as a project marker when walking up", () => {
+		const root = makeTempRoot();
+		mkdirSync(join(root, ".typsmthng"));
+		mkdirSync(join(root, "chapters"));
+		writeFileSync(join(root, "chapters", "intro.typ"), "= Intro\n");
+
+		expect(resolveVaultRootFromTypFile(join(root, "chapters", "intro.typ"))).toEqual({
 			vaultPath: root,
-			selectFile: "src/paper.typ",
+			selectFile: "chapters/intro.typ",
 		});
 	});
 
