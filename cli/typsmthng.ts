@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
-import { resolve, dirname, basename } from "node:path";
+import { resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { connect } from "node:net";
-import { execSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+
+import { resolveVaultRootFromTypFile } from "../src/shared/vault-root.ts";
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
 const SOCKET_PATH = process.platform === "win32"
@@ -14,7 +16,7 @@ if (!arg) {
 	console.log("Usage: typsmthng <path>");
 	console.log("  typsmthng .          Open current directory as vault");
 	console.log("  typsmthng folder/    Open folder as vault");
-	console.log("  typsmthng file.typ   Open file (parent dir becomes vault)");
+	console.log("  typsmthng file.typ   Open file (project root becomes vault)");
 	process.exit(0);
 }
 
@@ -34,8 +36,9 @@ if (stat.isFile()) {
 		console.error(`typsmthng: not a .typ file: ${target}`);
 		process.exit(1);
 	}
-	vaultPath = dirname(target);
-	selectFile = basename(target);
+	const resolved = resolveVaultRootFromTypFile(target);
+	vaultPath = resolved.vaultPath;
+	selectFile = resolved.selectFile;
 } else if (stat.isDirectory()) {
 	vaultPath = target;
 } else {

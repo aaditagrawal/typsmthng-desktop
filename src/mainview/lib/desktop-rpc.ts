@@ -4,6 +4,7 @@ import type {
 	AppMetadata,
 	DesktopRPC,
 	ExternalVaultEvent,
+	VaultRecord,
 } from "../../shared/rpc";
 import type { UpdateState } from "../../shared/update-types";
 
@@ -18,6 +19,7 @@ const externalVaultListeners = new Set<
 	(payload: ExternalVaultEventsPayload) => void
 >();
 const metadataListeners = new Set<(metadata: AppMetadata) => void>();
+const activeVaultOpenedListeners = new Set<(vault: VaultRecord) => void>();
 const activeVaultClosedListeners = new Set<() => void>();
 const updateStateListeners = new Set<(state: UpdateState) => void>();
 
@@ -50,6 +52,11 @@ const desktopRpc = Electroview.defineRPC<DesktopRPC>({
 					listener(metadata);
 				}
 			},
+			activeVaultOpened(vault) {
+				for (const listener of activeVaultOpenedListeners) {
+					listener(vault);
+				}
+			},
 			activeVaultClosed() {
 				for (const listener of activeVaultClosedListeners) {
 					listener();
@@ -71,6 +78,12 @@ export function onMetadataUpdated(
 	listener: (metadata: AppMetadata) => void,
 ): Unsubscribe {
 	return subscribe(metadataListeners, listener);
+}
+
+export function onActiveVaultOpened(
+	listener: (vault: VaultRecord) => void,
+): Unsubscribe {
+	return subscribe(activeVaultOpenedListeners, listener);
 }
 
 export function onActiveVaultClosed(listener: () => void): Unsubscribe {

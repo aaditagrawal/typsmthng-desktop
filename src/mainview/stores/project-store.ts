@@ -13,6 +13,7 @@ import type {
 import {
   desktopRpc,
   onActiveVaultClosed,
+  onActiveVaultOpened,
   onExternalVaultEvents,
   onMetadataUpdated,
 } from "@/lib/desktop-rpc";
@@ -412,6 +413,10 @@ function bindSubscriptions() {
 
   onMetadataUpdated((metadata) => {
     applyMetadataState(metadata);
+  });
+
+  onActiveVaultOpened((vault) => {
+    void applyProject(vault);
   });
 
   onActiveVaultClosed(() => {

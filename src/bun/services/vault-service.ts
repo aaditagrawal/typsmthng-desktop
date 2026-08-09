@@ -258,8 +258,12 @@ export class VaultService {
     return this.openVault(selectedPath, window);
   }
 
-  async openRecentVault(rootPath: string, window: DesktopWindow): Promise<VaultRecord | null> {
-    return this.openVault(rootPath, window);
+  async openRecentVault(
+    rootPath: string,
+    window: DesktopWindow,
+    preferredMainFile?: string | null,
+  ): Promise<VaultRecord | null> {
+    return this.openVault(rootPath, window, preferredMainFile);
   }
 
   async createVault(
@@ -502,6 +506,22 @@ export class VaultService {
     return this.appState.persistLastFile(rootPath, filePath);
   }
 
+  /** Push the current active vault snapshot to the renderer (e.g. after CLI open + persistLastFile). */
+  async resendActiveVault(window: DesktopWindow): Promise<VaultRecord | null> {
+    const rootPath = this.activeVaultRoot;
+    if (!rootPath) return null;
+    try {
+      const metadata = await this.appState.load();
+      const snapshot = await this.loadVaultSnapshot(rootPath, metadata);
+      this.activeWindow = window;
+      window.webview.rpc?.send.activeVaultOpened(snapshot);
+      return snapshot;
+    } catch (error) {
+      console.error("Failed to resend active vault", error);
+      return null;
+    }
+  }
+
   async getCompileBundle(
     rootPath: string,
     currentFilePath: string | null,
@@ -698,6 +718,7 @@ export class VaultService {
 
       await this.startWatcher(rootPath, window);
       window.webview.rpc?.send.metadataUpdated(nextMetadata);
+      window.webview.rpc?.send.activeVaultOpened(snapshot);
       return snapshot;
     } catch (error) {
       console.error("Failed to open vault", error);

@@ -282,6 +282,7 @@ export type DesktopRPC = {
         events: ExternalVaultEvent[];
       };
       metadataUpdated: AppMetadata;
+      activeVaultOpened: VaultRecord;
       activeVaultClosed: void;
     };
   }>;

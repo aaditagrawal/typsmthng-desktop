@@ -2,10 +2,11 @@ import { ApplicationMenu, BrowserView, BrowserWindow, Updater } from "electrobun
 import { dlopen, FFIType } from "bun:ffi";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:net";
-import { basename, dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { DesktopRPC } from "../shared/rpc";
 import type { UpdateState } from "../shared/update-types";
+import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
 import { runPlatformSetup } from "./services/platform-setup";
@@ -123,8 +124,9 @@ function parseStartupArgs(): { vaultPath: string | null; selectFile: string | nu
 					if (stat.isDirectory()) {
 						vaultPath = resolved;
 					} else if (stat.isFile() && resolved.endsWith(".typ")) {
-						vaultPath = dirname(resolved);
-						selectFile = basename(resolved);
+						const fromTyp = resolveVaultRootFromTypFile(resolved);
+						vaultPath = fromTyp.vaultPath;
+						selectFile = fromTyp.selectFile;
 					}
 				}
 			} catch {}
@@ -381,11 +383,14 @@ let cliServer: ReturnType<typeof createServer> | null = null;
 
 async function handleOpenFromCli(vaultPath: string, selectFile: string | null) {
 	const window = requireMainWindow();
-	const vault = await vaultService.openRecentVault(vaultPath, window);
+	const vault = await vaultService.openRecentVault(vaultPath, window, selectFile);
 	if (vault && selectFile) {
 		try {
 			await vaultService.persistLastFile(vaultPath, selectFile);
 		} catch {}
+	}
+	if (vault) {
+		await vaultService.resendActiveVault(window);
 	}
 	window.focus();
 }
