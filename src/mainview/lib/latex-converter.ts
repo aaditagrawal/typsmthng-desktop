@@ -793,9 +793,9 @@ function emitTable(
   env: Ast.Environment,
   warnings: ConversionWarning[],
 ): string {
-  // Parse column spec from args
-  const colSpec = getOptionalOrMandatoryArg(env)
-  const numCols = colSpec ? colSpec.replace(/[^lcrp]/gi, '').length || 3 : 3
+  // Parse column spec from args (preserve braces so p{width} / *{n}{...} stay intact)
+  const colSpec = getTabularColSpec(env)
+  const numCols = colSpec ? countTabularColumns(colSpec) || 3 : 3
 
   // Parse rows by splitting on \\
   const rows = splitTableRows(env.content, warnings)
@@ -808,6 +808,125 @@ function emitTable(
 
   const cellLines = cells.filter(Boolean).map((c) => `  ${c},`).join('\n')
   return `\n#table(\n  columns: ${numCols},\n${cellLines}\n)\n`
+}
+
+/** Serialize a tabular column-spec AST, keeping groups/`\\macro` form. */
+function serializeColSpec(content: Ast.Node[]): string {
+  const parts: string[] = []
+  for (const node of content) {
+    if (node.type === 'string') {
+      parts.push((node as Ast.String).content)
+    } else if (node.type === 'macro') {
+      const macro = node as Ast.Macro
+      parts.push('\\' + macro.content)
+      if (macro.args) {
+        for (const arg of macro.args) {
+          parts.push(
+            (arg.openMark || '{') +
+              serializeColSpec(arg.content) +
+              (arg.closeMark || '}'),
+          )
+        }
+      }
+    } else if (node.type === 'group') {
+      parts.push('{' + serializeColSpec((node as Ast.Group).content) + '}')
+    }
+  }
+  return parts.join('')
+}
+
+function getTabularColSpec(env: Ast.Environment): string | undefined {
+  if (!env.args) return undefined
+  for (const arg of env.args) {
+    const content = serializeColSpec(arg.content)
+    if (content) return content
+  }
+  return undefined
+}
+
+function findMatchingBrace(spec: string, openIdx: number): number {
+  if (spec[openIdx] !== '{') return -1
+  let depth = 0
+  for (let i = openIdx; i < spec.length; i++) {
+    if (spec[i] === '{') depth++
+    else if (spec[i] === '}') {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+/** Expand *{n}{inner} repetitions (simple; inner may contain braces, not nested *). */
+function expandStarColumnSpec(spec: string): string {
+  let result = ''
+  let i = 0
+  while (i < spec.length) {
+    if (spec[i] === '*' && spec[i + 1] === '{') {
+      const nEnd = findMatchingBrace(spec, i + 1)
+      if (nEnd !== -1 && spec[nEnd + 1] === '{') {
+        const innerEnd = findMatchingBrace(spec, nEnd + 1)
+        const n = Number.parseInt(spec.slice(i + 2, nEnd), 10)
+        if (innerEnd !== -1 && Number.isFinite(n) && n >= 0) {
+          result += spec.slice(nEnd + 2, innerEnd).repeat(n)
+          i = innerEnd + 1
+          continue
+        }
+      }
+    }
+    result += spec[i]
+    i++
+  }
+  return result
+}
+
+/** Drop @{...} !{...} >{...} <{...} column decorators. */
+function dropTabularDecorators(spec: string): string {
+  let result = ''
+  let i = 0
+  while (i < spec.length) {
+    const ch = spec[i]
+    if (
+      (ch === '@' || ch === '!' || ch === '>' || ch === '<') &&
+      spec[i + 1] === '{'
+    ) {
+      const end = findMatchingBrace(spec, i + 1)
+      if (end !== -1) {
+        i = end + 1
+        continue
+      }
+    }
+    result += ch
+    i++
+  }
+  return result
+}
+
+/**
+ * Count columns in a LaTeX tabular/array column specification.
+ * Expands *{n}{...}, ignores @{}/!{}/>{}/<{} and rules, and skips p/m/b width args.
+ */
+function countTabularColumns(colSpec: string): number {
+  const stripped = dropTabularDecorators(expandStarColumnSpec(colSpec))
+  let count = 0
+  let i = 0
+  while (i < stripped.length) {
+    const ch = stripped[i]
+    if (ch === 'l' || ch === 'c' || ch === 'r' || ch === 'X') {
+      count++
+      i++
+    } else if (ch === 'p' || ch === 'm' || ch === 'b') {
+      count++
+      i++
+      if (stripped[i] === '{') {
+        const end = findMatchingBrace(stripped, i)
+        i = end === -1 ? stripped.length : end + 1
+      }
+    } else {
+      i++
+    }
+  }
+  return count
 }
 
 function splitTableRows(
@@ -1020,15 +1139,6 @@ function getOptionalArg(macro: Ast.Macro): string | undefined {
   const opt = macro.args.find((a) => a.openMark === '[' && a.closeMark === ']')
   if (!opt) return undefined
   return emitArgContent(opt.content)
-}
-
-function getOptionalOrMandatoryArg(env: Ast.Environment): string | undefined {
-  if (!env.args) return undefined
-  for (const arg of env.args) {
-    const content = emitArgContent(arg.content)
-    if (content) return content
-  }
-  return undefined
 }
 
 function emitArgContent(content: Ast.Node[]): string {

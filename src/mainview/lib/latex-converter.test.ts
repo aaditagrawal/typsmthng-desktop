@@ -189,5 +189,32 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('columns: 3')
       expect(result.typst).toContain('[a], [b], [c]')
     })
+
+    it('does not count letters inside p{width} as columns', async () => {
+      const source =
+        '\\begin{tabular}{p{2cm}c} a & b \\\\ \\end{tabular}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('columns: 2')
+      expect(result.typst).toContain('[a], [b]')
+    })
+
+    it('expands *{n}{inner} column repetition', async () => {
+      const source =
+        '\\begin{tabular}{*{3}{c}} a & b & c \\\\ \\end{tabular}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('columns: 3')
+      expect(result.typst).toContain('[a], [b], [c]')
+    })
+
+    it('ignores >{...} decorators when counting columns', async () => {
+      const source =
+        '\\begin{tabular}{>{\\bfseries}lcr} a & b & c \\\\ \\end{tabular}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('columns: 3')
+      expect(result.typst).toContain('[a], [b], [c]')
+    })
   })
 })
