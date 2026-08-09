@@ -151,41 +151,63 @@ async function setupLinux(): Promise<void> {
 
 // ── Windows ─────────────────────────────────────────────────────────────
 
+function resolveWindowsLaunchExe(): string {
+	const execPath = process.execPath;
+	const execDir = path.dirname(execPath);
+	const localAppData = process.env.LOCALAPPDATA ?? "";
+
+	const candidates = [
+		path.join(execDir, "launcher.exe"),
+		path.join(execDir, "bin", "launcher.exe"),
+		path.join(path.dirname(execDir), "bin", "launcher.exe"),
+		localAppData ? path.join(localAppData, "typsmthng", "bin", "launcher.exe") : "",
+	];
+
+	for (const candidate of candidates) {
+		if (candidate && existsSync(candidate)) return candidate;
+	}
+
+	return execPath;
+}
+
 async function setupWindows(): Promise<void> {
 	// The NSIS installer handles this for fresh installs, but users who
 	// installed before these features were added need them applied at runtime.
-	const exePath = process.execPath;
-	const instDir = path.dirname(exePath);
+	const exePath = resolveWindowsLaunchExe();
+	const binDir = path.dirname(exePath);
 
-	// 1. File association: .typ → typsmthng
+	// 1. File association: always refresh open command to current launcher
 	try {
-		// Check if already registered
-		const result = safeRegQuery("HKCU\\Software\\Classes\\.typ");
-		if (!result?.includes("typsmthng.typ")) {
-			execSync(`reg add "HKCU\\Software\\Classes\\.typ" /ve /d "typsmthng.typ" /f`, { stdio: "ignore" });
-			execSync(`reg add "HKCU\\Software\\Classes\\typsmthng.typ" /ve /d "Typst Document" /f`, { stdio: "ignore" });
-			execSync(`reg add "HKCU\\Software\\Classes\\typsmthng.typ\\shell\\open\\command" /ve /d "\\"${exePath}\\" \\"%1\\"" /f`, { stdio: "ignore" });
-			console.log("Registered .typ file association");
-		}
+		execSync(`reg add "HKCU\\Software\\Classes\\.typ" /ve /d "typsmthng.typ" /f`, { stdio: "ignore" });
+		execSync(`reg add "HKCU\\Software\\Classes\\typsmthng.typ" /ve /d "Typst Document" /f`, { stdio: "ignore" });
+		execSync(
+			`reg add "HKCU\\Software\\Classes\\typsmthng.typ\\shell\\open\\command" /ve /d "\\"${exePath}\\" \\"%1\\"" /f`,
+			{ stdio: "ignore" },
+		);
+		console.log("Registered .typ file association");
 	} catch (error) {
 		console.warn("Could not register .typ file association:", error);
 	}
 
-	// 2. Add to user PATH if not already present
+	// 2. Ensure the launcher bin dir is on user PATH (idempotent)
 	try {
 		const pathResult = safeRegQuery("HKCU\\Environment", "Path");
-		if (pathResult && !pathResult.includes(instDir)) {
-			// Extract current PATH value from reg query output
-			const match = pathResult.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
-			const currentPath = match?.[1]?.trim() ?? "";
-			if (currentPath.length + instDir.length + 1 > 2000) {
+		const match = pathResult?.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
+		const currentPath = match?.[1]?.trim() ?? "";
+		const alreadyPresent = currentPath
+			.toLowerCase()
+			.split(";")
+			.some((entry) => entry.trim().toLowerCase() === binDir.toLowerCase());
+
+		if (!alreadyPresent) {
+			if (currentPath.length + binDir.length + 1 > 2000) {
 				console.warn("PATH is too long, skipping addition");
 				return;
 			}
-			const newPath = currentPath ? `${currentPath};${instDir}` : instDir;
+			const newPath = currentPath ? `${binDir};${currentPath}` : binDir;
 			execSync(`reg add "HKCU\\Environment" /v Path /t REG_EXPAND_SZ /d "${newPath}" /f`, { stdio: "ignore" });
 			// Broadcast environment change
-			execSync('rundll32 user32.dll,UpdatePerUserSystemParameters', { stdio: "ignore", timeout: 3000 });
+			execSync("rundll32 user32.dll,UpdatePerUserSystemParameters", { stdio: "ignore", timeout: 3000 });
 			console.log("Added to user PATH");
 		}
 	} catch (error) {

@@ -48,6 +48,27 @@ if (stat.isFile()) {
 
 const message = JSON.stringify({ action: "open", path: vaultPath, selectFile });
 
+function findWindowsAppBinary(): string | null {
+	const localAppData = process.env.LOCALAPPDATA ?? "";
+	const known = [
+		localAppData ? resolve(localAppData, "typsmthng", "bin", "launcher.exe") : "",
+		localAppData ? resolve(localAppData, "typsmthng", "typsmthng.exe") : "",
+	];
+	for (const candidate of known) {
+		if (candidate && existsSync(candidate)) return candidate;
+	}
+
+	// Older installs may expose typsmthng.exe on PATH
+	const pathEnv = process.env.PATH ?? process.env.Path ?? "";
+	for (const dir of pathEnv.split(";")) {
+		if (!dir) continue;
+		const candidate = resolve(dir, "typsmthng.exe");
+		if (existsSync(candidate)) return candidate;
+	}
+
+	return null;
+}
+
 // Try connecting to running instance via IPC socket
 if (!SOCKET_PATH) {
 	console.error("typsmthng: could not determine home directory");
@@ -117,7 +138,15 @@ client.on("error", () => {
 			args.push("--select", selectFile);
 		}
 
-		spawn("typsmthng.exe", args, { detached: true, stdio: "ignore", shell: true }).unref();
+		const binary = findWindowsAppBinary();
+		if (!binary) {
+			console.error(
+				"typsmthng: app not found. Expected launcher at %LOCALAPPDATA%\\typsmthng\\bin\\launcher.exe",
+			);
+			process.exit(1);
+		}
+
+		spawn(binary, args, { detached: true, stdio: "ignore" }).unref();
 	} else {
 		console.error(`typsmthng: unsupported platform: ${platform}`);
 		process.exit(1);

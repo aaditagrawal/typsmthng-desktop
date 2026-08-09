@@ -1,6 +1,8 @@
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
+!include "WordFunc.nsh"
+!insertmacro StrStr
 
 Name "typsmthng"
 OutFile "${OUTPUT_DIR}\${OUTPUT_NAME}"
@@ -43,20 +45,24 @@ Section "Install"
   WriteRegStr HKCU "Software\typsmthng" "InstallDir" "$INSTDIR"
 
   ; File association for .typ files — save previous association for restore on uninstall
+  ; Only preserve a non-typsmthng assoc so reinstalls don't clobber PrevTypAssoc
   ReadRegStr $0 HKCU "Software\Classes\.typ" ""
-  WriteRegStr HKCU "Software\typsmthng" "PrevTypAssoc" "$0"
+  ${If} $0 != "typsmthng.typ"
+    WriteRegStr HKCU "Software\typsmthng" "PrevTypAssoc" "$0"
+  ${EndIf}
   WriteRegStr HKCU "Software\Classes\.typ" "" "typsmthng.typ"
   WriteRegStr HKCU "Software\Classes\typsmthng.typ" "" "Typst Document"
   WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\bin\launcher.exe" "%1"'
 
-  ; Add Electrobun launcher dir to user PATH (skip if already first entry)
+  ; Add Electrobun launcher dir to user PATH (skip if already present)
   ReadRegStr $0 HKCU "Environment" "Path"
   ${If} $0 == ""
     WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin"
-  ${ElseIf} $0 == "$INSTDIR\bin"
-    ; already configured
   ${Else}
-    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin;$0"
+    ${StrStr} $1 "$0" "$INSTDIR\bin"
+    ${If} $1 == ""
+      WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin;$0"
+    ${EndIf}
   ${EndIf}
   SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
