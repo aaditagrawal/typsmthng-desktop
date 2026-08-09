@@ -110,6 +110,13 @@ function assertSafeVaultRelativePath(input: string): string {
   return normalized;
 }
 
+/** Single-segment project folder name; strips parents and rejects empty / `.` / `..`. */
+function sanitizeCreateVaultFolderName(input: string): string | null {
+  const name = path.basename(input.trim());
+  if (!name || name === "." || name === "..") return null;
+  return name;
+}
+
 function toWorkspacePath(input: string): string {
   const sanitized = sanitizeRelativePath(input);
   return sanitized ? `/${sanitized}` : "/";
@@ -298,7 +305,7 @@ export class VaultService {
     },
     window: DesktopWindow,
   ): Promise<VaultRecord | null> {
-    const name = params.name.trim();
+    const name = sanitizeCreateVaultFolderName(params.name);
     if (!name) return null;
 
     const [selectedParent] = await Utils.openFileDialog({
