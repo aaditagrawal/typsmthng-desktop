@@ -179,4 +179,17 @@ export class AppStateService {
       windowState,
     }));
   }
+
+  /** Synchronously clear reopen path in memory so concurrent bootstrap cannot restore. */
+  clearReopenLastVaultPathLocally(): void {
+    if (!this.cache) {
+      this.cache = { ...DEFAULT_METADATA, reopenLastVaultPath: null };
+      return;
+    }
+    if (this.cache.reopenLastVaultPath === null) return;
+    this.cache = {
+      ...this.cache,
+      reopenLastVaultPath: null,
+    };
+  }
 }

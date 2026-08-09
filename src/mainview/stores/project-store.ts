@@ -676,8 +676,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     void (async () => {
       try {
-        await desktopRpc.request.flushWrites({ rootPath: project.rootPath });
+        // Close first so bootstrap/import cannot auto-restore mid-flight; then flush.
         await desktopRpc.request.closeVault();
+        await desktopRpc.request.flushWrites({ rootPath: project.rootPath });
       } catch (error) {
         console.error("Failed to close project while returning home:", error);
       }

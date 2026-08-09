@@ -281,15 +281,16 @@ export class VaultService {
   }
 
   async closeVault(): Promise<{ ok: true }> {
-    // Clear active root immediately so a concurrent getBootstrapState during goHome
-    // cannot restore the vault the user is leaving.
+    // Clear active root + reopen path synchronously so a concurrent getBootstrapState
+    // during goHome cannot restore the vault the user is leaving.
     const window = this.activeWindow;
     this.activeVaultRoot = null;
     this.activeWindow = null;
     this.startupVaultOverride = null;
+    this.appState.clearReopenLastVaultPathLocally();
     window?.webview.rpc?.send.activeVaultClosed();
     await this.stopWatcher();
-    // Explicit home navigation should not restore this vault on the next load/launch.
+    // Persist the cleared reopen path.
     await this.appState.update((current) => ({
       ...current,
       reopenLastVaultPath: null,
