@@ -6,12 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 1.0.0)"
+        description: "Version to release (e.g. 1.0.0 or 1.0.0-canary.1)"
         required: true
         type: string
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: "1.3.14"
 
 jobs:
   preflight:
@@ -44,17 +51,53 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (prerelease=$PRERELEASE)"
 
-      - name: Install Bun
+      - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Quality checks
         run: |
+          set -euo pipefail
           bun install --frozen-lockfile
-          bun run typecheck
-          bun run test
+          bun run typecheck &
+          pid_typecheck=$!
+          bun run test &
+          pid_test=$!
+          wait "$pid_typecheck"
+          wait "$pid_test"
+
+  # Build the platform-agnostic frontend once and share it with matrix jobs.
+  frontend:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Update version
+        run: bun run scripts/update-version.ts ${{ needs.preflight.outputs.version }}
+
+      - name: Build frontend
+        run: bunx vite build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v5
+        with:
+          name: frontend-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
 
   build:
-    needs: preflight
+    needs: [preflight, frontend]
     strategy:
       fail-fast: false
       matrix:
@@ -83,8 +126,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Bun
+      - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -92,12 +137,15 @@ jobs:
       - name: Update version
         run: bun run scripts/update-version.ts ${{ needs.preflight.outputs.version }}
 
+      - name: Download frontend dist
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend-dist
+          path: dist
+
       - name: Build native dylib (macOS)
         if: matrix.platform == 'macos'
         run: bash scripts/build-macos-effects.sh
-
-      - name: Build frontend
-        run: bunx vite build
 
       - name: Build Electrobun app
         run: bunx electrobun build --targets ${{ matrix.platform }}-${{ matrix.arch }}
@@ -112,7 +160,14 @@ jobs:
 
       - name: Install NSIS
         if: matrix.platform == 'win'
-        run: choco install nsis -y
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+          } else {
+            Write-Host "makensis already available"
+          }
+          makensis -VERSION
 
       - name: Package (Windows)
         if: matrix.platform == 'win'
@@ -146,12 +201,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           TAG="v${{ needs.preflight.outputs.version }}"
           PRERELEASE="${{ needs.preflight.outputs.prerelease }}"
 
-          FLAGS=(--generate-notes)
+          FLAGS=(--generate-notes --target "${{ github.sha }}")
           if [[ "$PRERELEASE" == "true" ]]; then
             FLAGS+=(--prerelease)
           fi
 
-          gh release create "$TAG" --title "$TAG" "${FLAGS[@]}" artifacts/*
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — uploading/replacing assets"
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" --title "$TAG" "${FLAGS[@]}" artifacts/*
+          fi

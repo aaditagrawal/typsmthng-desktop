@@ -26,9 +26,9 @@ Section "Install"
   ; Create uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  ; Start menu shortcut
+  ; Start menu shortcut — Electrobun ships bin\launcher.exe
   CreateDirectory "$SMPROGRAMS\typsmthng"
-  CreateShortcut "$SMPROGRAMS\typsmthng\typsmthng.lnk" "$INSTDIR\typsmthng.exe"
+  CreateShortcut "$SMPROGRAMS\typsmthng\typsmthng.lnk" "$INSTDIR\bin\launcher.exe"
   CreateShortcut "$SMPROGRAMS\typsmthng\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 
   ; Registry entries for Add/Remove Programs
@@ -47,14 +47,16 @@ Section "Install"
   WriteRegStr HKCU "Software\typsmthng" "PrevTypAssoc" "$0"
   WriteRegStr HKCU "Software\Classes\.typ" "" "typsmthng.typ"
   WriteRegStr HKCU "Software\Classes\typsmthng.typ" "" "Typst Document"
-  WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\typsmthng.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\bin\launcher.exe" "%1"'
 
-  ; Add to user PATH
+  ; Add Electrobun launcher dir to user PATH (skip if already first entry)
   ReadRegStr $0 HKCU "Environment" "Path"
-  ${If} $0 != ""
-    WriteRegExpandStr HKCU "Environment" "Path" "$0;$INSTDIR"
+  ${If} $0 == ""
+    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin"
+  ${ElseIf} $0 == "$INSTDIR\bin"
+    ; already configured
   ${Else}
-    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR"
+    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin;$0"
   ${EndIf}
   SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd

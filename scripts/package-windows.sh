@@ -31,6 +31,22 @@ fi
 
 echo "==> Electrobun app directory: $APP_DIR"
 
+# Electrobun ships bin/launcher.exe; NSIS shortcuts target that path.
+LAUNCHER_EXE="$APP_DIR/bin/launcher.exe"
+if [[ ! -f "$LAUNCHER_EXE" ]]; then
+  echo "Error: Electrobun launcher missing at $LAUNCHER_EXE"
+  echo "installer/typsmthng.nsi shortcuts target bin\\launcher.exe"
+  echo "Contents of $APP_DIR:"
+  ls -la "$APP_DIR" 2>/dev/null || echo "  (directory does not exist)"
+  if [[ -d "$APP_DIR/bin" ]]; then
+    echo "Contents of $APP_DIR/bin:"
+    ls -la "$APP_DIR/bin"
+  fi
+  find "$APP_DIR" -maxdepth 2 -type f -name '*.exe' 2>/dev/null | sed 's/^/  /' || true
+  exit 1
+fi
+echo "==> Using Electrobun launcher: $LAUNCHER_EXE"
+
 INSTALLER_NAME="${APP_NAME}-${VERSION}-win-x64-setup.exe"
 NSI_SCRIPT="$ROOT_DIR/installer/typsmthng.nsi"
 

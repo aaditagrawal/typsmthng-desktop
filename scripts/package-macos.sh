@@ -47,10 +47,14 @@ mkdir -p "$OUTPUT_DIR"
 # Optional codesigning
 if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   echo "==> Codesigning $APP_BUNDLE"
-  codesign --force --deep --sign "$APPLE_SIGNING_IDENTITY" \
-    --options runtime \
-    --entitlements "${ENTITLEMENTS_PATH:-}" \
-    "$APP_BUNDLE"
+  CODESIGN_ARGS=(
+    --force --deep --sign "$APPLE_SIGNING_IDENTITY"
+    --options runtime
+  )
+  if [[ -n "${ENTITLEMENTS_PATH:-}" ]]; then
+    CODESIGN_ARGS+=(--entitlements "$ENTITLEMENTS_PATH")
+  fi
+  codesign "${CODESIGN_ARGS[@]}" "$APP_BUNDLE"
 fi
 
 # Create zip (used by auto-updater)

@@ -37,13 +37,13 @@ echo "==> Electrobun app directory: $APP_DIR"
 echo "==> Contents:"
 ls -la "$APP_DIR"
 
-# Ensure appimagetool is available
+# Ensure appimagetool is available (pin to a stable release, not continuous)
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
 if ! command -v "$APPIMAGETOOL" &>/dev/null; then
-  echo "==> Downloading appimagetool"
+  echo "==> Downloading appimagetool 1.9.1"
   APPIMAGETOOL="$BUILD_DIR/appimagetool"
   curl -fSL -o "$APPIMAGETOOL" \
-    "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+    "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
   chmod +x "$APPIMAGETOOL"
 fi
 
@@ -73,18 +73,18 @@ if [[ -f "$ROOT_DIR/assets/typst.xml" ]]; then
   cp "$ROOT_DIR/assets/typst.xml" "$APPDIR/usr/share/mime/packages/typsmthng-typst.xml"
 fi
 
-# Copy icon or create placeholder
+# Copy icon (required)
 ICON_SRC="$APP_DIR/Resources/appIcon.png"
 if [[ ! -f "$ICON_SRC" ]]; then
   ICON_SRC="$ROOT_DIR/assets/icon.png"
 fi
-if [[ -f "$ICON_SRC" ]]; then
-  cp "$ICON_SRC" "$APPDIR/$APP_NAME.png"
-  cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png"
-else
-  echo "Warning: No icon found, AppImage will have no icon"
-  printf '\x89PNG\r\n\x1a\n' > "$APPDIR/$APP_NAME.png"
+if [[ ! -f "$ICON_SRC" ]]; then
+  echo "Error: No icon found for AppImage."
+  echo "Looked for: $APP_DIR/Resources/appIcon.png and $ROOT_DIR/assets/icon.png"
+  exit 1
 fi
+cp "$ICON_SRC" "$APPDIR/$APP_NAME.png"
+cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png"
 
 # Create AppRun that launches the electrobun launcher binary
 cat > "$APPDIR/AppRun" <<APPRUN
@@ -96,8 +96,9 @@ exec "\${HERE}/usr/${APP_NAME}/bin/launcher" "\$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
 
-# Build AppImage
+# Build AppImage (extract-and-run avoids FUSE in CI/containers)
 mkdir -p "$OUTPUT_DIR"
+export APPIMAGE_EXTRACT_AND_RUN=1
 ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT_DIR/$APPIMAGE_NAME"
 
 rm -rf "$APPDIR"
