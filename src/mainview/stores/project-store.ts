@@ -563,12 +563,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     // A CLI/open apply during the await wins over this bootstrap snapshot.
     if (generationBeforeBootstrap !== applyProjectGeneration) {
+      const active = getActiveProject(useProjectStore.getState()) ?? null;
+      if (active) {
+        void preloadWorkspaceShell();
+      }
       set({
         metadata: bootstrap.metadata,
-        projects: mergeProjects(
-          bootstrap.metadata,
-          getActiveProject(useProjectStore.getState()) ?? null,
-        ),
+        projects: mergeProjects(bootstrap.metadata, active),
         loading: false,
       });
       updateWindowTitle();
@@ -778,7 +779,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       try {
         // Always close so reopenLastVaultPath clears even if flush failed.
-        await desktopRpc.request.closeVault();
+        // Bind to the vault we left so a CLI open during flush is not torn down.
+        await desktopRpc.request.closeVault({ rootPath });
       } catch (error) {
         console.error("Failed to close project while returning home:", error);
       }

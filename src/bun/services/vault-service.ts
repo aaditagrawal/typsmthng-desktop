@@ -90,8 +90,8 @@ function sanitizeRelativePath(input: string): string {
 
 /** Reject empty / traversal segments so scaffold writes and export reads stay inside the vault. */
 function assertSafeVaultRelativePath(input: string): string {
-  const sanitized = sanitizeRelativePath(input);
-  if (!sanitized) {
+  const sanitized = sanitizeRelativePath(input).replace(/\\/g, "/");
+  if (!sanitized || sanitized.includes("\0")) {
     throw new Error("Invalid empty vault path.");
   }
   const normalized = path.posix.normalize(sanitized);
@@ -100,11 +100,13 @@ function assertSafeVaultRelativePath(input: string): string {
     || normalized === ".."
     || normalized.startsWith("../")
     || path.posix.isAbsolute(normalized)
+    || normalized.startsWith("//")
+    || /^[a-zA-Z]:/.test(normalized)
   ) {
     throw new Error(`Path escapes vault root: ${input}`);
   }
   const segments = normalized.split("/");
-  if (segments.some((segment) => segment === "..")) {
+  if (segments.some((segment) => segment === ".." || segment.includes("\0"))) {
     throw new Error(`Path escapes vault root: ${input}`);
   }
   return normalized;
@@ -385,9 +387,16 @@ export class VaultService {
     }
   }
 
-  async closeVault(): Promise<{ ok: true }> {
+  async closeVault(input: { rootPath?: string } = {}): Promise<{ ok: true }> {
+    // Ignore stale close from goHome if another vault was opened during flush.
+    if (input.rootPath && this.activeVaultRoot && this.activeVaultRoot !== input.rootPath) {
+      return { ok: true };
+    }
+
     // Clear active root + reopen path synchronously so a concurrent getBootstrapState
-    // during goHome cannot restore the vault the user is leaving.
+    // during goHome cannot restore the vault the user is leaving. Flush after the clear
+    // so a slow write cannot delay activeVaultClosed / leave a stale activeVaultRoot.
+    const rootPath = this.activeVaultRoot;
     const window = this.activeWindow;
     this.activeVaultRoot = null;
     this.activeWindow = null;
@@ -395,6 +404,15 @@ export class VaultService {
     this.appState.clearReopenLastVaultPathLocally();
     window?.webview.rpc?.send.activeVaultClosed();
     await this.stopWatcher();
+
+    if (rootPath) {
+      try {
+        await this.flushWrites({ rootPath });
+      } catch (error) {
+        console.error("Failed to flush pending writes during closeVault", error);
+      }
+    }
+
     // Persist the cleared reopen path.
     await this.appState.update((current) => ({
       ...current,
@@ -443,9 +461,18 @@ export class VaultService {
         if (input.path && pending.filePath !== input.path) return false;
         return true;
       });
-      if (pendingKeys.length === 0) break;
+      if (pendingKeys.length === 0) return { ok: true };
       await Promise.all(pendingKeys.map((key) => this.flushWrite(key)));
       await this.writeQueue.drain();
+    }
+
+    const remaining = [...this.pendingWrites.values()].some((pending) => {
+      if (input.rootPath && pending.rootPath !== input.rootPath) return false;
+      if (input.path && pending.filePath !== input.path) return false;
+      return true;
+    });
+    if (remaining) {
+      throw new Error("Timed out flushing pending vault writes");
     }
     return { ok: true };
   }

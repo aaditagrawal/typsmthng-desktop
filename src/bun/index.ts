@@ -162,7 +162,7 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 				vaultService.openRecentVault(rootPath, requireMainWindow()),
 			createVault: (params) =>
 				vaultService.createVault(params, requireMainWindow()),
-			closeVault: () => vaultService.closeVault(),
+			closeVault: (params) => vaultService.closeVault(params ?? {}),
 			readFile: ({ rootPath, path }) => vaultService.readFile(rootPath, path),
 			stageFileWrite: ({ rootPath, path, content }) =>
 				vaultService.stageFileWrite(rootPath, path, content),

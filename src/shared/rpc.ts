@@ -167,7 +167,7 @@ export type DesktopRPC = {
         response: VaultRecord | null;
       };
       closeVault: {
-        params: void;
+        params: { rootPath?: string } | void;
         response: { ok: true };
       };
       readFile: {
