@@ -3,7 +3,7 @@ import path from "node:path";
 import { Utils } from "electrobun/bun";
 
 import type { AppMetadata, RecentVaultRecord, WindowState } from "../../shared/rpc";
-import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../../shared/window-state";
+import { DEFAULT_WINDOW_FRAME } from "../../shared/window-state";
 
 const METADATA_FILENAME = "app-state.json";
 
@@ -58,9 +58,8 @@ function normalizeMetadata(metadata: AppMetadata): AppMetadata {
       })
       .slice(0, 24),
     reopenLastVaultPath: metadata.reopenLastVaultPath ?? null,
-    windowState: metadata.windowState
-      ? clampWindowState(metadata.windowState)
-      : DEFAULT_METADATA.windowState,
+    // Keep live geometry unclamped on disk; callers clamp when restoring a frame.
+    windowState: metadata.windowState ?? DEFAULT_METADATA.windowState,
   };
 }
 
