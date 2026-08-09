@@ -497,6 +497,7 @@ export class VaultService {
     await fs.mkdir(path.dirname(path.join(rootPath, newPath)), { recursive: true });
     await fs.rename(path.join(rootPath, oldPath), path.join(rootPath, newPath));
     this.indexService.invalidate(rootPath);
+    this.migratePendingWrites(rootPath, oldPath, newPath);
     const cache = this.contentCache.get(rootPath);
     if (cache) {
       const cached = cache.get(oldPath);
@@ -514,6 +515,7 @@ export class VaultService {
   async deletePath(rootPath: string, filePath: string): Promise<{ ok: true }> {
     Utils.moveToTrash(path.join(rootPath, filePath));
     this.indexService.invalidate(rootPath);
+    this.clearPendingWrites(rootPath, filePath);
     this.contentCache.get(rootPath)?.delete(filePath);
     return { ok: true };
   }
@@ -611,22 +613,25 @@ export class VaultService {
     const textFiles = await Promise.all(
       fileEntries
         .filter((entry) => !entry.isBinary)
-        .map((entry) => this.readFileEntry(rootPath, entry.path, false)),
+        .map((entry) => this.readFileEntry(rootPath, entry.path, true)),
     );
     const binaryFiles = await Promise.all(
       fileEntries
         .filter((entry) => entry.isBinary && shouldLoadBinary(entry.path, entry.sizeBytes))
-        .map((entry) => this.readFileEntry(rootPath, entry.path, false)),
+        .map((entry) => this.readFileEntry(rootPath, entry.path, true)),
     );
 
     const resolvedTextFiles = textFiles.filter(
       (file): file is VaultFileEntry => file !== null,
     );
     const extraFiles = resolvedTextFiles
-      .map((file) => ({
-        path: toWorkspacePath(file.path),
-        content: file.path === mainPath ? liveSource : file.content,
-      }))
+      .map((file) => {
+        const pending = this.pendingWrites.get(`${rootPath}::${file.path}`);
+        return {
+          path: toWorkspacePath(file.path),
+          content: file.path === mainPath ? liveSource : (pending?.content ?? file.content),
+        };
+      })
       .filter((file) => file.path !== normalizedMainPath);
 
     const mainEntry = resolvedTextFiles.find((file) => file.path === mainPath);
@@ -871,10 +876,14 @@ export class VaultService {
 
       const cached = cacheForVault.get(filePath);
       if (cached && cached.mtimeMs === stat.mtimeMs) {
-        if (!hydrateContent && cached.entry.isBinary) {
-          return { ...cached.entry, binaryData: undefined, loaded: false };
+        const needsTextHydration =
+          hydrateContent && !cached.entry.isBinary && !cached.entry.loaded;
+        if (!needsTextHydration) {
+          if (!hydrateContent && cached.entry.isBinary) {
+            return { ...cached.entry, binaryData: undefined, loaded: false };
+          }
+          return cached.entry;
         }
-        return cached.entry;
       }
 
       const baseEntry: VaultFileEntry = {
@@ -904,6 +913,56 @@ export class VaultService {
       return baseEntry;
     } catch {
       return null;
+    }
+  }
+
+  private clearPendingWrites(rootPath: string, filePath: string): void {
+    const childPrefix = `${filePath}/`;
+    for (const [key, pending] of this.pendingWrites) {
+      if (pending.rootPath !== rootPath) continue;
+      if (pending.filePath !== filePath && !pending.filePath.startsWith(childPrefix)) continue;
+      clearTimeout(pending.timer);
+      this.pendingWrites.delete(key);
+    }
+  }
+
+  private migratePendingWrites(rootPath: string, oldPath: string, newPath: string): void {
+    const childPrefix = `${oldPath}/`;
+    const migrations: Array<{ key: string; pending: PendingWrite; nextPath: string }> = [];
+
+    for (const [key, pending] of this.pendingWrites) {
+      if (pending.rootPath !== rootPath) continue;
+      let nextPath: string | null = null;
+      if (pending.filePath === oldPath) {
+        nextPath = newPath;
+      } else if (pending.filePath.startsWith(childPrefix)) {
+        nextPath = `${newPath}/${pending.filePath.slice(childPrefix.length)}`;
+      }
+      if (!nextPath) continue;
+      migrations.push({ key, pending, nextPath });
+    }
+
+    for (const { key, pending, nextPath } of migrations) {
+      clearTimeout(pending.timer);
+      this.pendingWrites.delete(key);
+
+      const nextKey = `${rootPath}::${nextPath}`;
+      const existing = this.pendingWrites.get(nextKey);
+      if (existing) {
+        clearTimeout(existing.timer);
+      }
+
+      const timer = setTimeout(() => {
+        void this.flushWrite(nextKey);
+      }, WRITE_DEBOUNCE_MS);
+
+      this.pendingWrites.set(nextKey, {
+        rootPath,
+        filePath: nextPath,
+        content: pending.content,
+        queuedAt: pending.queuedAt,
+        timer,
+      });
     }
   }
 
