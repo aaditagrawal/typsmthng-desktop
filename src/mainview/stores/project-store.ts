@@ -69,7 +69,7 @@ interface ProjectState {
   createProject: (
     name: string,
     scaffold?: ProjectScaffold,
-    options?: { ifExists?: "open" | "fail" },
+    options?: { ifExists?: "open" | "fail"; select?: boolean },
   ) => Promise<string>;
   deleteProject: (id: string) => Promise<void>;
   renameProject: (id: string, name: string) => Promise<void>;
@@ -602,7 +602,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ifExists: options?.ifExists,
     });
     if (!project) return "";
-    await applyProject(project);
+
+    const shouldSelect = options?.select !== false;
+    if (shouldSelect) {
+      await applyProject(project);
+      return project.id;
+    }
+
+    // Bulk/import creates: merge into the projects list, but do not leave the new
+    // vault selected in the UI (createVault opens it and may emit activeVaultOpened).
+    useProjectStore.setState((state) => {
+      const selectedThis = state.currentProjectId === project.id;
+      return {
+        projects: updateProjectList(state.projects, {
+          ...project,
+          files: sortEntries(project.files),
+        }),
+        ...(selectedThis
+          ? {
+              currentProjectId: null,
+              currentFilePath: null,
+              hasSelectedProject: false,
+              activeConflict: null,
+            }
+          : {}),
+      };
+    });
+    try {
+      await desktopRpc.request.closeVault();
+    } catch (error) {
+      console.error("Failed to close vault after non-selecting create:", error);
+    }
     return project.id;
   },
 
@@ -619,7 +649,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }));
   },
 
-  createHomeWorkspace: async (name) => {
+  createHomeWorkspace: async (name, projectIds) => {
     const now = Date.now();
     const workspace: HomeWorkspace = {
       id: `workspace-${now}`,
@@ -627,9 +657,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       createdAt: now,
       updatedAt: now,
     };
-    set((state) => ({
-      homeWorkspaces: [...state.homeWorkspaces, workspace],
-    }));
+    set((state) => {
+      const nextAssignments: ProjectWorkspaceAssignments = {
+        ...state.projectWorkspaceAssignments,
+      };
+      if (projectIds) {
+        for (const projectId of projectIds) {
+          nextAssignments[projectId] = workspace.id;
+        }
+      }
+      return {
+        homeWorkspaces: [...state.homeWorkspaces, workspace],
+        projectWorkspaceAssignments: nextAssignments,
+      };
+    });
     return workspace.id;
   },
 

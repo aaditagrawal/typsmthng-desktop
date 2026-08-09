@@ -49,6 +49,35 @@ export function applyZipCommonRootStrip(path: string, rootPrefix: string): strin
   return stripped.startsWith('/') ? stripped : `/${stripped}`
 }
 
+function basenamePath(input: string): string {
+  const normalized = input.replace(/\\/g, '/')
+  const separatorIndex = normalized.lastIndexOf('/')
+  return separatorIndex === -1 ? normalized : normalized.slice(separatorIndex + 1)
+}
+
+/** Prefer converted .tex→.typ over a same-named shipped .typ when both exist. */
+function setImportedTextFile(
+  filesByPath: Map<string, ProjectFile>,
+  convertedFromTex: Set<string>,
+  filePath: string,
+  content: string,
+  fromTex: boolean,
+): void {
+  const existing = filesByPath.get(filePath)
+  if (existing && !fromTex && convertedFromTex.has(filePath)) {
+    // Keep the converted .typ when the archive also shipped a same-named .typ.
+    return
+  }
+
+  filesByPath.set(filePath, {
+    path: filePath,
+    content,
+    isBinary: false,
+    lastModified: Date.now(),
+  })
+  if (fromTex) convertedFromTex.add(filePath)
+}
+
 async function createImportedProject(projectName: string, projectFiles: ProjectFile[]): Promise<string> {
   const scaffold: ProjectScaffold = {
     files: projectFiles.map((file) => ({
@@ -62,6 +91,7 @@ async function createImportedProject(projectName: string, projectFiles: ProjectF
 
   const id = await useProjectStore.getState().createProject(projectName, scaffold, {
     ifExists: 'fail',
+    select: false,
   })
   if (!id) {
     throw new Error(
@@ -76,11 +106,8 @@ async function collectProjectExportFiles(project: Project): Promise<Record<strin
 
   // Always export from disk. Vault snapshots often keep only the main file hydrated,
   // so serializing project.files would produce empty companion files/binaries.
-  try {
-    await desktopRpc.request.flushWrites({ rootPath: project.rootPath })
-  } catch (err) {
-    console.warn(`Failed to flush writes before exporting "${project.name}":`, err)
-  }
+  // Fail closed: never silently zip stale/partial disk state after a flush error.
+  await desktopRpc.request.flushWrites({ rootPath: project.rootPath })
 
   let bundle: Awaited<ReturnType<typeof desktopRpc.request.getVaultExportBundle>>
   try {
@@ -105,6 +132,29 @@ async function collectProjectExportFiles(project: Project): Promise<Record<strin
     }
   }
   return files
+}
+
+export function uniqueExportFolderName(project: Project, usedNames: Set<string>): string {
+  const sanitized = project.name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'project'
+  if (!usedNames.has(sanitized)) {
+    usedNames.add(sanitized)
+    return sanitized
+  }
+
+  const rootSegment = basenamePath(project.rootPath || project.id)
+    .replace(/[/\\:*?"<>|]/g, '_')
+    .trim()
+  const suffix = rootSegment && rootSegment !== sanitized
+    ? rootSegment
+    : basenamePath(project.id).slice(-8) || 'dup'
+  let candidate = `${sanitized}-${suffix}`
+  if (usedNames.has(candidate)) {
+    let n = 2
+    while (usedNames.has(`${candidate}-${n}`)) n++
+    candidate = `${candidate}-${n}`
+  }
+  usedNames.add(candidate)
+  return candidate
 }
 
 export async function exportProject(projectId?: string): Promise<void> {
@@ -142,6 +192,7 @@ async function exportProjectsAsFolderArchive(
 
   const state = useProjectStore.getState()
   const files: Record<string, Uint8Array> = {}
+  const usedFolderNames = new Set<string>()
   let exported = 0
 
   for (const projectId of uniqueIds) {
@@ -153,7 +204,7 @@ async function exportProjectsAsFolderArchive(
     if (Object.keys(projectFiles).length === 0) {
       throw new Error(`Project "${project.name}" has no exportable files.`)
     }
-    const folderName = project.name.replace(/[/\\:*?"<>|]/g, '_')
+    const folderName = uniqueExportFolderName(project, usedFolderNames)
     for (const [filePath, data] of Object.entries(projectFiles)) {
       files[`${folderName}/${filePath}`] = data
     }
@@ -257,19 +308,7 @@ export async function importAllProjects(file: File): Promise<number> {
           }
         }
 
-        const existing = filesByPath.get(filePath)
-        if (existing && !fromTex && convertedFromTex.has(filePath)) {
-          // Keep the converted .typ when the archive also shipped a same-named .typ.
-          continue
-        }
-
-        filesByPath.set(filePath, {
-          path: filePath,
-          content,
-          isBinary: false,
-          lastModified: Date.now(),
-        })
-        if (fromTex) convertedFromTex.add(filePath)
+        setImportedTextFile(filesByPath, convertedFromTex, filePath, content, fromTex)
       } else {
         if (filesByPath.has(fullPath)) continue
         filesByPath.set(fullPath, {
@@ -293,7 +332,7 @@ export async function importAllProjects(file: File): Promise<number> {
         binaryData: projectFile.binaryData,
       })),
       mainFile: resolveImportedMainFile(projectFiles),
-    }, { ifExists: 'fail' })
+    }, { ifExists: 'fail', select: false })
     if (id) {
       imported++
     }
@@ -318,7 +357,8 @@ export async function importProject(file: File): Promise<void> {
   // Determine project name from zip filename
   const projectName = file.name.replace(/\.zip$/i, '')
 
-  const projectFiles: ProjectFile[] = []
+  const filesByPath = new Map<string, ProjectFile>()
+  const convertedFromTex = new Set<string>()
   const zipEntries = Object.entries(unzipped).filter(([path]) => (
     !path.endsWith('/')
     && !path.includes('__MACOSX')
@@ -335,8 +375,10 @@ export async function importProject(file: File): Promise<void> {
     if (isText) {
       let content = strFromU8(data)
       let filePath = fullPath
+      let fromTex = false
 
       if (isLatexPath(path)) {
+        fromTex = true
         try {
           const result = await convertLatexToTypst(content)
           content = result.typst
@@ -348,14 +390,9 @@ export async function importProject(file: File): Promise<void> {
         }
       }
 
-      projectFiles.push({
-        path: filePath,
-        content,
-        isBinary: false,
-        lastModified: Date.now(),
-      })
-    } else {
-      projectFiles.push({
+      setImportedTextFile(filesByPath, convertedFromTex, filePath, content, fromTex)
+    } else if (!filesByPath.has(fullPath)) {
+      filesByPath.set(fullPath, {
         path: fullPath,
         content: '',
         isBinary: true,
@@ -365,6 +402,7 @@ export async function importProject(file: File): Promise<void> {
     }
   }
 
+  const projectFiles = [...filesByPath.values()]
   if (projectFiles.length === 0) {
     throw new Error('The zip archive contains no importable files.')
   }
@@ -378,24 +416,23 @@ export async function importLatexProject(
   files: Array<{ relativePath: string; file: File }>,
 ): Promise<LatexImportResult> {
   const allWarnings: ConversionWarning[] = []
-  const projectFiles: ProjectFile[] = []
+  const filesByPath = new Map<string, ProjectFile>()
+  const convertedFromTex = new Set<string>()
   let texCount = 0
   let lastMeta: ConversionResult['metadata'] = { packages: [] }
 
+  const commonRoot = stripZipCommonRootPrefix(files.map((entry) => entry.relativePath))
+
   for (const { relativePath, file } of files) {
-    const path = relativePath.startsWith('/') ? relativePath : `/${relativePath}`
+    const path = applyZipCommonRootStrip(relativePath, commonRoot)
 
     if (isLatexPath(file.name)) {
       const source = await file.text()
       const typPath = path.replace(/\.tex$/i, '.typ')
+      let content: string
       try {
         const result = await convertLatexToTypst(source)
-        projectFiles.push({
-          path: typPath,
-          content: result.typst,
-          isBinary: false,
-          lastModified: Date.now(),
-        })
+        content = result.typst
         allWarnings.push(...result.warnings)
         if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
       } catch (err) {
@@ -404,25 +441,16 @@ export async function importLatexProject(
           message: `Conversion failed for ${file.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
           construct: file.name,
         })
-        projectFiles.push({
-          path: typPath,
-          content: latexConversionFallback(source),
-          isBinary: false,
-          lastModified: Date.now(),
-        })
+        content = latexConversionFallback(source)
       }
+      setImportedTextFile(filesByPath, convertedFromTex, typPath, content, true)
       texCount++
     } else if (shouldTreatUploadAsText(file)) {
       const content = await file.text()
-      projectFiles.push({
-        path,
-        content,
-        isBinary: false,
-        lastModified: Date.now(),
-      })
-    } else {
+      setImportedTextFile(filesByPath, convertedFromTex, path, content, false)
+    } else if (!filesByPath.has(path)) {
       const buffer = await file.arrayBuffer()
-      projectFiles.push({
+      filesByPath.set(path, {
         path,
         content: '',
         isBinary: true,
@@ -432,6 +460,7 @@ export async function importLatexProject(
     }
   }
 
+  const projectFiles = [...filesByPath.values()]
   if (projectFiles.length === 0) {
     throw new Error('No files found to import')
   }
@@ -464,7 +493,8 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
   }
 
   const allWarnings: ConversionWarning[] = []
-  const projectFiles: ProjectFile[] = []
+  const filesByPath = new Map<string, ProjectFile>()
+  const convertedFromTex = new Set<string>()
   let texCount = 0
   let lastMeta: ConversionResult['metadata'] = { packages: [] }
 
@@ -482,8 +512,10 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
     if (isText) {
       let content = strFromU8(data)
       let filePath = fullPath
+      let fromTex = false
 
       if (isLatexPath(path)) {
+        fromTex = true
         try {
           const result = await convertLatexToTypst(content)
           content = result.typst
@@ -503,12 +535,19 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
         }
       }
 
-      projectFiles.push({ path: filePath, content, isBinary: false, lastModified: Date.now() })
-    } else {
-      projectFiles.push({ path: fullPath, content: '', isBinary: true, binaryData: data, lastModified: Date.now() })
+      setImportedTextFile(filesByPath, convertedFromTex, filePath, content, fromTex)
+    } else if (!filesByPath.has(fullPath)) {
+      filesByPath.set(fullPath, {
+        path: fullPath,
+        content: '',
+        isBinary: true,
+        binaryData: data,
+        lastModified: Date.now(),
+      })
     }
   }
 
+  const projectFiles = [...filesByPath.values()]
   if (projectFiles.length === 0) {
     throw new Error('The zip archive contains no importable files.')
   }

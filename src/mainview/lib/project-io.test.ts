@@ -1,7 +1,18 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { zipSync, strToU8 } from 'fflate'
+import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 
 const createProjectMock = vi.fn()
+const downloadBlobMock = vi.fn()
+const flushWritesMock = vi.fn().mockResolvedValue({ ok: true })
+const getVaultExportBundleMock = vi.fn()
+
+let mockProjects: Array<{
+  id: string
+  rootPath: string
+  name: string
+  files: unknown[]
+  mainFile: string
+}> = []
 
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: Object.assign(
@@ -10,7 +21,7 @@ vi.mock('@/stores/project-store', () => ({
       getState: () => ({
         createProject: createProjectMock,
         getCurrentProject: () => null,
-        projects: [],
+        projects: mockProjects,
       }),
       setState: vi.fn(),
     },
@@ -28,19 +39,26 @@ vi.mock('@/lib/latex-converter', () => ({
 vi.mock('@/lib/desktop-rpc', () => ({
   desktopRpc: {
     request: {
-      getVaultExportBundle: vi.fn(),
-      flushWrites: vi.fn().mockResolvedValue({ ok: true }),
+      getVaultExportBundle: (...args: unknown[]) => getVaultExportBundleMock(...args),
+      flushWrites: (...args: unknown[]) => flushWritesMock(...args),
     },
   },
 }))
 
+vi.mock('@/lib/download-blob', () => ({
+  downloadBlob: (...args: unknown[]) => downloadBlobMock(...args),
+}))
+
 import {
   applyZipCommonRootStrip,
+  exportAllProjects,
+  exportProject,
   importAllProjects,
   importLatexProject,
   importLatexZip,
   resolveImportedMainFile,
   stripZipCommonRootPrefix,
+  uniqueExportFolderName,
 } from './project-io'
 
 describe('resolveImportedMainFile', () => {
@@ -93,6 +111,23 @@ describe('applyZipCommonRootStrip', () => {
   })
 })
 
+describe('uniqueExportFolderName', () => {
+  it('appends a rootPath basename when names collide', () => {
+    const used = new Set<string>()
+    const first = uniqueExportFolderName(
+      { id: '/docs/Paper-A', rootPath: '/docs/Paper-A', name: 'Paper' } as never,
+      used,
+    )
+    const second = uniqueExportFolderName(
+      { id: '/docs/Paper-B', rootPath: '/docs/Paper-B', name: 'Paper' } as never,
+      used,
+    )
+    expect(first).toBe('Paper')
+    expect(second).toBe('Paper-Paper-B')
+    expect(used.size).toBe(2)
+  })
+})
+
 describe('importLatexProject', () => {
   beforeEach(() => {
     createProjectMock.mockReset()
@@ -110,7 +145,7 @@ describe('importLatexProject', () => {
     )
   })
 
-  it('passes ifExists fail so collisions are not silent successes', async () => {
+  it('passes ifExists fail and select false so imports do not switch UI', async () => {
     const file = new File(['\\begin{document}Hi\\end{document}\n'], 'hi.tex', {
       type: 'text/plain',
     })
@@ -120,8 +155,27 @@ describe('importLatexProject', () => {
       expect.objectContaining({
         mainFile: expect.stringMatching(/\.typ$/),
       }),
-      { ifExists: 'fail' },
+      { ifExists: 'fail', select: false },
     )
+  })
+
+  it('strips a shared top-level folder from relative paths', async () => {
+    const main = new File(['\\begin{document}Body\\end{document}\n'], 'main.tex', {
+      type: 'text/plain',
+    })
+    const bib = new File(['@article{a, title={A}}'], 'refs.bib', {
+      type: 'text/plain',
+    })
+
+    await importLatexProject([
+      { relativePath: 'Paper/main.tex', file: main },
+      { relativePath: 'Paper/refs.bib', file: bib },
+    ])
+
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    const paths = scaffold.files.map((entry: { path: string }) => entry.path).sort()
+    expect(paths).toEqual(['/main.typ', '/refs.bib'])
+    expect(scaffold.mainFile).toBe('/main.typ')
   })
 })
 
@@ -144,6 +198,27 @@ describe('importLatexZip', () => {
     const paths = scaffold.files.map((entry: { path: string }) => entry.path).sort()
     expect(paths).toEqual(['/main.typ', '/refs.bib'])
     expect(scaffold.mainFile).toBe('/main.typ')
+  })
+
+  it('keeps converted .typ when a same-named .typ also ships in the zip', async () => {
+    const zipped = zipSync({
+      'main.tex': strToU8('\\begin{document}From tex\\end{document}\n'),
+      'main.typ': strToU8('= Stale typ\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'collision.zip',
+      { type: 'application/zip' },
+    )
+
+    await importLatexZip(file)
+
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    const main = scaffold.files.find((entry: { path: string }) => entry.path === '/main.typ')
+    expect(scaffold.files).toHaveLength(1)
+    expect(main?.content).toContain('// converted')
+    expect(main?.content).toContain('From tex')
+    expect(main?.content).not.toContain('Stale typ')
   })
 })
 
@@ -184,6 +259,28 @@ describe('importAllProjects', () => {
     expect(byName.Beta.files[0]?.content).toContain('// converted')
   })
 
+  it('keeps converted .typ on tex+typ path collisions', async () => {
+    const zipped = zipSync({
+      'Alpha/main.tex': strToU8('\\begin{document}From tex\\end{document}\n'),
+      'Alpha/main.typ': strToU8('= Stale typ\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'collision.zip',
+      { type: 'application/zip' },
+    )
+
+    await importAllProjects(file)
+
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    expect(scaffold.files).toHaveLength(1)
+    expect(scaffold.files[0]?.path).toBe('/main.typ')
+    expect(scaffold.files[0]?.content).toContain('// converted')
+    expect(scaffold.files[0]?.content).toContain('From tex')
+    expect(scaffold.files[0]?.content).not.toContain('Stale typ')
+    expect(createProjectMock.mock.calls[0]?.[2]).toEqual({ ifExists: 'fail', select: false })
+  })
+
   it('strips a nested shared root inside each project folder', async () => {
     const zipped = zipSync({
       'Paper/src/main.tex': strToU8('\\begin{document}Body\\end{document}\n'),
@@ -201,5 +298,49 @@ describe('importAllProjects', () => {
     const paths = scaffold.files.map((entry: { path: string }) => entry.path).sort()
     expect(paths).toEqual(['/main.typ', '/refs.bib'])
     expect(scaffold.mainFile).toBe('/main.typ')
+  })
+})
+
+describe('export flush and nesting', () => {
+  beforeEach(() => {
+    downloadBlobMock.mockReset()
+    flushWritesMock.mockReset()
+    flushWritesMock.mockResolvedValue({ ok: true })
+    getVaultExportBundleMock.mockReset()
+    mockProjects = [
+      {
+        id: '/docs/Solo',
+        rootPath: '/docs/Solo',
+        name: 'Solo',
+        files: [],
+        mainFile: 'main.typ',
+      },
+    ]
+  })
+
+  it('throws when flushWrites fails before export', async () => {
+    flushWritesMock.mockRejectedValue(new Error('disk busy'))
+    getVaultExportBundleMock.mockResolvedValue({
+      files: [{ path: '/main.typ', content: '= Hi\n', isBinary: false }],
+    })
+
+    await expect(exportProject('/docs/Solo')).rejects.toThrow(/disk busy/)
+    expect(getVaultExportBundleMock).not.toHaveBeenCalled()
+  })
+
+  it('nests even a single project under its folder for exportAll', async () => {
+    getVaultExportBundleMock.mockResolvedValue({
+      files: [{ path: '/main.typ', content: '= Solo\n', isBinary: false }],
+    })
+
+    await exportAllProjects()
+
+    expect(downloadBlobMock).toHaveBeenCalledTimes(1)
+    expect(downloadBlobMock.mock.calls[0]?.[0]).toBe('typsmthng-all-projects.zip')
+    const blob = downloadBlobMock.mock.calls[0]?.[1] as Blob
+    const buffer = new Uint8Array(await blob.arrayBuffer())
+    const unzipped = unzipSync(buffer)
+    expect(Object.keys(unzipped).sort()).toEqual(['Solo/main.typ'])
+    expect(strFromU8(unzipped['Solo/main.typ']!)).toBe('= Solo\n')
   })
 })
