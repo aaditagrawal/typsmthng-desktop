@@ -164,6 +164,92 @@ describe('VaultService.getBootstrapState / getVaultExportBundle', () => {
     expect(restored.activeVault?.rootPath).toBe('/cli-vault')
   })
 
+  it('clears activeVaultRoot when openVault fails after activation', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-open-fail-'))
+    await fs.writeFile(path.join(tempRoot, 'main.typ'), '= Hello\n', 'utf8')
+
+    const vaultMeta = {
+      id: tempRoot,
+      rootPath: tempRoot,
+      name: path.basename(tempRoot),
+      favorite: false,
+      hiddenFilesVisible: false,
+      lastOpenedAt: 1,
+      lastFilePath: 'main.typ',
+      recentDocuments: [],
+      fileCount: 1,
+    }
+    appStateLoadMock.mockResolvedValue(baseMetadata({
+      recentVaults: [vaultMeta],
+      reopenLastVaultPath: null,
+    }))
+    getIndexMock.mockResolvedValue({
+      entries: [
+        {
+          path: 'main.typ',
+          name: 'main.typ',
+          kind: 'file',
+          parentPath: null,
+          extension: '.typ',
+          isHidden: false,
+          isBinary: false,
+          lastModified: 1,
+          sizeBytes: 8,
+        },
+      ],
+      truncated: false,
+      scannedAt: Date.now(),
+      includeHidden: false,
+    })
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+    // Fail after openVault assigns activeVaultRoot (post loadVaultSnapshot / stopWatcher).
+    appStateUpsertMock.mockRejectedValueOnce(new Error('upsert failed after activation'))
+
+    const window = {
+      webview: {
+        rpc: {
+          send: {
+            metadataUpdated: vi.fn(),
+            activeVaultOpened: vi.fn(),
+            activeVaultClosed: vi.fn(),
+          },
+        },
+      },
+    }
+
+    await expect(service.openRecentVault(tempRoot, window as never)).resolves.toBeNull()
+
+    // Zombie active root would make bootstrap return that vault instead of null.
+    const bootstrap = await service.getBootstrapState(window as never, { restoreActive: true })
+    expect(bootstrap.activeVault).toBeNull()
+    expect(
+      (service as unknown as { activeVaultRoot: string | null }).activeVaultRoot,
+    ).toBeNull()
+
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
+
+  it('getBootstrapState tears down when openVault returns null with leftover active root', async () => {
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+    const closeVault = vi.spyOn(service, 'closeVault').mockResolvedValue({ ok: true as const })
+
+    service.setStartupVaultOverride('/partial-vault', null)
+    vi.spyOn(
+      service as unknown as { openVault: (...args: unknown[]) => Promise<unknown> },
+      'openVault',
+    ).mockImplementation(async () => {
+      ;(service as unknown as { activeVaultRoot: string | null }).activeVaultRoot = '/partial-vault'
+      return null
+    })
+
+    const bootstrap = await service.getBootstrapState({} as never, { restoreActive: true })
+    expect(bootstrap.activeVault).toBeNull()
+    expect(closeVault).toHaveBeenCalledWith({ rootPath: '/partial-vault' })
+  })
+
   it('flushes pending writes, rejects truncated indexes, and blocks path escape', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-export-'))
     await fs.writeFile(path.join(tempRoot, 'main.typ'), '= Hello\n', 'utf8')

@@ -239,7 +239,15 @@ export class VaultService {
       const activeVault = await this.openVault(override.rootPath, window, override.selectFile, {
         removeRecentOnFailure: false,
       });
-      if (activeVault && override.selectFile) {
+      if (!activeVault) {
+        // openVault may have partially activated before failing — ensure teardown.
+        if (this.activeVaultRoot === override.rootPath) {
+          await this.closeVault({ rootPath: override.rootPath });
+        }
+        metadata = await this.appState.load();
+        return { metadata, activeVault: null };
+      }
+      if (override.selectFile) {
         try {
           await this.appState.persistLastFile(override.rootPath, override.selectFile);
         } catch {}
@@ -268,6 +276,9 @@ export class VaultService {
     });
     if (!activeVault) {
       // Soft-fail restore: keep the project in recents, just skip auto-open.
+      if (this.activeVaultRoot === reopenPath) {
+        await this.closeVault({ rootPath: reopenPath });
+      }
       metadata = await this.appState.update((current) => ({
         ...current,
         reopenLastVaultPath: null,
@@ -868,6 +879,16 @@ export class VaultService {
       return snapshot;
     } catch (error) {
       console.error("Failed to open vault", error);
+      // Undo partial activation so bootstrap/CLI callers do not see a zombie active vault.
+      if (this.activeVaultRoot === rootPath) {
+        this.activeVaultRoot = null;
+        this.activeWindow = null;
+        try {
+          await this.stopWatcher();
+        } catch (stopError) {
+          console.error("Failed to stop watcher after openVault failure", stopError);
+        }
+      }
       if (removeRecentOnFailure) {
         await this.appState.removeRecentVault(rootPath);
       }

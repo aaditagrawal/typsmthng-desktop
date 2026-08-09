@@ -456,18 +456,15 @@ setTimeout(async () => {
 	}
 }, 15_000);
 
-// Handle startup arguments (e.g. `typsmthng /path/to/vault`)
+// Handle startup arguments (e.g. `typsmthng /path/to/vault`).
+// Only set the override — getBootstrapState opens it once. Calling handleOpenFromCli
+// here raced bootstrap openVault and could orphan watchers / desync UI state.
 const startupArgs = parseStartupArgs();
 if (startupArgs.vaultPath) {
-	// Prefer the CLI/OS-open target over reopenLastVaultPath during renderer bootstrap.
 	vaultService.setStartupVaultOverride(
 		startupArgs.vaultPath,
 		startupArgs.selectFile ?? null,
 	);
-	void (async () => {
-		await vaultService.waitUntilReady();
-		await handleOpenFromCli(startupArgs.vaultPath!, startupArgs.selectFile);
-	})();
 }
 
 console.log("typsmthng desktop window ready");
