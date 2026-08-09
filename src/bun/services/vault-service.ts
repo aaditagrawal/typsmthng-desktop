@@ -373,16 +373,9 @@ export class VaultService {
         name: snapshot.name,
         fileCount: countVisibleFiles(snapshot.files),
         lastFilePath: snapshot.mainFile,
+        setAsReopen: false,
       });
-      // Clear reopen so a bulk import cannot auto-restore this vault on next bootstrap.
-      await this.appState.update((current) => ({
-        ...current,
-        reopenLastVaultPath: null,
-      }));
-      this.activeWindow?.webview.rpc?.send.metadataUpdated({
-        ...nextMetadata,
-        reopenLastVaultPath: null,
-      });
+      this.activeWindow?.webview.rpc?.send.metadataUpdated(nextMetadata);
       return snapshot;
     } catch (error) {
       console.error("Failed to register vault without activating", error);
@@ -409,11 +402,12 @@ export class VaultService {
   }
 
   async readFile(rootPath: string, filePath: string): Promise<VaultFileEntry | null> {
-    return this.readFileEntry(rootPath, filePath, true);
+    return this.readFileEntry(rootPath, assertSafeVaultRelativePath(filePath), true);
   }
 
   async stageFileWrite(rootPath: string, filePath: string, content: string): Promise<{ queuedAt: number }> {
-    const key = `${rootPath}::${filePath}`;
+    const safePath = assertSafeVaultRelativePath(filePath);
+    const key = `${rootPath}::${safePath}`;
     const queuedAt = Date.now();
     const existing = this.pendingWrites.get(key);
     if (existing) {
@@ -426,7 +420,7 @@ export class VaultService {
 
     this.pendingWrites.set(key, {
       rootPath,
-      filePath,
+      filePath: safePath,
       content,
       queuedAt,
       timer,
@@ -450,12 +444,13 @@ export class VaultService {
   }
 
   async createFile(rootPath: string, filePath: string, content = ""): Promise<VaultFileEntry | null> {
-    const absolutePath = path.join(rootPath, filePath);
+    const safePath = assertSafeVaultRelativePath(filePath);
+    const absolutePath = path.join(rootPath, safePath);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     await fs.writeFile(absolutePath, content, "utf8");
     this.indexService.invalidate(rootPath);
-    this.contentCache.get(rootPath)?.delete(filePath);
-    return this.readFileEntry(rootPath, filePath, true);
+    this.contentCache.get(rootPath)?.delete(safePath);
+    return this.readFileEntry(rootPath, safePath, true);
   }
 
   async createFilesBatch(
@@ -473,17 +468,19 @@ export class VaultService {
     entries: Array<{ path: string; data: Uint8Array }>,
   ): Promise<{ ok: true }> {
     for (const entry of entries) {
-      const absolutePath = path.join(rootPath, entry.path);
+      const safePath = assertSafeVaultRelativePath(entry.path);
+      const absolutePath = path.join(rootPath, safePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, entry.data);
-      this.contentCache.get(rootPath)?.delete(entry.path);
+      this.contentCache.get(rootPath)?.delete(safePath);
     }
     this.indexService.invalidate(rootPath);
     return { ok: true };
   }
 
   async createFolder(rootPath: string, folderPath: string): Promise<{ ok: true }> {
-    await fs.mkdir(path.join(rootPath, folderPath), { recursive: true });
+    const safePath = assertSafeVaultRelativePath(folderPath);
+    await fs.mkdir(path.join(rootPath, safePath), { recursive: true });
     this.indexService.invalidate(rootPath);
     return { ok: true };
   }
@@ -493,26 +490,30 @@ export class VaultService {
     sourcePath: string,
     targetPath: string,
   ): Promise<VaultFileEntry | null> {
-    await fs.mkdir(path.dirname(path.join(rootPath, targetPath)), { recursive: true });
-    await fs.copyFile(path.join(rootPath, sourcePath), path.join(rootPath, targetPath));
+    const safeSource = assertSafeVaultRelativePath(sourcePath);
+    const safeTarget = assertSafeVaultRelativePath(targetPath);
+    await fs.mkdir(path.dirname(path.join(rootPath, safeTarget)), { recursive: true });
+    await fs.copyFile(path.join(rootPath, safeSource), path.join(rootPath, safeTarget));
     this.indexService.invalidate(rootPath);
-    this.contentCache.get(rootPath)?.delete(targetPath);
-    return this.readFileEntry(rootPath, targetPath, true);
+    this.contentCache.get(rootPath)?.delete(safeTarget);
+    return this.readFileEntry(rootPath, safeTarget, true);
   }
 
   async renamePath(rootPath: string, oldPath: string, newPath: string): Promise<{ ok: true }> {
-    await fs.mkdir(path.dirname(path.join(rootPath, newPath)), { recursive: true });
-    await fs.rename(path.join(rootPath, oldPath), path.join(rootPath, newPath));
+    const safeOld = assertSafeVaultRelativePath(oldPath);
+    const safeNew = assertSafeVaultRelativePath(newPath);
+    await fs.mkdir(path.dirname(path.join(rootPath, safeNew)), { recursive: true });
+    await fs.rename(path.join(rootPath, safeOld), path.join(rootPath, safeNew));
     this.indexService.invalidate(rootPath);
-    this.migratePendingWrites(rootPath, oldPath, newPath);
+    this.migratePendingWrites(rootPath, safeOld, safeNew);
     const cache = this.contentCache.get(rootPath);
     if (cache) {
-      const cached = cache.get(oldPath);
+      const cached = cache.get(safeOld);
       if (cached) {
-        cache.delete(oldPath);
-        cache.set(newPath, {
+        cache.delete(safeOld);
+        cache.set(safeNew, {
           ...cached,
-          entry: { ...cached.entry, path: newPath, name: basenameOf(newPath), parentPath: parentPathOf(newPath) },
+          entry: { ...cached.entry, path: safeNew, name: basenameOf(safeNew), parentPath: parentPathOf(safeNew) },
         });
       }
     }
@@ -520,10 +521,11 @@ export class VaultService {
   }
 
   async deletePath(rootPath: string, filePath: string): Promise<{ ok: true }> {
-    Utils.moveToTrash(path.join(rootPath, filePath));
+    const safePath = assertSafeVaultRelativePath(filePath);
+    Utils.moveToTrash(path.join(rootPath, safePath));
     this.indexService.invalidate(rootPath);
-    this.clearPendingWrites(rootPath, filePath);
-    this.contentCache.get(rootPath)?.delete(filePath);
+    this.clearPendingWrites(rootPath, safePath);
+    this.contentCache.get(rootPath)?.delete(safePath);
     return { ok: true };
   }
 
@@ -873,15 +875,16 @@ export class VaultService {
     filePath: string,
     hydrateContent: boolean,
   ): Promise<VaultFileEntry | null> {
-    const absolutePath = path.join(rootPath, filePath);
+    const safePath = assertSafeVaultRelativePath(filePath);
+    const absolutePath = path.join(rootPath, safePath);
 
     try {
       const stat = await fs.stat(absolutePath);
-      const isBinary = !isKnownTextPath(filePath);
+      const isBinary = !isKnownTextPath(safePath);
       const cacheForVault = this.contentCache.get(rootPath) ?? new Map<string, CachedFile>();
       this.contentCache.set(rootPath, cacheForVault);
 
-      const cached = cacheForVault.get(filePath);
+      const cached = cacheForVault.get(safePath);
       if (cached && cached.mtimeMs === stat.mtimeMs) {
         const needsTextHydration =
           hydrateContent && !cached.entry.isBinary && !cached.entry.loaded;
@@ -894,12 +897,12 @@ export class VaultService {
       }
 
       const baseEntry: VaultFileEntry = {
-        path: filePath,
-        name: basenameOf(filePath),
+        path: safePath,
+        name: basenameOf(safePath),
         kind: "file",
-        parentPath: parentPathOf(filePath),
-        extension: normalizeExtension(filePath),
-        isHidden: isHiddenPath(filePath),
+        parentPath: parentPathOf(safePath),
+        extension: normalizeExtension(safePath),
+        isHidden: isHiddenPath(safePath),
         isBinary,
         lastModified: stat.mtimeMs,
         sizeBytes: stat.size,
@@ -910,13 +913,13 @@ export class VaultService {
       if (!isBinary && (hydrateContent || stat.size <= MAX_EAGER_TEXT_BYTES)) {
         baseEntry.content = await fs.readFile(absolutePath, "utf8");
         baseEntry.loaded = true;
-      } else if (isBinary && hydrateContent && shouldLoadBinary(filePath, stat.size)) {
+      } else if (isBinary && hydrateContent && shouldLoadBinary(safePath, stat.size)) {
         const buffer = await fs.readFile(absolutePath);
         baseEntry.binaryData = new Uint8Array(buffer);
         baseEntry.loaded = true;
       }
 
-      cacheForVault.set(filePath, { entry: baseEntry, mtimeMs: stat.mtimeMs });
+      cacheForVault.set(safePath, { entry: baseEntry, mtimeMs: stat.mtimeMs });
       return baseEntry;
     } catch {
       return null;
