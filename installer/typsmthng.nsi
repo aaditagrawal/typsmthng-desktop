@@ -3,6 +3,7 @@
 !include "WinMessages.nsh"
 !include "WordFunc.nsh"
 !insertmacro StrStr
+!insertmacro StrCase
 
 Name "typsmthng"
 OutFile "${OUTPUT_DIR}\${OUTPUT_NAME}"
@@ -55,11 +56,14 @@ Section "Install"
   WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\bin\launcher.exe" "%1"'
 
   ; Add Electrobun launcher dir to user PATH (skip if already present)
+  ; Use semicolon-bounded, case-insensitive segment match — not raw substring.
   ReadRegStr $0 HKCU "Environment" "Path"
   ${If} $0 == ""
     WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin"
   ${Else}
-    ${StrStr} $1 "$0" "$INSTDIR\bin"
+    ${StrCase} $2 ";$0;" "L"
+    ${StrCase} $3 "$INSTDIR\bin" "L"
+    ${StrStr} $1 "$2" ";$3;"
     ${If} $1 == ""
       WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin;$0"
     ${EndIf}

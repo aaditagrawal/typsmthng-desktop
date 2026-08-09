@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_WINDOW_FRAME,
+  MAX_WINDOW_COORDINATE,
+  MAX_WINDOW_HEIGHT,
+  MAX_WINDOW_WIDTH,
   MIN_WINDOW_COORDINATE,
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
@@ -79,6 +82,22 @@ describe('clampWindowState', () => {
       y: DEFAULT_WINDOW_FRAME.y,
       width: 1000,
       height: 700,
+    })
+  })
+
+  it('enforces maximum width, height, and coordinates', () => {
+    expect(
+      clampWindowState({
+        x: 500_000,
+        y: 999_999,
+        width: 1_000_000,
+        height: 1_000_000,
+      }),
+    ).toEqual({
+      x: MAX_WINDOW_COORDINATE,
+      y: MAX_WINDOW_COORDINATE,
+      width: MAX_WINDOW_WIDTH,
+      height: MAX_WINDOW_HEIGHT,
     })
   })
 })

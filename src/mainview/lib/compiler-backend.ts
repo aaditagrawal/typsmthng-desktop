@@ -230,7 +230,8 @@ export async function compileTypstBackend(
     const diag = d as Record<string, unknown>
     return {
       severity: String(diag.severity || 'error') as Diagnostic['severity'],
-      path: String(diag.path || ''),
+      // Store paths are unprefixed (main.typ); compiler sources use /main.typ.
+      path: String(diag.path || '').replace(/\\/g, '/').replace(/^\/+/, ''),
       range: String(diag.range || ''),
       message: String(diag.message || ''),
       package: diag.package ? String(diag.package) : undefined,

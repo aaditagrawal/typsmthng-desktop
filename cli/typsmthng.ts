@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { connect } from "node:net";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 import { resolveVaultRootFromTypFile } from "../src/shared/vault-root.ts";
 
@@ -48,9 +48,29 @@ if (stat.isFile()) {
 
 const message = JSON.stringify({ action: "open", path: vaultPath, selectFile });
 
+function readWindowsInstallDir(): string | null {
+	try {
+		const out = execSync('reg query "HKCU\\Software\\typsmthng" /v InstallDir', {
+			encoding: "utf8",
+			stdio: ["pipe", "pipe", "ignore"],
+		});
+		const match = out.match(/InstallDir\s+REG_\w+\s+(.+)/i);
+		const value = match?.[1]?.trim();
+		return value || null;
+	} catch {
+		return null;
+	}
+}
+
+function isElectrobunBinDir(dir: string): boolean {
+	return existsSync(resolve(dir, "..", "Resources"));
+}
+
 function findWindowsAppBinary(): string | null {
 	const localAppData = process.env.LOCALAPPDATA ?? "";
+	const installDir = readWindowsInstallDir();
 	const known = [
+		installDir ? resolve(installDir, "bin", "launcher.exe") : "",
 		localAppData ? resolve(localAppData, "typsmthng", "bin", "launcher.exe") : "",
 		localAppData ? resolve(localAppData, "typsmthng", "typsmthng.exe") : "",
 	];
@@ -58,12 +78,14 @@ function findWindowsAppBinary(): string | null {
 		if (candidate && existsSync(candidate)) return candidate;
 	}
 
-	// Older installs may expose typsmthng.exe on PATH
+	// NSIS adds $INSTDIR\bin (launcher.exe). Prefer Electrobun-shaped dirs.
 	const pathEnv = process.env.PATH ?? process.env.Path ?? "";
 	for (const dir of pathEnv.split(";")) {
 		if (!dir) continue;
-		const candidate = resolve(dir, "typsmthng.exe");
-		if (existsSync(candidate)) return candidate;
+		const launcher = resolve(dir, "launcher.exe");
+		if (existsSync(launcher) && isElectrobunBinDir(dir)) return launcher;
+		const legacy = resolve(dir, "typsmthng.exe");
+		if (existsSync(legacy)) return legacy;
 	}
 
 	return null;
@@ -141,7 +163,7 @@ client.on("error", () => {
 		const binary = findWindowsAppBinary();
 		if (!binary) {
 			console.error(
-				"typsmthng: app not found. Expected launcher at %LOCALAPPDATA%\\typsmthng\\bin\\launcher.exe",
+				"typsmthng: app not found. Expected HKCU\\Software\\typsmthng\\InstallDir\\bin\\launcher.exe (or %LOCALAPPDATA%\\typsmthng\\bin\\launcher.exe)",
 			);
 			process.exit(1);
 		}

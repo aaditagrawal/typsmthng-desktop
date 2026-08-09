@@ -65,6 +65,8 @@ function normalizeMetadata(metadata: AppMetadata): AppMetadata {
 
 export class AppStateService {
   private cache: AppMetadata | null = null;
+  /** Serialize mutations so concurrent upsert/persist cannot resurrect cleared reopen paths. */
+  private updateChain: Promise<void> = Promise.resolve();
 
   async load(): Promise<AppMetadata> {
     if (this.cache) return this.cache;
@@ -90,8 +92,15 @@ export class AppStateService {
   }
 
   async update(mutator: (current: AppMetadata) => AppMetadata): Promise<AppMetadata> {
-    const current = await this.load();
-    return this.save(mutator(current));
+    const run = this.updateChain.then(async () => {
+      const current = await this.load();
+      return this.save(mutator(current));
+    });
+    this.updateChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   async upsertRecentVault(input: {
@@ -99,6 +108,8 @@ export class AppStateService {
     name: string;
     fileCount?: number;
     lastFilePath?: string | null;
+    /** When false, leave reopenLastVaultPath unchanged (bulk import / non-activating register). */
+    setAsReopen?: boolean;
   }): Promise<AppMetadata> {
     return this.update((current) => {
       const now = Date.now();
@@ -117,7 +128,8 @@ export class AppStateService {
 
       return {
         ...current,
-        reopenLastVaultPath: input.rootPath,
+        reopenLastVaultPath:
+          input.setAsReopen === false ? current.reopenLastVaultPath : input.rootPath,
         recentVaults: [
           nextRecord,
           ...current.recentVaults.filter((vault) => vault.rootPath !== input.rootPath),

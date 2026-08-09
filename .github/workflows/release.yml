@@ -64,8 +64,11 @@ jobs:
           pid_typecheck=$!
           bun run test &
           pid_test=$!
-          wait "$pid_typecheck"
-          wait "$pid_test"
+
+          status=0
+          wait "$pid_typecheck" || status=1
+          wait "$pid_test" || status=1
+          exit "$status"
 
   # Build the platform-agnostic frontend once and share it with matrix jobs.
   frontend:

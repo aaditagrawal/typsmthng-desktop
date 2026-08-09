@@ -151,15 +151,24 @@ async function setupLinux(): Promise<void> {
 
 // ── Windows ─────────────────────────────────────────────────────────────
 
-function resolveWindowsLaunchExe(): string {
+function readWindowsInstallDir(): string | null {
+	const result = safeRegQuery("HKCU\\Software\\typsmthng", "InstallDir");
+	const match = result?.match(/InstallDir\s+REG_\w+\s+(.+)/i);
+	const value = match?.[1]?.trim();
+	return value || null;
+}
+
+function resolveWindowsLaunchExe(): string | null {
 	const execPath = process.execPath;
 	const execDir = path.dirname(execPath);
 	const localAppData = process.env.LOCALAPPDATA ?? "";
+	const installDir = readWindowsInstallDir();
 
 	const candidates = [
 		path.join(execDir, "launcher.exe"),
 		path.join(execDir, "bin", "launcher.exe"),
 		path.join(path.dirname(execDir), "bin", "launcher.exe"),
+		installDir ? path.join(installDir, "bin", "launcher.exe") : "",
 		localAppData ? path.join(localAppData, "typsmthng", "bin", "launcher.exe") : "",
 	];
 
@@ -167,13 +176,18 @@ function resolveWindowsLaunchExe(): string {
 		if (candidate && existsSync(candidate)) return candidate;
 	}
 
-	return execPath;
+	// Never fall back to bun.exe — that rewrites .typ open/PATH to the wrong binary.
+	return null;
 }
 
 async function setupWindows(): Promise<void> {
 	// The NSIS installer handles this for fresh installs, but users who
 	// installed before these features were added need them applied at runtime.
 	const exePath = resolveWindowsLaunchExe();
+	if (!exePath) {
+		console.warn("Windows launcher.exe not found; skipping file association and PATH setup");
+		return;
+	}
 	const binDir = path.dirname(exePath);
 
 	// 1. File association: always refresh open command to current launcher

@@ -10,9 +10,13 @@ export const DEFAULT_WINDOW_FRAME = {
 
 export const MIN_WINDOW_WIDTH = 900;
 export const MIN_WINDOW_HEIGHT = 600;
+export const MAX_WINDOW_WIDTH = 10_000;
+export const MAX_WINDOW_HEIGHT = 10_000;
 
 /** Allow slight off-screen placement (multi-monitor) but reject runaway negatives. */
 export const MIN_WINDOW_COORDINATE = -100;
+/** Reject absurd positive coords from corrupt persisted state. */
+export const MAX_WINDOW_COORDINATE = 100_000;
 
 function finiteOr(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -22,27 +26,27 @@ function finiteOr(value: number | undefined, fallback: number): number {
  * Normalize persisted or restored window geometry to usable bounds.
  */
 export function clampWindowState(state: WindowState): WindowState {
-  const width = Math.max(
-    MIN_WINDOW_WIDTH,
-    Math.round(finiteOr(state.width, DEFAULT_WINDOW_FRAME.width)),
+  const width = Math.min(
+    MAX_WINDOW_WIDTH,
+    Math.max(MIN_WINDOW_WIDTH, Math.round(finiteOr(state.width, DEFAULT_WINDOW_FRAME.width))),
   );
-  const height = Math.max(
-    MIN_WINDOW_HEIGHT,
-    Math.round(finiteOr(state.height, DEFAULT_WINDOW_FRAME.height)),
+  const height = Math.min(
+    MAX_WINDOW_HEIGHT,
+    Math.max(MIN_WINDOW_HEIGHT, Math.round(finiteOr(state.height, DEFAULT_WINDOW_FRAME.height))),
   );
 
   const next: WindowState = { width, height };
 
   if (state.x !== undefined) {
-    next.x = Math.max(
-      MIN_WINDOW_COORDINATE,
-      Math.round(finiteOr(state.x, DEFAULT_WINDOW_FRAME.x)),
+    next.x = Math.min(
+      MAX_WINDOW_COORDINATE,
+      Math.max(MIN_WINDOW_COORDINATE, Math.round(finiteOr(state.x, DEFAULT_WINDOW_FRAME.x))),
     );
   }
   if (state.y !== undefined) {
-    next.y = Math.max(
-      MIN_WINDOW_COORDINATE,
-      Math.round(finiteOr(state.y, DEFAULT_WINDOW_FRAME.y)),
+    next.y = Math.min(
+      MAX_WINDOW_COORDINATE,
+      Math.max(MIN_WINDOW_COORDINATE, Math.round(finiteOr(state.y, DEFAULT_WINDOW_FRAME.y))),
     );
   }
 

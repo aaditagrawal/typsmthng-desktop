@@ -326,7 +326,15 @@ function applyMetadataState(metadata: AppMetadata) {
   }));
 }
 
+let applyProjectGeneration = 0;
+
+function bumpApplyProjectGeneration() {
+  applyProjectGeneration += 1;
+  return applyProjectGeneration;
+}
+
 function clearSelectionState() {
+  bumpApplyProjectGeneration();
   useProjectStore.setState((state) => ({
     projects: mergeProjects(state.metadata, null),
     currentProjectId: null,
@@ -359,12 +367,13 @@ async function hydrateFile(rootPath: string, filePath: string): Promise<void> {
   });
 }
 
-let applyProjectGeneration = 0;
-
 async function applyProject(project: Project | null): Promise<void> {
-  const generation = ++applyProjectGeneration;
+  const generation = bumpApplyProjectGeneration();
 
   useProjectStore.setState((state) => {
+    // Superseded by a newer open/close before this setState ran.
+    if (generation !== applyProjectGeneration) return state;
+
     if (!project) {
       return {
         projects: mergeProjects(state.metadata, null),
@@ -549,21 +558,43 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     bindSubscriptions();
     await desktopRpc.request.waitUntilReady();
     const restoreActive = options?.restoreActive !== false;
+    const generationBeforeBootstrap = applyProjectGeneration;
     const bootstrap = await desktopRpc.request.getBootstrapState({ restoreActive });
-    const activeProject = restoreActive ? bootstrap.activeVault : null;
+
+    // A CLI/open apply during the await wins over this bootstrap snapshot.
+    if (generationBeforeBootstrap !== applyProjectGeneration) {
+      set({
+        metadata: bootstrap.metadata,
+        projects: mergeProjects(
+          bootstrap.metadata,
+          getActiveProject(useProjectStore.getState()) ?? null,
+        ),
+        loading: false,
+      });
+      updateWindowTitle();
+      perfMeasure("store.load_projects", start, { restored: 0, superseded: 1 });
+      return;
+    }
 
     if (!restoreActive) {
-      // Home import/refresh: update recents only; keep the user on home.
-      set((state) => ({
+      // Home import/refresh: force home so a flashed selection cannot stick.
+      bumpApplyProjectGeneration();
+      set({
         metadata: bootstrap.metadata,
-        projects: mergeProjects(bootstrap.metadata, getActiveProject(state) ?? null),
+        projects: mergeProjects(bootstrap.metadata, null),
+        currentProjectId: null,
+        currentFilePath: null,
+        hasSelectedProject: false,
+        activeConflict: null,
         loading: false,
-      }));
+      });
+      useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved" });
       updateWindowTitle();
       perfMeasure("store.load_projects", start, { restored: 0, metadataOnly: 1 });
       return;
     }
 
+    const activeProject = bootstrap.activeVault;
     set({
       metadata: bootstrap.metadata,
       projects: mergeProjects(bootstrap.metadata, activeProject),
