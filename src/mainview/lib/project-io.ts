@@ -82,7 +82,16 @@ async function collectProjectExportFiles(project: Project): Promise<Record<strin
     console.warn(`Failed to flush writes before exporting "${project.name}":`, err)
   }
 
-  const bundle = await desktopRpc.request.getVaultExportBundle({ rootPath: project.rootPath })
+  let bundle: Awaited<ReturnType<typeof desktopRpc.request.getVaultExportBundle>>
+  try {
+    bundle = await desktopRpc.request.getVaultExportBundle({ rootPath: project.rootPath })
+  } catch (err) {
+    throw new Error(
+      err instanceof Error
+        ? err.message
+        : `Could not read files for project "${project.name}".`,
+    )
+  }
   if (!bundle) {
     throw new Error(`Could not read files for project "${project.name}".`)
   }
@@ -223,7 +232,8 @@ export async function importAllProjects(file: File): Promise<number> {
 
   for (const [folderName, entries] of projectFolders) {
     const commonRoot = stripZipCommonRootPrefix(entries.map((entry) => entry.path))
-    const projectFiles: ProjectFile[] = []
+    const filesByPath = new Map<string, ProjectFile>()
+    const convertedFromTex = new Set<string>()
 
     for (const { path, data } of entries) {
       if (path.endsWith('.folder')) continue
@@ -232,8 +242,10 @@ export async function importAllProjects(file: File): Promise<number> {
       if (isText) {
         let content = strFromU8(data)
         let filePath = fullPath
+        let fromTex = false
 
         if (isLatexPath(path)) {
+          fromTex = true
           try {
             const result = await convertLatexToTypst(content)
             content = result.typst
@@ -245,14 +257,22 @@ export async function importAllProjects(file: File): Promise<number> {
           }
         }
 
-        projectFiles.push({
+        const existing = filesByPath.get(filePath)
+        if (existing && !fromTex && convertedFromTex.has(filePath)) {
+          // Keep the converted .typ when the archive also shipped a same-named .typ.
+          continue
+        }
+
+        filesByPath.set(filePath, {
           path: filePath,
           content,
           isBinary: false,
           lastModified: Date.now(),
         })
+        if (fromTex) convertedFromTex.add(filePath)
       } else {
-        projectFiles.push({
+        if (filesByPath.has(fullPath)) continue
+        filesByPath.set(fullPath, {
           path: fullPath,
           content: '',
           isBinary: true,
@@ -262,6 +282,7 @@ export async function importAllProjects(file: File): Promise<number> {
       }
     }
 
+    const projectFiles = [...filesByPath.values()]
     if (projectFiles.length === 0) continue
 
     const id = await store.createProject(folderName, {

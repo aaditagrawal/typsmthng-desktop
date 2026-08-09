@@ -513,7 +513,10 @@ export class VaultService {
       };
     } catch (error) {
       console.error("Failed to build vault export bundle", error);
-      return null;
+      // Preserve the specific per-file error for the renderer instead of a generic null.
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to build vault export bundle.");
     }
   }
 
