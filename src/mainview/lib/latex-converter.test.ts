@@ -180,5 +180,14 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('columns: 2')
       expect(result.typst).toContain('[a], [b]')
     })
+
+    it('counts only column letters when colspec includes vertical rules', async () => {
+      const source =
+        '\\begin{tabular}{|l|c|r|} a & b & c \\\\ \\end{tabular}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('columns: 3')
+      expect(result.typst).toContain('[a], [b], [c]')
+    })
   })
 })

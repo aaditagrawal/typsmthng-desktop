@@ -795,7 +795,7 @@ function emitTable(
 ): string {
   // Parse column spec from args
   const colSpec = getOptionalOrMandatoryArg(env)
-  const numCols = colSpec ? colSpec.replace(/[^lcr|p]/gi, '').length || 3 : 3
+  const numCols = colSpec ? colSpec.replace(/[^lcrp]/gi, '').length || 3 : 3
 
   // Parse rows by splitting on \\
   const rows = splitTableRows(env.content, warnings)
