@@ -19,6 +19,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { isMacOS, revealLabel } from '@/lib/platform'
 import { applyPagePreamble, ensureCompilerReady } from '@/lib/compile-manager'
 import { findPreviewImportSpecs } from '@/lib/universe-registry'
+import { downloadBlob } from '@/lib/download-blob'
 
 function ThemeToggle() {
   const theme = useUIStore((s) => s.theme)
@@ -74,12 +75,7 @@ async function handleDownloadPdf() {
     if (!pdf) return
 
     const blob = new Blob([new Uint8Array(pdf)], { type: 'application/pdf' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${project?.name ?? 'document'}.pdf`
-    anchor.click()
-    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    downloadBlob(`${project?.name ?? 'document'}.pdf`, blob)
   } catch (error) {
     console.error('Failed to export PDF:', error)
     window.alert('Failed to export PDF. Please try again.')

@@ -27,6 +27,7 @@ vi.mock('@/lib/latex-converter', () => ({
 
 import {
   applyZipCommonRootStrip,
+  importAllProjects,
   importLatexProject,
   importLatexZip,
   resolveImportedMainFile,
@@ -129,6 +130,63 @@ describe('importLatexZip', () => {
     const file = new File([zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer], 'paper.zip', { type: 'application/zip' })
 
     await importLatexZip(file)
+
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    const paths = scaffold.files.map((entry: { path: string }) => entry.path).sort()
+    expect(paths).toEqual(['/main.typ', '/refs.bib'])
+    expect(scaffold.mainFile).toBe('/main.typ')
+  })
+})
+
+describe('importAllProjects', () => {
+  beforeEach(() => {
+    createProjectMock.mockReset()
+    createProjectMock.mockResolvedValue('project-id')
+  })
+
+  it('converts .tex files to .typ for each project folder', async () => {
+    const zipped = zipSync({
+      'Alpha/main.tex': strToU8('\\begin{document}Hello\\end{document}\n'),
+      'Alpha/notes.typ': strToU8('= Notes\n'),
+      'Beta/paper.tex': strToU8('\\begin{document}World\\end{document}\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'bundle.zip',
+      { type: 'application/zip' },
+    )
+
+    const imported = await importAllProjects(file)
+    expect(imported).toBe(2)
+    expect(createProjectMock).toHaveBeenCalledTimes(2)
+
+    const byName = Object.fromEntries(
+      createProjectMock.mock.calls.map((call) => [call[0], call[1]]),
+    )
+
+    const alphaPaths = byName.Alpha.files.map((entry: { path: string }) => entry.path).sort()
+    expect(alphaPaths).toEqual(['/main.typ', '/notes.typ'])
+    expect(byName.Alpha.files.find((entry: { path: string }) => entry.path === '/main.typ')?.content)
+      .toContain('// converted')
+    expect(byName.Alpha.mainFile).toBe('/main.typ')
+
+    const betaPaths = byName.Beta.files.map((entry: { path: string }) => entry.path)
+    expect(betaPaths).toEqual(['/paper.typ'])
+    expect(byName.Beta.files[0]?.content).toContain('// converted')
+  })
+
+  it('strips a nested shared root inside each project folder', async () => {
+    const zipped = zipSync({
+      'Paper/src/main.tex': strToU8('\\begin{document}Body\\end{document}\n'),
+      'Paper/src/refs.bib': strToU8('@article{a, title={A}}'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'nested.zip',
+      { type: 'application/zip' },
+    )
+
+    await importAllProjects(file)
 
     const scaffold = createProjectMock.mock.calls[0]?.[1]
     const paths = scaffold.files.map((entry: { path: string }) => entry.path).sort()

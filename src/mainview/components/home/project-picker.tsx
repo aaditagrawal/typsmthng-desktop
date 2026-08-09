@@ -15,7 +15,15 @@ import {
   getBuiltInTemplate,
   listBuiltInTemplates,
 } from '@/lib/builtin-templates'
-import { exportAllProjects, importAllProjects, importLatexProject, importLatexZip, type LatexImportResult } from '@/lib/project-io'
+import {
+  exportAllProjects,
+  exportProject,
+  importAllProjects,
+  importLatexProject,
+  importLatexZip,
+  importProject,
+  type LatexImportResult,
+} from '@/lib/project-io'
 import { isLatexPath } from '@/lib/file-classification'
 
 function formatDate(ts: number): string {
@@ -462,7 +470,9 @@ export function ProjectPicker({
   const [latexConfirmOpen, setLatexConfirmOpen] = useState(false)
   const [latexConfirmAction, setLatexConfirmAction] = useState<(() => void) | null>(null)
   const importAllInputRef = useRef<HTMLInputElement>(null)
+  const importProjectInputRef = useRef<HTMLInputElement>(null)
   const [importAllBusy, setImportAllBusy] = useState(false)
+  const [importProjectBusy, setImportProjectBusy] = useState(false)
   const [importAllResult, setImportAllResult] = useState<string | null>(null)
   const [importAllError, setImportAllError] = useState<string | null>(null)
   const [selectionMode, setSelectionMode] = useState(false)
@@ -1042,6 +1052,26 @@ export function ProjectPicker({
             e.target.value = ''
           }}
         />
+        <input ref={importProjectInputRef} type="file" accept=".zip" style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (!file) return
+            setImportProjectBusy(true)
+            setImportAllResult(null)
+            setImportAllError(null)
+            void importProject(file)
+              .then(() => {
+                const name = file.name.replace(/\.zip$/i, '')
+                setImportAllResult(`Imported project "${name}"`)
+                void loadProjects()
+              })
+              .catch((err) => {
+                setImportAllError(err instanceof Error ? err.message : 'Import failed')
+              })
+              .finally(() => { setImportProjectBusy(false) })
+            e.target.value = ''
+          }}
+        />
 
         {/* ── Action row ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
@@ -1515,15 +1545,38 @@ export function ProjectPicker({
           }}
         >
           {projects.length > 0 && (
+            <LinkBtn
+              onClick={() => {
+                const targetId = selectedProjectIds[0]
+                  ?? useProjectStore.getState().currentProjectId
+                  ?? visibleProjects[0]?.id
+                  ?? sorted[0]?.id
+                if (!targetId) return
+                void exportProject(targetId)
+              }}
+            >
+              <Download size={12} />
+              Export project
+            </LinkBtn>
+          )}
+          {projects.length > 0 && (
             <LinkBtn onClick={() => { void exportAllProjects() }}>
               <Download size={12} />
               Export all
             </LinkBtn>
           )}
           <LinkBtn
+            onClick={() => importProjectInputRef.current?.click()}
+            disabled={importProjectBusy || importAllBusy}
+            style={{ ...linkBtnBase, opacity: importProjectBusy || importAllBusy ? 0.6 : 1 }}
+          >
+            {importProjectBusy ? <Loader2 size={12} className="animate-spin" /> : <FileArchive size={12} />}
+            {importProjectBusy ? 'Importing...' : 'Import project'}
+          </LinkBtn>
+          <LinkBtn
             onClick={() => importAllInputRef.current?.click()}
-            disabled={importAllBusy}
-            style={{ ...linkBtnBase, opacity: importAllBusy ? 0.6 : 1 }}
+            disabled={importAllBusy || importProjectBusy}
+            style={{ ...linkBtnBase, opacity: importAllBusy || importProjectBusy ? 0.6 : 1 }}
           >
             {importAllBusy ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
             {importAllBusy ? 'Importing...' : 'Import all'}

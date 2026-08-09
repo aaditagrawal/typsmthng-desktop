@@ -19,7 +19,8 @@ import {
 
 import type { LucideIcon } from 'lucide-react'
 import { ContextMenu, type ContextMenuAction } from '@/components/ui/context-menu'
-import { shouldTreatUploadAsText } from '@/lib/file-classification'
+import { isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
+import { convertLatexToTypst } from '@/lib/latex-converter'
 import { revealLabel } from '@/lib/platform'
 import { useProjectStore, type ProjectFile } from '@/stores/project-store'
 
@@ -216,7 +217,22 @@ async function processImportedFiles(files: FileList | File[], basePath: string):
     const targetPath = basePath ? `${basePath}/${relativeName}` : relativeName
 
     if (shouldTreatUploadAsText(file)) {
-      textEntries.push({ path: targetPath, content: await file.text() })
+      let content = await file.text()
+      let path = targetPath
+
+      if (isLatexPath(file.name)) {
+        try {
+          const result = await convertLatexToTypst(content)
+          content = result.typst
+          path = targetPath.replace(/\.tex$/i, '.typ')
+        } catch (err) {
+          console.warn(`LaTeX conversion failed for "${file.name}":`, err)
+          path = targetPath.replace(/\.tex$/i, '.typ')
+          content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
+        }
+      }
+
+      textEntries.push({ path, content })
     } else {
       binaryEntries.push({
         path: targetPath,

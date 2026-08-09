@@ -6,6 +6,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { compileToPdf, ensurePackagesForCompile } from './compiler'
 import { findPreviewImportSpecs } from './universe-registry'
 import { toggleTypstLineComment } from './commenting'
+import { downloadBlob } from './download-blob'
 
 export const typstKeymap: KeyBinding[] = [
   {
@@ -62,12 +63,7 @@ export const typstKeymap: KeyBinding[] = [
         .then((pdf) => {
           if (pdf) {
             const blob = new Blob([new Uint8Array(pdf)], { type: 'application/pdf' })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = 'document.pdf'
-            a.click()
-            setTimeout(() => URL.revokeObjectURL(url), 10000)
+            downloadBlob('document.pdf', blob)
           }
         })
         .catch((err) => {

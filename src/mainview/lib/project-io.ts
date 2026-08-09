@@ -2,6 +2,11 @@ import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import { useProjectStore, type ProjectFile, type ProjectScaffold } from '@/stores/project-store'
 import { isKnownTextPath, isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst, type ConversionResult, type ConversionWarning } from '@/lib/latex-converter'
+import { downloadBlob } from '@/lib/download-blob'
+
+function latexConversionFallback(source: string): string {
+  return `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${source.replace(/\*\//g, '* /')} */\n`
+}
 
 export interface LatexImportResult {
   projectName: string
@@ -65,8 +70,11 @@ async function createImportedProject(projectName: string, projectFiles: ProjectF
   return id
 }
 
-export async function exportProject(): Promise<void> {
-  const project = useProjectStore.getState().getCurrentProject()
+export async function exportProject(projectId?: string): Promise<void> {
+  const state = useProjectStore.getState()
+  const project = projectId
+    ? state.projects.find((entry) => entry.id === projectId)
+    : state.getCurrentProject()
   if (!project) return
 
   // Build zip file data
@@ -93,13 +101,7 @@ export async function exportProject(): Promise<void> {
     console.error('Failed to export project:', err)
     return
   }
-  const blob = new Blob([zipped as BlobPart], { type: 'application/zip' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${project.name}.zip`
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(`${project.name}.zip`, new Blob([zipped as BlobPart], { type: 'application/zip' }))
 }
 
 export async function exportAllProjects(): Promise<void> {
@@ -129,13 +131,10 @@ export async function exportAllProjects(): Promise<void> {
     console.error('Failed to export all projects:', err)
     return
   }
-  const blob = new Blob([zipped as BlobPart], { type: 'application/zip' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'typsmthng-all-projects.zip'
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(
+    'typsmthng-all-projects.zip',
+    new Blob([zipped as BlobPart], { type: 'application/zip' }),
+  )
 }
 
 export async function importAllProjects(file: File): Promise<number> {
@@ -170,21 +169,38 @@ export async function importAllProjects(file: File): Promise<number> {
   let imported = 0
 
   for (const [folderName, entries] of projectFolders) {
+    const commonRoot = stripZipCommonRootPrefix(entries.map((entry) => entry.path))
     const projectFiles: ProjectFile[] = []
 
     for (const { path, data } of entries) {
       if (path.endsWith('.folder')) continue
+      const fullPath = applyZipCommonRootStrip(path, commonRoot)
       const isText = isKnownTextPath(path)
       if (isText) {
+        let content = strFromU8(data)
+        let filePath = fullPath
+
+        if (isLatexPath(path)) {
+          try {
+            const result = await convertLatexToTypst(content)
+            content = result.typst
+            filePath = fullPath.replace(/\.tex$/i, '.typ')
+          } catch (err) {
+            console.warn(`LaTeX conversion failed for "${path}":`, err)
+            filePath = fullPath.replace(/\.tex$/i, '.typ')
+            content = latexConversionFallback(content)
+          }
+        }
+
         projectFiles.push({
-          path,
-          content: strFromU8(data),
+          path: filePath,
+          content,
           isBinary: false,
           lastModified: Date.now(),
         })
       } else {
         projectFiles.push({
-          path,
+          path: fullPath,
           content: '',
           isBinary: true,
           binaryData: data,
@@ -221,9 +237,8 @@ export async function importProject(file: File): Promise<void> {
   try {
     unzipped = unzipSync(new Uint8Array(buffer))
   } catch (err) {
-    window.alert('Failed to import project: the file does not appear to be a valid zip archive.')
     console.error('Import failed:', err)
-    return
+    throw new Error('Failed to import project: the file does not appear to be a valid zip archive.')
   }
 
   // Determine project name from zip filename
@@ -255,7 +270,7 @@ export async function importProject(file: File): Promise<void> {
         } catch (err) {
           console.warn(`LaTeX conversion failed for "${path}":`, err)
           filePath = fullPath.replace(/\.tex$/i, '.typ')
-          content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
+          content = latexConversionFallback(content)
         }
       }
 
@@ -276,7 +291,9 @@ export async function importProject(file: File): Promise<void> {
     }
   }
 
-  if (projectFiles.length === 0) return
+  if (projectFiles.length === 0) {
+    throw new Error('The zip archive contains no importable files.')
+  }
 
   await createImportedProject(projectName, projectFiles)
 }
@@ -315,7 +332,7 @@ export async function importLatexProject(
         })
         projectFiles.push({
           path: typPath,
-          content: `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${source.replace(/\*\//g, '* /')} */\n`,
+          content: latexConversionFallback(source),
           isBinary: false,
           lastModified: Date.now(),
         })
@@ -407,7 +424,7 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
             construct: path,
           })
           filePath = fullPath.replace(/\.tex$/i, '.typ')
-          content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
+          content = latexConversionFallback(content)
           texCount++
         }
       }
