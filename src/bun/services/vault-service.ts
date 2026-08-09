@@ -388,8 +388,27 @@ export class VaultService {
   }
 
   async closeVault(input: { rootPath?: string } = {}): Promise<{ ok: true }> {
-    // Ignore stale close from goHome if another vault was opened during flush.
-    if (input.rootPath && this.activeVaultRoot && this.activeVaultRoot !== input.rootPath) {
+    // Bound close for a vault that is no longer active: flush that vault's pending
+    // writes and clear reopen only if it still points there. Do not tear down the
+    // current active vault or wipe a CLI startup override.
+    if (input.rootPath && this.activeVaultRoot !== input.rootPath) {
+      try {
+        await this.flushWrites({ rootPath: input.rootPath });
+      } catch (error) {
+        console.error("Failed to flush pending writes during stale closeVault", error);
+      }
+      await this.appState.update((current) => ({
+        ...current,
+        reopenLastVaultPath:
+          current.reopenLastVaultPath === input.rootPath
+            ? null
+            : current.reopenLastVaultPath,
+      }));
+      return { ok: true };
+    }
+
+    // Unbound close with nothing open: do not clear startupVaultOverride / reopen.
+    if (!this.activeVaultRoot) {
       return { ok: true };
     }
 
@@ -401,7 +420,9 @@ export class VaultService {
     this.activeVaultRoot = null;
     this.activeWindow = null;
     this.startupVaultOverride = null;
-    this.appState.clearReopenLastVaultPathLocally();
+    if (rootPath) {
+      this.appState.clearReopenLastVaultPathLocally();
+    }
     window?.webview.rpc?.send.activeVaultClosed();
     await this.stopWatcher();
 

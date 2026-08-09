@@ -1058,11 +1058,13 @@ export function ProjectPicker({
                 setImportAllResult(`Imported ${count} project${count === 1 ? '' : 's'}`)
                 // Keep busy through metadata refresh so home does not briefly enable
                 // import actions / flash stale file counts mid-reload.
-                try {
-                  await desktopRpc.request.closeVault(
-                    rootPath ? { rootPath } : undefined,
-                  )
-                } catch {}
+                // Only close when import left a previously-open vault; bare closeVault
+                // would wipe a concurrent CLI startupVaultOverride on the home screen.
+                if (rootPath) {
+                  try {
+                    await desktopRpc.request.closeVault({ rootPath })
+                  } catch {}
+                }
                 await loadProjects({ restoreActive: false })
                 const recent = useProjectStore.getState().metadata?.recentVaults ?? []
                 setProjectFileCounts((current) => {
@@ -1097,11 +1099,11 @@ export function ProjectPicker({
                 await importProject(file)
                 const name = file.name.replace(/\.zip$/i, '')
                 setImportAllResult(`Imported project "${name}"`)
-                try {
-                  await desktopRpc.request.closeVault(
-                    rootPath ? { rootPath } : undefined,
-                  )
-                } catch {}
+                if (rootPath) {
+                  try {
+                    await desktopRpc.request.closeVault({ rootPath })
+                  } catch {}
+                }
                 await loadProjects({ restoreActive: false })
                 const recent = useProjectStore.getState().metadata?.recentVaults ?? []
                 setProjectFileCounts((current) => {
