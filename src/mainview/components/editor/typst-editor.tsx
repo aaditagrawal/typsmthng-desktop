@@ -12,6 +12,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsStore } from '@/stores/settings-store'
+import { desktopRpc } from '@/lib/desktop-rpc'
 import { SAMPLE_DOCUMENT } from '@/lib/sample-document'
 import { createEditorTheme } from './theme'
 import { requestCompile, forceCompile, ensureCompilerReady } from '@/lib/compile-manager'
@@ -29,7 +30,7 @@ export function TypstEditor() {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const projectSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingProjectSyncRef = useRef<{ path: string; source: string } | null>(null)
+  const pendingProjectSyncRef = useRef<{ rootPath: string; path: string; source: string } | null>(null)
   const themeReconfigureFrameRef = useRef<number | null>(null)
   const suppressDocChangeEffectsRef = useRef(false)
   const resolvedTheme = useUIStore((s) => s.resolvedTheme)
@@ -56,11 +57,25 @@ export function TypstEditor() {
     if (!pending) return
 
     pendingProjectSyncRef.current = null
-    useProjectStore.getState().updateFileContent(pending.path, pending.source)
+    const activeRootPath = useProjectStore.getState().getCurrentProject()?.rootPath
+    if (activeRootPath === pending.rootPath) {
+      useProjectStore.getState().updateFileContent(pending.path, pending.source)
+      return
+    }
+
+    // Project switched (or closed) before flush — stage against the vault that owned the edit.
+    void desktopRpc.request.stageFileWrite({
+      rootPath: pending.rootPath,
+      path: pending.path,
+      content: pending.source,
+    })
   }, [])
 
   const scheduleProjectSync = useCallback((path: string, source: string) => {
-    pendingProjectSyncRef.current = { path, source }
+    const rootPath = useProjectStore.getState().getCurrentProject()?.rootPath
+    if (!rootPath) return
+
+    pendingProjectSyncRef.current = { rootPath, path, source }
     if (projectSyncTimerRef.current) {
       clearTimeout(projectSyncTimerRef.current)
     }
@@ -69,7 +84,16 @@ export function TypstEditor() {
       projectSyncTimerRef.current = null
       const pending = pendingProjectSyncRef.current
       if (!pending) return
-      useProjectStore.getState().stageFileContent(pending.path, pending.source)
+      const activeRootPath = useProjectStore.getState().getCurrentProject()?.rootPath
+      if (activeRootPath === pending.rootPath) {
+        useProjectStore.getState().stageFileContent(pending.path, pending.source)
+        return
+      }
+      void desktopRpc.request.stageFileWrite({
+        rootPath: pending.rootPath,
+        path: pending.path,
+        content: pending.source,
+      })
     }, PROJECT_SYNC_DELAY_MS)
   }, [])
 

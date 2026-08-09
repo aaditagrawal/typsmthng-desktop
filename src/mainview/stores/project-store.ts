@@ -751,18 +751,34 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ? project.files.find((entry) => entry.path === currentFilePath)
       : null;
     const source = useEditorStore.getState().source;
+    const rootPath = project.rootPath;
+    const shouldStage =
+      Boolean(currentFilePath)
+      && currentEntry
+      && (currentEntry.kind ?? "file") === "file"
+      && !currentEntry.isBinary;
 
-    if (currentFilePath && currentEntry && (currentEntry.kind ?? "file") === "file" && !currentEntry.isBinary) {
-      get().stageFileContent(currentFilePath, source);
-    }
-
+    // Clear UI immediately so applyProject/bootstrap cannot restore mid-flight.
+    // closeVault still clears reopenLastVaultPath after the captured write flushes.
     clearSelectionState();
 
     void (async () => {
       try {
-        // Close first so bootstrap/import cannot auto-restore mid-flight; then flush.
+        if (shouldStage && currentFilePath) {
+          await desktopRpc.request.stageFileWrite({
+            rootPath,
+            path: normalizeRelativePath(currentFilePath),
+            content: source,
+          });
+        }
+        await desktopRpc.request.flushWrites({ rootPath });
+      } catch (error) {
+        console.error("Failed to flush project writes while returning home:", error);
+      }
+
+      try {
+        // Always close so reopenLastVaultPath clears even if flush failed.
         await desktopRpc.request.closeVault();
-        await desktopRpc.request.flushWrites({ rootPath: project.rootPath });
       } catch (error) {
         console.error("Failed to close project while returning home:", error);
       }
