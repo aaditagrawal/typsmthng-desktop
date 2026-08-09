@@ -445,6 +445,8 @@ setTimeout(async () => {
 // Handle startup arguments (e.g. `typsmthng /path/to/vault`)
 const startupArgs = parseStartupArgs();
 if (startupArgs.vaultPath) {
+	// Prefer the CLI/OS-open target over reopenLastVaultPath during renderer bootstrap.
+	vaultService.setStartupVaultOverride(startupArgs.vaultPath);
 	void (async () => {
 		await vaultService.waitUntilReady();
 		await handleOpenFromCli(startupArgs.vaultPath!, startupArgs.selectFile);

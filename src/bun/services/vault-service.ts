@@ -133,16 +133,43 @@ export class VaultService {
   private activeWindow: DesktopWindow | null = null;
   private watcherBatch: ExternalVaultEvent[] = [];
   private watcherFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Prefer this vault on the first bootstrap (CLI / OS file open). */
+  private startupVaultOverride: string | null = null;
 
   async waitUntilReady(): Promise<{ ready: true }> {
     await this.appState.load();
     return { ready: true as const };
   }
 
+  setStartupVaultOverride(rootPath: string | null): void {
+    this.startupVaultOverride = rootPath;
+  }
+
   async getBootstrapState(window: DesktopWindow): Promise<BootstrapState> {
     let metadata = await this.hydrateRecentVaultMetadata(await this.appState.load());
-    const reopenPath = metadata.reopenLastVaultPath;
 
+    // If a vault is already open (CLI race, prior bootstrap), return it instead of
+    // forcing reopenLastVaultPath again and yanking the user off home/CLI target.
+    if (this.activeVaultRoot) {
+      try {
+        const activeVault = await this.loadVaultSnapshot(this.activeVaultRoot, metadata);
+        return { metadata, activeVault };
+      } catch (error) {
+        console.error("Failed to snapshot active vault during bootstrap", error);
+      }
+    }
+
+    const overridePath = this.startupVaultOverride;
+    this.startupVaultOverride = null;
+    if (overridePath) {
+      const activeVault = await this.openVault(overridePath, window, null, {
+        removeRecentOnFailure: false,
+      });
+      metadata = await this.appState.load();
+      return { metadata, activeVault };
+    }
+
+    const reopenPath = metadata.reopenLastVaultPath;
     if (!reopenPath) {
       return { metadata, activeVault: null };
     }
@@ -157,7 +184,18 @@ export class VaultService {
       return { metadata, activeVault: null };
     }
 
-    const activeVault = await this.openVault(reopenPath, window);
+    const activeVault = await this.openVault(reopenPath, window, null, {
+      removeRecentOnFailure: false,
+    });
+    if (!activeVault) {
+      // Soft-fail restore: keep the project in recents, just skip auto-open.
+      metadata = await this.appState.update((current) => ({
+        ...current,
+        reopenLastVaultPath: null,
+      }));
+      return { metadata, activeVault: null };
+    }
+
     metadata = await this.appState.load();
     return { metadata, activeVault };
   }
@@ -237,6 +275,11 @@ export class VaultService {
     await this.stopWatcher();
     this.activeVaultRoot = null;
     this.activeWindow = null;
+    // Explicit home navigation should not restore this vault on the next load/launch.
+    await this.appState.update((current) => ({
+      ...current,
+      reopenLastVaultPath: null,
+    }));
     return { ok: true };
   }
 
@@ -585,7 +628,9 @@ export class VaultService {
     rootPath: string,
     window: DesktopWindow,
     preferredMainFile?: string | null,
+    options?: { removeRecentOnFailure?: boolean },
   ): Promise<VaultRecord | null> {
+    const removeRecentOnFailure = options?.removeRecentOnFailure ?? true;
     try {
       const metadata = await this.appState.load();
       const snapshot = await this.loadVaultSnapshot(rootPath, metadata, preferredMainFile);
@@ -606,7 +651,9 @@ export class VaultService {
       return snapshot;
     } catch (error) {
       console.error("Failed to open vault", error);
-      await this.appState.removeRecentVault(rootPath);
+      if (removeRecentOnFailure) {
+        await this.appState.removeRecentVault(rootPath);
+      }
       return null;
     }
   }
