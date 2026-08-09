@@ -127,14 +127,13 @@ export async function exportProject(projectId?: string): Promise<void> {
   downloadBlob(`${project.name}.zip`, new Blob([zipped as BlobPart], { type: 'application/zip' }))
 }
 
-export async function exportProjects(projectIds: string[]): Promise<void> {
+async function exportProjectsAsFolderArchive(
+  projectIds: string[],
+  downloadName: string,
+): Promise<void> {
   const uniqueIds = [...new Set(projectIds)]
   if (uniqueIds.length === 0) {
     throw new Error('No projects selected to export.')
-  }
-  if (uniqueIds.length === 1) {
-    await exportProject(uniqueIds[0])
-    return
   }
 
   const state = useProjectStore.getState()
@@ -166,10 +165,20 @@ export async function exportProjects(projectIds: string[]): Promise<void> {
     console.error('Failed to export selected projects:', err)
     throw new Error('Failed to zip the selected projects.')
   }
-  downloadBlob(
-    'typsmthng-selected-projects.zip',
-    new Blob([zipped as BlobPart], { type: 'application/zip' }),
-  )
+  downloadBlob(downloadName, new Blob([zipped as BlobPart], { type: 'application/zip' }))
+}
+
+export async function exportProjects(projectIds: string[]): Promise<void> {
+  const uniqueIds = [...new Set(projectIds)]
+  if (uniqueIds.length === 0) {
+    throw new Error('No projects selected to export.')
+  }
+  // Single-project export stays flat for Import project; multi stays nested for Import all.
+  if (uniqueIds.length === 1) {
+    await exportProject(uniqueIds[0])
+    return
+  }
+  await exportProjectsAsFolderArchive(uniqueIds, 'typsmthng-selected-projects.zip')
 }
 
 export async function exportAllProjects(): Promise<void> {
@@ -177,7 +186,11 @@ export async function exportAllProjects(): Promise<void> {
   if (projects.length === 0) {
     throw new Error('There are no projects to export.')
   }
-  await exportProjects(projects.map((project) => project.id))
+  // Always nest under project folders so Import all can round-trip, even for one project.
+  await exportProjectsAsFolderArchive(
+    projects.map((project) => project.id),
+    'typsmthng-all-projects.zip',
+  )
 }
 
 export async function importAllProjects(file: File): Promise<number> {
