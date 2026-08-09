@@ -428,16 +428,21 @@ function startCliServer() {
 startCliServer();
 
 mainWindow.on("close", () => {
-	clearInterval(framePersistTimer);
-	void persistWindowFrame();
-	if (cliServer) {
-		cliServer.close();
-		if (!isWindows) {
-			try {
-				rmSync(SOCKET_PATH);
-			} catch {}
+	void (async () => {
+		try {
+			await vaultService.flushWrites({});
+		} catch {}
+		clearInterval(framePersistTimer);
+		void persistWindowFrame();
+		if (cliServer) {
+			cliServer.close();
+			if (!isWindows) {
+				try {
+					rmSync(SOCKET_PATH);
+				} catch {}
+			}
 		}
-	}
+	})();
 });
 
 // Platform integration (CLI symlink, .desktop file, MIME type)
