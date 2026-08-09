@@ -9,12 +9,8 @@ import { resolveSourceLocBatch } from '@/lib/compiler'
 import { forceCompile, getInjectedPreambleLineCount } from '@/lib/compile-manager'
 import { normalizeExtension } from '@/lib/file-classification'
 import { estimateFallbackLine, findApproxSourceLine, parseSourceSpanToRange } from '@/lib/preview-mapping'
-import {
-  jumpToDiagnostic,
-  formatDisplayRange,
-  normalizeDiagnosticPath,
-  waitForEditorPath,
-} from '@/lib/editor-diagnostics'
+import { jumpToDiagnostic, formatDisplayRange } from '@/lib/editor-diagnostics'
+import { normalizeDiagnosticPath, waitForEditorPath } from '@/lib/diagnostic-navigation'
 import { perfMark, perfMeasure } from '@/lib/perf'
 import { LiveDomPreview } from '@/components/preview/live-dom-preview'
 import {

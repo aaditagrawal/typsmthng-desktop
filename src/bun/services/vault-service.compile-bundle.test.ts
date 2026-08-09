@@ -332,4 +332,38 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
     service.pendingWrites.clear()
     await fs.rm(tempRoot, { recursive: true, force: true })
   })
+
+  it('keeps pendingWrites on flush failure and retries successfully', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-flush-'))
+    const filePath = 'draft.typ'
+    const absolutePath = path.join(tempRoot, filePath)
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService() as unknown as {
+      stageFileWrite: (rootPath: string, filePath: string, content: string) => Promise<{ queuedAt: number }>
+      flushWrites: (input: { rootPath?: string; path?: string }) => Promise<{ ok: true }>
+      pendingWrites: PendingWriteMap
+    }
+
+    await service.stageFileWrite(tempRoot, filePath, 'first body')
+    const key = `${tempRoot}::${filePath}`
+    expect(service.pendingWrites.has(key)).toBe(true)
+
+    const writeSpy = vi.spyOn(fs, 'writeFile')
+      .mockRejectedValueOnce(new Error('disk busy'))
+      .mockImplementation(async (target, content, encoding) => {
+        writeSpy.mockRestore()
+        await fs.writeFile(target, content, encoding as BufferEncoding)
+      })
+
+    await expect(service.flushWrites({ rootPath: tempRoot, path: filePath })).rejects.toThrow('disk busy')
+    expect(service.pendingWrites.has(key)).toBe(true)
+    expect(service.pendingWrites.get(key)?.content).toBe('first body')
+
+    await service.flushWrites({ rootPath: tempRoot, path: filePath })
+    expect(service.pendingWrites.has(key)).toBe(false)
+    expect(await fs.readFile(absolutePath, 'utf8')).toBe('first body')
+
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
 })

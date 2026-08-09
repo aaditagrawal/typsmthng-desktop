@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   normalizeDiagnosticPath,
   waitForEditorPath,
-} from '@/lib/editor-diagnostics'
+} from '@/lib/diagnostic-navigation'
 
 describe('normalizeDiagnosticPath', () => {
   it('strips leading slashes and normalizes separators', () => {
