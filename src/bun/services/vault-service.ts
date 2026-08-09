@@ -162,6 +162,8 @@ export class VaultService {
   private activeWindow: DesktopWindow | null = null;
   private watcherBatch: ExternalVaultEvent[] = [];
   private watcherFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped in stopWatcher so in-flight handlers from a prior vault are ignored. */
+  private watcherGeneration = 0;
   /** Prefer this vault on the first bootstrap (CLI / OS file open). */
   private startupVaultOverride: { rootPath: string; selectFile: string | null } | null = null;
 
@@ -1056,6 +1058,8 @@ export class VaultService {
       clearTimeout(this.watcherFlushTimer);
       this.watcherFlushTimer = null;
     }
+    this.watcherBatch = [];
+    this.watcherGeneration += 1;
 
     const watcher = this.watcher;
     this.watcher = null;
@@ -1065,6 +1069,7 @@ export class VaultService {
   }
 
   private async startWatcher(rootPath: string, window: DesktopWindow): Promise<void> {
+    const generation = this.watcherGeneration;
     const watcher = chokidar.watch(rootPath, {
       ignoreInitial: true,
       awaitWriteFinish: {
@@ -1075,6 +1080,10 @@ export class VaultService {
     });
 
     watcher.on("all", async (kind, absolutePath) => {
+      if (generation !== this.watcherGeneration || this.activeVaultRoot !== rootPath) {
+        return;
+      }
+
       const relativePath = normalizeRelativePath(rootPath, absolutePath);
       if (!relativePath) return;
 
@@ -1106,7 +1115,11 @@ export class VaultService {
         }
       }
 
-      this.queueWatcherEvent(window, {
+      if (generation !== this.watcherGeneration || this.activeVaultRoot !== rootPath) {
+        return;
+      }
+
+      this.queueWatcherEvent(window, rootPath, {
         kind: kind as ExternalVaultEvent["kind"],
         path: relativePath,
         isDirectory,
@@ -1119,18 +1132,27 @@ export class VaultService {
     this.watcher = watcher;
   }
 
-  private queueWatcherEvent(window: DesktopWindow, event: ExternalVaultEvent): void {
+  private queueWatcherEvent(
+    window: DesktopWindow,
+    rootPath: string,
+    event: ExternalVaultEvent,
+  ): void {
+    if (this.activeVaultRoot !== rootPath) return;
+
     this.watcherBatch.push(event);
     if (this.watcherFlushTimer) return;
 
     this.watcherFlushTimer = setTimeout(() => {
       this.watcherFlushTimer = null;
-      if (this.watcherBatch.length === 0 || !this.activeVaultRoot) return;
+      if (this.watcherBatch.length === 0 || this.activeVaultRoot !== rootPath) {
+        this.watcherBatch = [];
+        return;
+      }
 
       const events = [...this.watcherBatch];
       this.watcherBatch = [];
       window.webview.rpc?.send.externalVaultEvents({
-        rootPath: this.activeVaultRoot,
+        rootPath,
         events,
       });
     }, 64);
