@@ -127,6 +127,8 @@ export interface CreateVaultParams {
   scaffold?: ProjectScaffold;
   /** When the target directory already has files: open it, or fail. Default: open. */
   ifExists?: CreateVaultIfExistsPolicy;
+  /** When false, write/register the vault without activating it in the UI. Default: true. */
+  activate?: boolean;
 }
 
 export interface VaultExportFile {

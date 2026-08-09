@@ -271,6 +271,7 @@ export class VaultService {
       name: string;
       scaffold?: ProjectScaffold;
       ifExists?: "open" | "fail";
+      activate?: boolean;
     },
     window: DesktopWindow,
   ): Promise<VaultRecord | null> {
@@ -289,6 +290,7 @@ export class VaultService {
 
     const rootPath = path.join(selectedParent, name);
     const ifExists = params.ifExists ?? "open";
+    const activate = params.activate !== false;
 
     // Check if directory exists and already has content — open as existing vault
     // instead of overwriting to prevent data loss (GitHub issue #8).
@@ -297,6 +299,9 @@ export class VaultService {
       const entries = await fs.readdir(rootPath);
       if (entries.length > 0) {
         if (ifExists === "fail") return null;
+        if (!activate) {
+          return this.registerVaultWithoutActivating(rootPath, null);
+        }
         return this.openVault(rootPath, window);
       }
     } catch {
@@ -316,7 +321,40 @@ export class VaultService {
       }
     }
 
+    if (!activate) {
+      return this.registerVaultWithoutActivating(rootPath, scaffold.mainFile);
+    }
     return this.openVault(rootPath, window, scaffold.mainFile);
+  }
+
+  /** Upsert recents + return a snapshot without watcher/activeVaultOpened (import/bulk). */
+  private async registerVaultWithoutActivating(
+    rootPath: string,
+    preferredMainFile?: string | null,
+  ): Promise<VaultRecord | null> {
+    try {
+      const metadata = await this.appState.load();
+      const snapshot = await this.loadVaultSnapshot(rootPath, metadata, preferredMainFile);
+      const nextMetadata = await this.appState.upsertRecentVault({
+        rootPath,
+        name: snapshot.name,
+        fileCount: countVisibleFiles(snapshot.files),
+        lastFilePath: snapshot.mainFile,
+      });
+      // Clear reopen so a bulk import cannot auto-restore this vault on next bootstrap.
+      await this.appState.update((current) => ({
+        ...current,
+        reopenLastVaultPath: null,
+      }));
+      this.activeWindow?.webview.rpc?.send.metadataUpdated({
+        ...nextMetadata,
+        reopenLastVaultPath: null,
+      });
+      return snapshot;
+    } catch (error) {
+      console.error("Failed to register vault without activating", error);
+      return null;
+    }
   }
 
   async closeVault(): Promise<{ ok: true }> {

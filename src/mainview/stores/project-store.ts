@@ -596,43 +596,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   createProject: async (name, scaffold, options) => {
+    const shouldSelect = options?.select !== false;
     const project = await desktopRpc.request.createVault({
       name,
       scaffold: normalizeScaffold(scaffold),
       ifExists: options?.ifExists,
+      activate: shouldSelect,
     });
     if (!project) return "";
 
-    const shouldSelect = options?.select !== false;
     if (shouldSelect) {
       await applyProject(project);
       return project.id;
     }
 
-    // Bulk/import creates: merge into the projects list, but do not leave the new
-    // vault selected in the UI (createVault opens it and may emit activeVaultOpened).
-    useProjectStore.setState((state) => {
-      const selectedThis = state.currentProjectId === project.id;
-      return {
-        projects: updateProjectList(state.projects, {
-          ...project,
-          files: sortEntries(project.files),
-        }),
-        ...(selectedThis
-          ? {
-              currentProjectId: null,
-              currentFilePath: null,
-              hasSelectedProject: false,
-              activeConflict: null,
-            }
-          : {}),
-      };
-    });
-    try {
-      await desktopRpc.request.closeVault();
-    } catch (error) {
-      console.error("Failed to close vault after non-selecting create:", error);
-    }
+    // Bulk/import creates: vault is registered without activating, so no
+    // activeVaultOpened race can yank the home screen into the new project.
+    useProjectStore.setState((state) => ({
+      projects: updateProjectList(state.projects, {
+        ...project,
+        files: sortEntries(project.files),
+      }),
+    }));
     return project.id;
   },
 
