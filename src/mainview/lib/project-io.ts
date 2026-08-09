@@ -141,7 +141,9 @@ async function exportProjectsAsFolderArchive(
       throw new Error('One of the selected projects was not found.')
     }
     const projectFiles = await collectProjectExportFiles(project)
-    if (Object.keys(projectFiles).length === 0) continue
+    if (Object.keys(projectFiles).length === 0) {
+      throw new Error(`Project "${project.name}" has no exportable files.`)
+    }
     const folderName = project.name.replace(/[/\\:*?"<>|]/g, '_')
     for (const [filePath, data] of Object.entries(projectFiles)) {
       files[`${folderName}/${filePath}`] = data
@@ -149,8 +151,8 @@ async function exportProjectsAsFolderArchive(
     exported++
   }
 
-  if (exported === 0) {
-    throw new Error('Selected projects have no exportable files.')
+  if (exported !== uniqueIds.length) {
+    throw new Error('Could not export every selected project.')
   }
 
   let zipped: Uint8Array

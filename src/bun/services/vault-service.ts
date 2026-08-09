@@ -479,31 +479,33 @@ export class VaultService {
           && !entry.path.startsWith(".typsmthng/"),
       );
 
-      const files = (
-        await Promise.all(
-          fileEntries.map(async (entry) => {
-            const absolutePath = path.join(rootPath, entry.path);
-            try {
-              if (entry.isBinary) {
-                const buffer = await fs.readFile(absolutePath);
-                return {
-                  path: entry.path,
-                  isBinary: true,
-                  binaryData: new Uint8Array(buffer),
-                };
-              }
-              const content = await fs.readFile(absolutePath, "utf8");
+      const files = await Promise.all(
+        fileEntries.map(async (entry) => {
+          const absolutePath = path.join(rootPath, entry.path);
+          try {
+            if (entry.isBinary) {
+              const buffer = await fs.readFile(absolutePath);
               return {
                 path: entry.path,
-                isBinary: false,
-                content,
+                isBinary: true,
+                binaryData: new Uint8Array(buffer),
               };
-            } catch {
-              return null;
             }
-          }),
-        )
-      ).filter((file): file is NonNullable<typeof file> => file !== null);
+            const content = await fs.readFile(absolutePath, "utf8");
+            return {
+              path: entry.path,
+              isBinary: false,
+              content,
+            };
+          } catch (error) {
+            throw new Error(
+              `Failed to read "${entry.path}" while exporting ${path.basename(rootPath)}: ${
+                error instanceof Error ? error.message : "unknown error"
+              }`,
+            );
+          }
+        }),
+      );
 
       return {
         name: path.basename(rootPath),
