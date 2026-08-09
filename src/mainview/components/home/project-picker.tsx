@@ -1052,12 +1052,16 @@ export function ProjectPicker({
             setImportAllError(null)
             void (async () => {
               try {
+                // Capture before import clears selection so closeVault targets the vault we left.
+                const rootPath = useProjectStore.getState().getCurrentProject()?.rootPath
                 const count = await importAllProjects(file)
                 setImportAllResult(`Imported ${count} project${count === 1 ? '' : 's'}`)
                 // Keep busy through metadata refresh so home does not briefly enable
                 // import actions / flash stale file counts mid-reload.
                 try {
-                  await desktopRpc.request.closeVault()
+                  await desktopRpc.request.closeVault(
+                    rootPath ? { rootPath } : undefined,
+                  )
                 } catch {}
                 await loadProjects({ restoreActive: false })
                 const recent = useProjectStore.getState().metadata?.recentVaults ?? []
@@ -1088,11 +1092,15 @@ export function ProjectPicker({
             setImportAllError(null)
             void (async () => {
               try {
+                // Capture before import so closeVault still binds to the vault we left.
+                const rootPath = useProjectStore.getState().getCurrentProject()?.rootPath
                 await importProject(file)
                 const name = file.name.replace(/\.zip$/i, '')
                 setImportAllResult(`Imported project "${name}"`)
                 try {
-                  await desktopRpc.request.closeVault()
+                  await desktopRpc.request.closeVault(
+                    rootPath ? { rootPath } : undefined,
+                  )
                 } catch {}
                 await loadProjects({ restoreActive: false })
                 const recent = useProjectStore.getState().metadata?.recentVaults ?? []

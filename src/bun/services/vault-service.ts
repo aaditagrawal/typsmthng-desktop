@@ -413,10 +413,14 @@ export class VaultService {
       }
     }
 
-    // Persist the cleared reopen path.
+    // Only clear reopen when it still points at the vault we closed — a concurrent
+    // open during flush may have already set reopen to a different path.
     await this.appState.update((current) => ({
       ...current,
-      reopenLastVaultPath: null,
+      reopenLastVaultPath:
+        rootPath && current.reopenLastVaultPath === rootPath
+          ? null
+          : current.reopenLastVaultPath,
     }));
     return { ok: true };
   }
