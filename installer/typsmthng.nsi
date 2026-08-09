@@ -1,9 +1,10 @@
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
-!include "WordFunc.nsh"
-!insertmacro StrStr
-!insertmacro StrCase
+; StrStr / StrCase live in StrFunc (not WordFunc). Declare before sections.
+!include "StrFunc.nsh"
+${StrStr}
+${StrCase}
 
 Name "typsmthng"
 OutFile "${OUTPUT_DIR}\${OUTPUT_NAME}"
