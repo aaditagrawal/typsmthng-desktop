@@ -24,6 +24,7 @@ import { AppStateService } from "./app-state";
 import { BackgroundTaskQueue } from "./background-task-queue";
 import { FullTextSearchService } from "./full-text-search";
 import { VaultIndexService } from "./vault-index";
+import { resolveVaultMainFile } from "./vault-main-file";
 
 const WRITE_DEBOUNCE_MS = 450;
 const SUPPRESSED_WATCH_EVENT_MS = 1_250;
@@ -98,18 +99,12 @@ function shouldLoadBinary(relativePath: string, sizeBytes: number): boolean {
   return IMAGE_EXTENSION_SET.has(normalizeExtension(relativePath)) && sizeBytes <= MAX_EAGER_BINARY_BYTES;
 }
 
-function defaultMainFile(files: VaultFileEntry[], recent?: RecentVaultRecord): string {
-  const preferred = recent?.lastFilePath && files.some((file) => file.path === recent.lastFilePath)
-    ? recent.lastFilePath
-    : null;
-  if (preferred) return preferred;
-  const mainTyp = files.find((file) => file.path === "main.typ");
-  if (mainTyp) return mainTyp.path;
-  const firstTyp = files.find((file) => file.kind === "file" && file.extension === ".typ");
-  if (firstTyp) return firstTyp.path;
-  const firstText = files.find((file) => file.kind === "file" && !file.isBinary);
-  if (firstText) return firstText.path;
-  return files.find((file) => file.kind === "file")?.path ?? "main.typ";
+function defaultMainFile(
+  files: VaultFileEntry[],
+  recent?: RecentVaultRecord,
+  preferredMainFile?: string | null,
+): string {
+  return resolveVaultMainFile(files, { recent, preferredMainFile });
 }
 
 function countVisibleFiles(entries: Array<{ kind: "file" | "directory"; path: string }>): number {
@@ -168,7 +163,11 @@ export class VaultService {
   }
 
   async createVault(
-    params: { name: string; scaffold?: ProjectScaffold },
+    params: {
+      name: string;
+      scaffold?: ProjectScaffold;
+      ifExists?: "open" | "fail";
+    },
     window: DesktopWindow,
   ): Promise<VaultRecord | null> {
     const name = params.name.trim();
@@ -185,12 +184,15 @@ export class VaultService {
     if (!selectedParent) return null;
 
     const rootPath = path.join(selectedParent, name);
+    const ifExists = params.ifExists ?? "open";
 
     // Check if directory exists and already has content — open as existing vault
-    // instead of overwriting to prevent data loss (GitHub issue #8)
+    // instead of overwriting to prevent data loss (GitHub issue #8).
+    // Imports pass ifExists: "fail" so a collision is not reported as a successful import.
     try {
       const entries = await fs.readdir(rootPath);
       if (entries.length > 0) {
+        if (ifExists === "fail") return null;
         return this.openVault(rootPath, window);
       }
     } catch {
@@ -210,7 +212,7 @@ export class VaultService {
       }
     }
 
-    return this.openVault(rootPath, window);
+    return this.openVault(rootPath, window, scaffold.mainFile);
   }
 
   async closeVault(): Promise<{ ok: true }> {
@@ -497,10 +499,14 @@ export class VaultService {
     return this.createVault({ name: params.name, scaffold }, window);
   }
 
-  private async openVault(rootPath: string, window: DesktopWindow): Promise<VaultRecord | null> {
+  private async openVault(
+    rootPath: string,
+    window: DesktopWindow,
+    preferredMainFile?: string | null,
+  ): Promise<VaultRecord | null> {
     try {
       const metadata = await this.appState.load();
-      const snapshot = await this.loadVaultSnapshot(rootPath, metadata);
+      const snapshot = await this.loadVaultSnapshot(rootPath, metadata, preferredMainFile);
       await this.stopWatcher();
 
       this.activeVaultRoot = rootPath;
@@ -523,7 +529,11 @@ export class VaultService {
     }
   }
 
-  private async loadVaultSnapshot(rootPath: string, metadata: AppMetadata): Promise<VaultRecord> {
+  private async loadVaultSnapshot(
+    rootPath: string,
+    metadata: AppMetadata,
+    preferredMainFile?: string | null,
+  ): Promise<VaultRecord> {
     const recent = metadata.recentVaults.find((vault) => vault.rootPath === rootPath);
     const includeHidden = recent?.hiddenFilesVisible ?? false;
     const index = await this.indexService.getIndex(rootPath, includeHidden);
@@ -533,7 +543,7 @@ export class VaultService {
       content: "",
     }));
 
-    const mainFile = defaultMainFile(baseEntries, recent);
+    const mainFile = defaultMainFile(baseEntries, recent, preferredMainFile);
     const hydratedFiles = await Promise.all(
       baseEntries.map(async (entry) => {
         if (entry.kind !== "file") return entry;

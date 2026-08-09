@@ -120,9 +120,13 @@ export interface FileConflictState {
   changedAt: number;
 }
 
+export type CreateVaultIfExistsPolicy = "open" | "fail";
+
 export interface CreateVaultParams {
   name: string;
   scaffold?: ProjectScaffold;
+  /** When the target directory already has files: open it, or fail. Default: open. */
+  ifExists?: CreateVaultIfExistsPolicy;
 }
 
 export type DesktopRPC = {

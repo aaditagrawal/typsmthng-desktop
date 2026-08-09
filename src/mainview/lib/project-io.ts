@@ -11,11 +11,36 @@ export interface LatexImportResult {
   metadata: ConversionResult['metadata']
 }
 
-function resolveImportedMainFile(projectFiles: ProjectFile[]): string {
+export function resolveImportedMainFile(projectFiles: Array<{ path: string }>): string {
   return projectFiles.find((f) => f.path === '/main.typ')?.path
     || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
     || projectFiles[0]?.path
     || '/main.typ'
+}
+
+/** Strip a single shared top-level folder from zip paths (Overleaf-style archives). */
+export function stripZipCommonRootPrefix(paths: string[]): string {
+  const normalized = paths
+    .map((path) => path.replace(/^\/+/, ''))
+    .filter((path) => path.length > 0 && !path.endsWith('/'))
+  if (normalized.length === 0) return ''
+
+  const firstSegments = normalized.map((path) => path.split('/')[0] ?? '')
+  const candidate = firstSegments[0]
+  if (!candidate) return ''
+  if (!firstSegments.every((segment) => segment === candidate)) return ''
+  // Only strip when every entry lives under that folder (has a nested path).
+  if (!normalized.every((path) => path.includes('/'))) return ''
+  return candidate
+}
+
+export function applyZipCommonRootStrip(path: string, rootPrefix: string): string {
+  if (!rootPrefix) return path.startsWith('/') ? path : `/${path}`
+  const withoutSlash = path.replace(/^\/+/, '')
+  const stripped = withoutSlash.startsWith(`${rootPrefix}/`)
+    ? withoutSlash.slice(rootPrefix.length + 1)
+    : withoutSlash
+  return stripped.startsWith('/') ? stripped : `/${stripped}`
 }
 
 async function createImportedProject(projectName: string, projectFiles: ProjectFile[]): Promise<string> {
@@ -29,7 +54,15 @@ async function createImportedProject(projectName: string, projectFiles: ProjectF
     mainFile: resolveImportedMainFile(projectFiles),
   }
 
-  return useProjectStore.getState().createProject(projectName, scaffold)
+  const id = await useProjectStore.getState().createProject(projectName, scaffold, {
+    ifExists: 'fail',
+  })
+  if (!id) {
+    throw new Error(
+      'Project creation was cancelled or a project with that name already exists in the chosen folder.',
+    )
+  }
+  return id
 }
 
 export async function exportProject(): Promise<void> {
@@ -170,7 +203,7 @@ export async function importAllProjects(file: File): Promise<number> {
         binaryData: projectFile.binaryData,
       })),
       mainFile: resolveImportedMainFile(projectFiles),
-    })
+    }, { ifExists: 'fail' })
     if (id) {
       imported++
     }
@@ -197,12 +230,15 @@ export async function importProject(file: File): Promise<void> {
   const projectName = file.name.replace(/\.zip$/i, '')
 
   const projectFiles: ProjectFile[] = []
+  const zipEntries = Object.entries(unzipped).filter(([path]) => (
+    !path.endsWith('/')
+    && !path.includes('__MACOSX')
+    && !path.includes('.DS_Store')
+  ))
+  const commonRoot = stripZipCommonRootPrefix(zipEntries.map(([path]) => path))
 
-  for (const [path, data] of Object.entries(unzipped)) {
-    // Skip directories (they end with /) and macOS resource forks
-    if (path.endsWith('/') || path.includes('__MACOSX') || path.includes('.DS_Store')) continue
-
-    const fullPath = path.startsWith('/') ? path : `/${path}`
+  for (const [path, data] of zipEntries) {
+    const fullPath = applyZipCommonRootStrip(path, commonRoot)
 
     // Detect if file is text or binary
     const isText = isKnownTextPath(path)
@@ -341,10 +377,15 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
   let texCount = 0
   let lastMeta: ConversionResult['metadata'] = { packages: [] }
 
-  for (const [path, data] of Object.entries(unzipped)) {
-    if (path.endsWith('/') || path.includes('__MACOSX') || path.includes('.DS_Store')) continue
+  const zipEntries = Object.entries(unzipped).filter(([path]) => (
+    !path.endsWith('/')
+    && !path.includes('__MACOSX')
+    && !path.includes('.DS_Store')
+  ))
+  const commonRoot = stripZipCommonRootPrefix(zipEntries.map(([path]) => path))
 
-    const fullPath = path.startsWith('/') ? path : `/${path}`
+  for (const [path, data] of zipEntries) {
+    const fullPath = applyZipCommonRootStrip(path, commonRoot)
     const isText = isKnownTextPath(path)
 
     if (isText) {

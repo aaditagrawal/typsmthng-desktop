@@ -63,7 +63,11 @@ interface ProjectState {
   activeConflict: FileConflictState | null;
   openProjectDialog: () => Promise<string | null>;
   loadProjects: () => Promise<void>;
-  createProject: (name: string, scaffold?: ProjectScaffold) => Promise<string>;
+  createProject: (
+    name: string,
+    scaffold?: ProjectScaffold,
+    options?: { ifExists?: "open" | "fail" },
+  ) => Promise<string>;
   deleteProject: (id: string) => Promise<void>;
   renameProject: (id: string, name: string) => Promise<void>;
   createHomeWorkspace: (name: string, projectIds?: string[]) => Promise<string>;
@@ -556,10 +560,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     updateWindowTitle();
   },
 
-  createProject: async (name, scaffold) => {
+  createProject: async (name, scaffold, options) => {
     const project = await desktopRpc.request.createVault({
       name,
       scaffold: normalizeScaffold(scaffold),
+      ifExists: options?.ifExists,
     });
     if (!project) return "";
     await applyProject(project);
