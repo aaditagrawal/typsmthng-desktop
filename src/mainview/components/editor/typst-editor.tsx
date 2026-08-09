@@ -246,14 +246,21 @@ export function TypstEditor() {
     const view = viewRef.current
     if (!view) return
 
-    // Only show diagnostics for the currently open file
-    const filePath = useProjectStore.getState().currentFilePath
-    const relevant = diagnostics.filter((d) => !d.path || d.path === filePath)
+    const normalizeDiagPath = (input: string) =>
+      input.replace(/\\/g, '/').replace(/^\/+/, '')
+
+    // Only underline spans for the open file. Re-run on file switch so another
+    // file's marks do not linger until the next compile.
+    const filePath = currentFilePath ? normalizeDiagPath(currentFilePath) : null
+    const relevant = diagnostics.filter((d) => {
+      const diagPath = d.path ? normalizeDiagPath(d.path) : ''
+      return !diagPath || (filePath !== null && diagPath === filePath)
+    })
 
     view.dispatch({
       effects: setDiagnostics.of(relevant),
     })
-  }, [diagnostics])
+  }, [diagnostics, currentFilePath])
 
   // Flush pending project sync if the tab/window is hidden.
   useEffect(() => {

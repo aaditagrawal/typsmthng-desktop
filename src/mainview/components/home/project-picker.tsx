@@ -1050,18 +1050,32 @@ export function ProjectPicker({
             setImportAllBusy(true)
             setImportAllResult(null)
             setImportAllError(null)
-            void importAllProjects(file)
-              .then(async (count) => {
+            void (async () => {
+              try {
+                const count = await importAllProjects(file)
                 setImportAllResult(`Imported ${count} project${count === 1 ? '' : 's'}`)
+                // Keep busy through metadata refresh so home does not briefly enable
+                // import actions / flash stale file counts mid-reload.
                 try {
                   await desktopRpc.request.closeVault()
                 } catch {}
-                void loadProjects({ restoreActive: false })
-              })
-              .catch((err) => {
+                await loadProjects({ restoreActive: false })
+                const recent = useProjectStore.getState().metadata?.recentVaults ?? []
+                setProjectFileCounts((current) => {
+                  const next = { ...current }
+                  for (const record of recent) {
+                    if (typeof record.fileCount === 'number') {
+                      next[record.rootPath] = record.fileCount
+                    }
+                  }
+                  return next
+                })
+              } catch (err) {
                 setImportAllError(err instanceof Error ? err.message : 'Import failed')
-              })
-              .finally(() => { setImportAllBusy(false) })
+              } finally {
+                setImportAllBusy(false)
+              }
+            })()
             e.target.value = ''
           }}
         />
@@ -1072,19 +1086,31 @@ export function ProjectPicker({
             setImportProjectBusy(true)
             setImportAllResult(null)
             setImportAllError(null)
-            void importProject(file)
-              .then(async () => {
+            void (async () => {
+              try {
+                await importProject(file)
                 const name = file.name.replace(/\.zip$/i, '')
                 setImportAllResult(`Imported project "${name}"`)
                 try {
                   await desktopRpc.request.closeVault()
                 } catch {}
-                void loadProjects({ restoreActive: false })
-              })
-              .catch((err) => {
+                await loadProjects({ restoreActive: false })
+                const recent = useProjectStore.getState().metadata?.recentVaults ?? []
+                setProjectFileCounts((current) => {
+                  const next = { ...current }
+                  for (const record of recent) {
+                    if (typeof record.fileCount === 'number') {
+                      next[record.rootPath] = record.fileCount
+                    }
+                  }
+                  return next
+                })
+              } catch (err) {
                 setImportAllError(err instanceof Error ? err.message : 'Import failed')
-              })
-              .finally(() => { setImportProjectBusy(false) })
+              } finally {
+                setImportProjectBusy(false)
+              }
+            })()
             e.target.value = ''
           }}
         />
@@ -1435,7 +1461,11 @@ export function ProjectPicker({
             <ProjectCard
               key={project.id}
               project={project}
-              fileCount={project.files.length === 0 ? projectFileCounts[project.id] : undefined}
+              fileCount={
+                project.files.length === 0
+                  ? (projectFileCounts[project.id] ?? project.fileCount)
+                  : undefined
+              }
               selected={selectedProjectIds.includes(project.id)}
               selectionMode={selectionMode}
               workspaceActions={[

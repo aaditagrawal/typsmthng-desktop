@@ -415,7 +415,9 @@ export class VaultService {
     }
 
     const timer = setTimeout(() => {
-      void this.flushWrite(key);
+      void this.flushWrite(key).catch((error) => {
+        console.error(`Debounced flush failed for ${key}:`, error);
+      });
     }, WRITE_DEBOUNCE_MS);
 
     this.pendingWrites.set(key, {
@@ -430,16 +432,19 @@ export class VaultService {
   }
 
   async flushWrites(input: { rootPath?: string; path?: string }): Promise<{ ok: true }> {
-    const pendingKeys = [...this.pendingWrites.keys()].filter((key) => {
-      const pending = this.pendingWrites.get(key);
-      if (!pending) return false;
-      if (input.rootPath && pending.rootPath !== input.rootPath) return false;
-      if (input.path && pending.filePath !== input.path) return false;
-      return true;
-    });
-
-    await Promise.all(pendingKeys.map((key) => this.flushWrite(key)));
-    await this.writeQueue.drain();
+    // Re-scan after each pass so content staged during an in-flight flush is not skipped.
+    for (let pass = 0; pass < 8; pass += 1) {
+      const pendingKeys = [...this.pendingWrites.keys()].filter((key) => {
+        const pending = this.pendingWrites.get(key);
+        if (!pending) return false;
+        if (input.rootPath && pending.rootPath !== input.rootPath) return false;
+        if (input.path && pending.filePath !== input.path) return false;
+        return true;
+      });
+      if (pendingKeys.length === 0) break;
+      await Promise.all(pendingKeys.map((key) => this.flushWrite(key)));
+      await this.writeQueue.drain();
+    }
     return { ok: true };
   }
 
@@ -963,7 +968,9 @@ export class VaultService {
       }
 
       const timer = setTimeout(() => {
-        void this.flushWrite(nextKey);
+        void this.flushWrite(nextKey).catch((error) => {
+          console.error(`Debounced flush failed for ${nextKey}:`, error);
+        });
       }, WRITE_DEBOUNCE_MS);
 
       this.pendingWrites.set(nextKey, {
@@ -980,39 +987,67 @@ export class VaultService {
     const pending = this.pendingWrites.get(key);
     if (!pending) return;
 
-    this.pendingWrites.delete(key);
+    // Keep the entry until the write succeeds so a failed flush can retry and a
+    // newer stageFileWrite during the queue wait still wins via queuedAt.
     clearTimeout(pending.timer);
 
     await this.writeQueue.enqueue(async () => {
-      const absolutePath = path.join(pending.rootPath, pending.filePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, pending.content, "utf8");
+      const latest = this.pendingWrites.get(key);
+      if (!latest) return;
 
-      const stat = await fs.stat(absolutePath);
-      const cacheForVault = this.contentCache.get(pending.rootPath) ?? new Map<string, CachedFile>();
-      this.contentCache.set(pending.rootPath, cacheForVault);
-      cacheForVault.set(pending.filePath, {
-        mtimeMs: stat.mtimeMs,
-        entry: {
-          path: pending.filePath,
-          name: basenameOf(pending.filePath),
-          kind: "file",
-          parentPath: parentPathOf(pending.filePath),
-          extension: normalizeExtension(pending.filePath),
-          isHidden: isHiddenPath(pending.filePath),
-          isBinary: false,
-          lastModified: stat.mtimeMs,
-          sizeBytes: stat.size,
-          loaded: true,
-          content: pending.content,
-        },
-      });
+      try {
+        const absolutePath = path.join(latest.rootPath, latest.filePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, latest.content, "utf8");
 
-      this.suppressedWatchPaths.set(
-        `${pending.rootPath}::${pending.filePath}`,
-        Date.now() + SUPPRESSED_WATCH_EVENT_MS,
-      );
-      this.indexService.invalidate(pending.rootPath);
+        const stat = await fs.stat(absolutePath);
+        const cacheForVault = this.contentCache.get(latest.rootPath) ?? new Map<string, CachedFile>();
+        this.contentCache.set(latest.rootPath, cacheForVault);
+        cacheForVault.set(latest.filePath, {
+          mtimeMs: stat.mtimeMs,
+          entry: {
+            path: latest.filePath,
+            name: basenameOf(latest.filePath),
+            kind: "file",
+            parentPath: parentPathOf(latest.filePath),
+            extension: normalizeExtension(latest.filePath),
+            isHidden: isHiddenPath(latest.filePath),
+            isBinary: false,
+            lastModified: stat.mtimeMs,
+            sizeBytes: stat.size,
+            loaded: true,
+            content: latest.content,
+          },
+        });
+
+        this.suppressedWatchPaths.set(
+          `${latest.rootPath}::${latest.filePath}`,
+          Date.now() + SUPPRESSED_WATCH_EVENT_MS,
+        );
+        this.indexService.invalidate(latest.rootPath);
+
+        const current = this.pendingWrites.get(key);
+        if (current && current.queuedAt === latest.queuedAt) {
+          clearTimeout(current.timer);
+          this.pendingWrites.delete(key);
+        }
+      } catch (error) {
+        console.error(`Failed to flush vault write for ${latest.filePath}:`, error);
+        const current = this.pendingWrites.get(key);
+        if (current) {
+          clearTimeout(current.timer);
+          const timer = setTimeout(() => {
+            void this.flushWrite(key).catch((retryError) => {
+              console.error(`Retry flush failed for ${key}:`, retryError);
+            });
+          }, WRITE_DEBOUNCE_MS);
+          this.pendingWrites.set(key, {
+            ...current,
+            timer,
+          });
+        }
+        throw error;
+      }
     });
   }
 

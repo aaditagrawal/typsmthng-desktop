@@ -9,7 +9,12 @@ import { resolveSourceLocBatch } from '@/lib/compiler'
 import { forceCompile, getInjectedPreambleLineCount } from '@/lib/compile-manager'
 import { normalizeExtension } from '@/lib/file-classification'
 import { estimateFallbackLine, findApproxSourceLine, parseSourceSpanToRange } from '@/lib/preview-mapping'
-import { jumpToDiagnostic, formatDisplayRange } from '@/lib/editor-diagnostics'
+import {
+  jumpToDiagnostic,
+  formatDisplayRange,
+  normalizeDiagnosticPath,
+  waitForEditorPath,
+} from '@/lib/editor-diagnostics'
 import { perfMark, perfMeasure } from '@/lib/perf'
 import { LiveDomPreview } from '@/components/preview/live-dom-preview'
 import {
@@ -1125,6 +1130,7 @@ export function PreviewPanel() {
   const longPressStateRef = useRef<PreviewLongPressState | null>(null)
   const longPressTriggeredRef = useRef(false)
   const panStateRef = useRef<PreviewPanState | null>(null)
+  const jumpToErrorTokenRef = useRef(0)
   const [isPanning, setIsPanning] = useState(false)
   const { breaks: pageBreaks, cumulativeRatios } = usePageMetrics()
   const { clickToast, handleDoubleClick, locatePreviewContent } = usePreviewClickHandler(suppressPreviewClickRef)
@@ -1132,6 +1138,32 @@ export function PreviewPanel() {
   const errors = diagnostics.filter((d) => d.severity === 'error')
   const hasSvg = svg !== null
   const isTypstFile = !currentFilePath || normalizeExtension(currentFilePath) === '.typ'
+
+  const handleJumpToError = useCallback((d: (typeof errors)[number]) => {
+    if (!d.range) return
+    const token = ++jumpToErrorTokenRef.current
+    const targetPath = d.path ? normalizeDiagnosticPath(d.path) : null
+    const currentPath = useProjectStore.getState().currentFilePath
+    if (targetPath && normalizeDiagnosticPath(currentPath ?? '') !== targetPath) {
+      useProjectStore.getState().selectFile(targetPath)
+    }
+
+    void waitForEditorPath(targetPath, {
+      isCurrentPath: () => useProjectStore.getState().currentFilePath,
+      isFileLoaded: (path) => {
+        const project = useProjectStore.getState().getCurrentProject()
+        const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
+        return Boolean(file && (file.kind ?? 'file') === 'file' && file.loaded)
+      },
+      getEditorView: () => useEditorStore.getState().editorView,
+    }).then((view) => {
+      if (!view || token !== jumpToErrorTokenRef.current) return
+      const latestPath = useProjectStore.getState().currentFilePath
+      if (targetPath && normalizeDiagnosticPath(latestPath ?? '') !== targetPath) return
+      jumpToDiagnostic(view, d)
+    })
+  }, [])
+
   const liveModeActive = mode === 'live' && isTypstFile
 
   useEffect(() => {
@@ -1631,21 +1663,7 @@ export function PreviewPanel() {
                   borderRadius: '3px',
                 }}
                 onClick={() => {
-                  if (!d.range) return
-                  const view = useEditorStore.getState().editorView
-                  if (!view) return
-                  // If the error is in a different file, switch to it first
-                  const currentPath = useProjectStore.getState().currentFilePath
-                  if (d.path && d.path !== currentPath) {
-                    useProjectStore.getState().selectFile(d.path)
-                    // Wait for file swap to complete before jumping
-                    setTimeout(() => {
-                      const v = useEditorStore.getState().editorView
-                      if (v) jumpToDiagnostic(v, d)
-                    }, 100)
-                  } else {
-                    jumpToDiagnostic(view, d)
-                  }
+                  handleJumpToError(d)
                 }}
                 onMouseEnter={(e) => {
                   if (d.range) e.currentTarget.style.backgroundColor = 'var(--bg-hover)'

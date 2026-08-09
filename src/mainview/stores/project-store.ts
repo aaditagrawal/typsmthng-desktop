@@ -858,7 +858,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       return {
         projects: updateProjectList(state.projects, nextProject),
-        currentFilePath: lastPath ?? state.currentFilePath,
+        // Batch imports (drag/drop) should not yank the open editor to the last file.
+        currentFilePath:
+          normalizedEntries.length === 1
+            ? (lastPath ?? state.currentFilePath)
+            : state.currentFilePath,
       };
     });
   },

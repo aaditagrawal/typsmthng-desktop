@@ -22,6 +22,7 @@ import { ContextMenu, type ContextMenuAction } from '@/components/ui/context-men
 import { isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst } from '@/lib/latex-converter'
 import { revealLabel } from '@/lib/platform'
+import { normalizeImportEntryPath } from '@/lib/project-io'
 import { useProjectStore, type ProjectFile } from '@/stores/project-store'
 
 function fileIcon(name: string): LucideIcon {
@@ -207,20 +208,37 @@ function buildDuplicatePath(existingPaths: Iterable<string>, path: string): stri
   }
 }
 
+function resolveImportTargetPath(basePath: string, rawRelativePath: string): string | null {
+  try {
+    const relativeName = normalizeImportEntryPath(rawRelativePath)
+    if (!relativeName) return null
+    const combined = basePath ? `${normalizePath(basePath)}/${relativeName}` : relativeName
+    return normalizeImportEntryPath(combined)
+  } catch (err) {
+    console.warn(`Skipping unsafe import path "${rawRelativePath}":`, err)
+    return null
+  }
+}
+
 async function processImportedFiles(files: FileList | File[], basePath: string): Promise<void> {
   const textEntries: Array<{ path: string; content: string }> = []
   const binaryEntries: Array<{ path: string; data: Uint8Array }> = []
   const texPathsToReplace: string[] = []
+  const skipped: string[] = []
   const existingPaths = new Set(
     (useProjectStore.getState().getCurrentProject()?.files ?? []).map((entry) =>
-      entry.path.replace(/^\/+/, ''),
+      normalizePath(entry.path),
     ),
   )
 
   for (const file of Array.from(files)) {
     const fileWithRelativePath = file as File & { webkitRelativePath?: string }
-    const relativeName = normalizePath(fileWithRelativePath.webkitRelativePath || file.name)
-    const targetPath = basePath ? `${basePath}/${relativeName}` : relativeName
+    const rawRelative = fileWithRelativePath.webkitRelativePath || file.name
+    const targetPath = resolveImportTargetPath(basePath, rawRelative)
+    if (!targetPath) {
+      skipped.push(file.name)
+      continue
+    }
 
     if (shouldTreatUploadAsText(file)) {
       let content = await file.text()
@@ -250,19 +268,46 @@ async function processImportedFiles(files: FileList | File[], basePath: string):
     }
   }
 
-  if (textEntries.length > 0) {
-    await useProjectStore.getState().createFilesBatch(textEntries)
+  const plannedPaths = [
+    ...textEntries.map((entry) => entry.path),
+    ...binaryEntries.map((entry) => entry.path),
+  ]
+  const overwriting = plannedPaths.filter((path) => existingPaths.has(path))
+  if (overwriting.length > 0) {
+    const preview = overwriting.slice(0, 5).join('\n')
+    const ok = window.confirm(
+      `Replace ${overwriting.length} existing file${overwriting.length === 1 ? '' : 's'}?\n\n${preview}${
+        overwriting.length > 5 ? '\n…' : ''
+      }`,
+    )
+    if (!ok) return
   }
-  if (binaryEntries.length > 0) {
-    await useProjectStore.getState().addBinaryFilesBatch(binaryEntries)
-  }
-  // Dropping .tex writes a converted .typ; remove any leftover original .tex.
-  for (const texPath of texPathsToReplace) {
-    try {
-      await useProjectStore.getState().deleteFile(texPath)
-    } catch (err) {
-      console.warn(`Failed to remove replaced LaTeX source "${texPath}":`, err)
+
+  try {
+    if (textEntries.length > 0) {
+      await useProjectStore.getState().createFilesBatch(textEntries)
     }
+    if (binaryEntries.length > 0) {
+      await useProjectStore.getState().addBinaryFilesBatch(binaryEntries)
+    }
+    // Dropping .tex writes a converted .typ; remove any leftover original .tex.
+    for (const texPath of texPathsToReplace) {
+      try {
+        await useProjectStore.getState().deleteFile(texPath)
+      } catch (err) {
+        console.warn(`Failed to remove replaced LaTeX source "${texPath}":`, err)
+      }
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Import failed'
+    window.alert(`Could not import files: ${message}`)
+    return
+  }
+
+  if (skipped.length > 0) {
+    window.alert(
+      `Skipped ${skipped.length} unsafe or invalid path${skipped.length === 1 ? '' : 's'} during import.`,
+    )
   }
 }
 
