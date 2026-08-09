@@ -179,9 +179,12 @@ export class AppStateService {
   }
 
   async setWindowState(windowState: WindowState): Promise<AppMetadata> {
+    // Persist the live frame as-is. Clamping belongs on restore/load so a user who
+    // shrinks below MIN_* is not surprised by a larger window next launch unless
+    // the saved values are corrupt/unusable at restore time.
     return this.update((current) => ({
       ...current,
-      windowState: clampWindowState(windowState),
+      windowState,
     }));
   }
 
