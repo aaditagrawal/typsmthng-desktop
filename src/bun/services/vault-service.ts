@@ -134,15 +134,17 @@ export class VaultService {
   private watcherBatch: ExternalVaultEvent[] = [];
   private watcherFlushTimer: ReturnType<typeof setTimeout> | null = null;
   /** Prefer this vault on the first bootstrap (CLI / OS file open). */
-  private startupVaultOverride: string | null = null;
+  private startupVaultOverride: { rootPath: string; selectFile: string | null } | null = null;
 
   async waitUntilReady(): Promise<{ ready: true }> {
     await this.appState.load();
     return { ready: true as const };
   }
 
-  setStartupVaultOverride(rootPath: string | null): void {
-    this.startupVaultOverride = rootPath;
+  setStartupVaultOverride(rootPath: string | null, selectFile: string | null = null): void {
+    this.startupVaultOverride = rootPath
+      ? { rootPath, selectFile }
+      : null;
   }
 
   async getBootstrapState(window: DesktopWindow): Promise<BootstrapState> {
@@ -151,6 +153,9 @@ export class VaultService {
     // If a vault is already open (CLI race, prior bootstrap), return it instead of
     // forcing reopenLastVaultPath again and yanking the user off home/CLI target.
     if (this.activeVaultRoot) {
+      // CLI already won the race — drop any leftover override so later loadProjects
+      // calls (home import, etc.) do not reopen it.
+      this.startupVaultOverride = null;
       try {
         const activeVault = await this.loadVaultSnapshot(this.activeVaultRoot, metadata);
         return { metadata, activeVault };
@@ -159,12 +164,17 @@ export class VaultService {
       }
     }
 
-    const overridePath = this.startupVaultOverride;
+    const override = this.startupVaultOverride;
     this.startupVaultOverride = null;
-    if (overridePath) {
-      const activeVault = await this.openVault(overridePath, window, null, {
+    if (override) {
+      const activeVault = await this.openVault(override.rootPath, window, override.selectFile, {
         removeRecentOnFailure: false,
       });
+      if (activeVault && override.selectFile) {
+        try {
+          await this.appState.persistLastFile(override.rootPath, override.selectFile);
+        } catch {}
+      }
       metadata = await this.appState.load();
       return { metadata, activeVault };
     }
@@ -271,10 +281,14 @@ export class VaultService {
   }
 
   async closeVault(): Promise<{ ok: true }> {
-    this.activeWindow?.webview.rpc?.send.activeVaultClosed();
-    await this.stopWatcher();
+    // Clear active root immediately so a concurrent getBootstrapState during goHome
+    // cannot restore the vault the user is leaving.
+    const window = this.activeWindow;
     this.activeVaultRoot = null;
     this.activeWindow = null;
+    this.startupVaultOverride = null;
+    window?.webview.rpc?.send.activeVaultClosed();
+    await this.stopWatcher();
     // Explicit home navigation should not restore this vault on the next load/launch.
     await this.appState.update((current) => ({
       ...current,
