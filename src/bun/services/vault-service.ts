@@ -26,6 +26,7 @@ import { BackgroundTaskQueue } from "./background-task-queue";
 import { FullTextSearchService } from "./full-text-search";
 import { VaultIndexService } from "./vault-index";
 import { resolveVaultMainFile } from "./vault-main-file";
+import { shouldReopenVault } from "./vault-reopen";
 
 const WRITE_DEBOUNCE_MS = 450;
 const SUPPRESSED_WATCH_EVENT_MS = 1_250;
@@ -138,12 +139,27 @@ export class VaultService {
     return { ready: true as const };
   }
 
-  async getBootstrapState(): Promise<BootstrapState> {
-    const metadata = await this.hydrateRecentVaultMetadata(await this.appState.load());
-    return {
-      metadata,
-      activeVault: null,
-    };
+  async getBootstrapState(window: DesktopWindow): Promise<BootstrapState> {
+    let metadata = await this.hydrateRecentVaultMetadata(await this.appState.load());
+    const reopenPath = metadata.reopenLastVaultPath;
+
+    if (!reopenPath) {
+      return { metadata, activeVault: null };
+    }
+
+    const pathExists = await this.directoryExists(reopenPath);
+    if (!shouldReopenVault(metadata, pathExists)) {
+      // Stale reopen path (directory gone) — clear so next launch stays on home.
+      metadata = await this.appState.update((current) => ({
+        ...current,
+        reopenLastVaultPath: null,
+      }));
+      return { metadata, activeVault: null };
+    }
+
+    const activeVault = await this.openVault(reopenPath, window);
+    metadata = await this.appState.load();
+    return { metadata, activeVault };
   }
 
   async openVaultDialog(window: DesktopWindow): Promise<VaultRecord | null> {
@@ -532,6 +548,15 @@ export class VaultService {
   async getStoredWindowState() {
     const metadata = await this.appState.load();
     return metadata.windowState;
+  }
+
+  private async directoryExists(rootPath: string): Promise<boolean> {
+    try {
+      const stat = await fs.stat(rootPath);
+      return stat.isDirectory();
+    } catch {
+      return false;
+    }
   }
 
   private createBlankScaffold(name: string): ProjectScaffold {

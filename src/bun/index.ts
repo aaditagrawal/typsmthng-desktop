@@ -155,7 +155,8 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 	handlers: {
 		requests: {
 			waitUntilReady: () => vaultService.waitUntilReady(),
-			getBootstrapState: () => vaultService.getBootstrapState(),
+			getBootstrapState: () =>
+				vaultService.getBootstrapState(requireMainWindow()),
 			openVaultDialog: () => vaultService.openVaultDialog(requireMainWindow()),
 			openRecentVault: ({ rootPath }) =>
 				vaultService.openRecentVault(rootPath, requireMainWindow()),

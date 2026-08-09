@@ -16,6 +16,8 @@ import {
   onExternalVaultEvents,
   onMetadataUpdated,
 } from "@/lib/desktop-rpc";
+import { perfMark, perfMeasure } from "@/lib/perf";
+import { preloadWorkspaceShell } from "@/components/workspace/preload";
 import { useEditorStore } from "./editor-store";
 
 export interface ProjectFile {
@@ -529,6 +531,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadProjects: async () => {
+    const start = perfMark();
     bindSubscriptions();
     await desktopRpc.request.waitUntilReady();
     const bootstrap = await desktopRpc.request.getBootstrapState();
@@ -545,6 +548,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
 
     if (activeProject) {
+      // Start workspace chunk download before Suspense asks for it.
+      void preloadWorkspaceShell();
       const mainTextFile = activeProject.files.find(
         (entry) =>
           entry.path === activeProject.mainFile &&
@@ -558,6 +563,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
     }
     updateWindowTitle();
+    perfMeasure("store.load_projects", start, {
+      restored: activeProject ? 1 : 0,
+    });
   },
 
   createProject: async (name, scaffold, options) => {

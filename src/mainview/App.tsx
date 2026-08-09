@@ -6,6 +6,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { preloadWorkspaceShell } from '@/components/workspace/preload'
 import { isLinux, isMacOS } from '@/lib/platform'
 import { desktopRpc } from '@/lib/desktop-rpc'
+import { perfMark, perfMeasure } from '@/lib/perf'
 
 const HomeShell = lazy(() => import('@/components/home/home-shell'))
 const WorkspaceShell = lazy(() => import('@/components/workspace/workspace-shell'))
@@ -41,7 +42,10 @@ export default function App() {
   const translucent = useSettingsStore((s) => s.translucent)
 
   useEffect(() => {
-    loadProjects()
+    const start = perfMark()
+    void loadProjects().then(() => {
+      perfMeasure('app.bootstrap', start)
+    })
     useSettingsStore.getState().loadSettings()
   }, [loadProjects])
 
