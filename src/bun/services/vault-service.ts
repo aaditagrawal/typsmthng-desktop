@@ -85,11 +85,33 @@ function normalizeRelativePath(rootPath: string, absolutePath: string): string |
 }
 
 function sanitizeRelativePath(input: string): string {
-  return input.replace(/^[/\\]+/, "");
+  return toPosixPath(input).replace(/^[/\\]+/, "");
+}
+
+/** Reject empty / traversal segments so scaffold writes and export reads stay inside the vault. */
+function assertSafeVaultRelativePath(input: string): string {
+  const sanitized = sanitizeRelativePath(input);
+  if (!sanitized) {
+    throw new Error("Invalid empty vault path.");
+  }
+  const normalized = path.posix.normalize(sanitized);
+  if (
+    !normalized
+    || normalized === ".."
+    || normalized.startsWith("../")
+    || path.posix.isAbsolute(normalized)
+  ) {
+    throw new Error(`Path escapes vault root: ${input}`);
+  }
+  const segments = normalized.split("/");
+  if (segments.some((segment) => segment === "..")) {
+    throw new Error(`Path escapes vault root: ${input}`);
+  }
+  return normalized;
 }
 
 function toWorkspacePath(input: string): string {
-  const sanitized = sanitizeRelativePath(toPosixPath(input));
+  const sanitized = sanitizeRelativePath(input);
   return sanitized ? `/${sanitized}` : "/";
 }
 
@@ -155,8 +177,9 @@ export class VaultService {
     const restoreActive = options?.restoreActive !== false;
 
     // Metadata-only refresh (e.g. after home import) must not open/select a vault.
+    // Keep startupVaultOverride intact so a pending CLI/OS open is not dropped if this
+    // refresh races ahead of the first restoring bootstrap.
     if (!restoreActive) {
-      this.startupVaultOverride = null;
       return { metadata, activeVault: null };
     }
 
@@ -312,10 +335,13 @@ export class VaultService {
 
     const scaffold = params.scaffold ?? this.createBlankScaffold(name);
     for (const file of scaffold.files) {
-      const absolutePath = path.join(rootPath, sanitizeRelativePath(file.path));
+      const relativePath = assertSafeVaultRelativePath(file.path);
+      const absolutePath = path.join(rootPath, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       if (file.isBinary && file.binaryData) {
         await fs.writeFile(absolutePath, file.binaryData);
+      } else if (file.isBinary) {
+        throw new Error(`Scaffold binary "${file.path}" is missing file data.`);
       } else {
         await fs.writeFile(absolutePath, file.content, "utf8");
       }
@@ -634,10 +660,18 @@ export class VaultService {
   /** Read all vault files from disk for zip export (works for unloaded recent projects). */
   async getVaultExportBundle(rootPath: string): Promise<VaultExportBundle | null> {
     try {
+      // Defense in depth: exporters also flush, but direct RPC callers must not zip stale disk.
+      await this.flushWrites({ rootPath });
+
       const metadata = await this.appState.load();
       const recent = metadata.recentVaults.find((vault) => vault.rootPath === rootPath);
       const includeHidden = recent?.hiddenFilesVisible ?? false;
       const index = await this.indexService.getIndex(rootPath, includeHidden);
+      if (index.truncated) {
+        throw new Error(
+          `Project "${path.basename(rootPath)}" has too many files to export completely.`,
+        );
+      }
       const fileEntries = index.entries.filter(
         (entry) =>
           entry.kind === "file"
@@ -648,25 +682,26 @@ export class VaultService {
 
       const files = await Promise.all(
         fileEntries.map(async (entry) => {
-          const absolutePath = path.join(rootPath, entry.path);
+          const relativePath = assertSafeVaultRelativePath(entry.path);
+          const absolutePath = path.join(rootPath, relativePath);
           try {
             if (entry.isBinary) {
               const buffer = await fs.readFile(absolutePath);
               return {
-                path: entry.path,
+                path: relativePath,
                 isBinary: true,
                 binaryData: new Uint8Array(buffer),
               };
             }
             const content = await fs.readFile(absolutePath, "utf8");
             return {
-              path: entry.path,
+              path: relativePath,
               isBinary: false,
               content,
             };
           } catch (error) {
             throw new Error(
-              `Failed to read "${entry.path}" while exporting ${path.basename(rootPath)}: ${
+              `Failed to read "${relativePath}" while exporting ${path.basename(rootPath)}: ${
                 error instanceof Error ? error.message : "unknown error"
               }`,
             );

@@ -56,6 +56,8 @@ import {
   importAllProjects,
   importLatexProject,
   importLatexZip,
+  importProject,
+  normalizeImportEntryPath,
   resolveImportedMainFile,
   stripZipCommonRootPrefix,
   uniqueExportFolderName,
@@ -125,6 +127,20 @@ describe('uniqueExportFolderName', () => {
     expect(first).toBe('Paper')
     expect(second).toBe('Paper-Paper-B')
     expect(used.size).toBe(2)
+  })
+})
+
+describe('normalizeImportEntryPath', () => {
+  it('normalizes Windows separators and skips folder markers', () => {
+    expect(normalizeImportEntryPath('Alpha\\main.typ')).toBe('Alpha/main.typ')
+    expect(normalizeImportEntryPath('Alpha/.folder')).toBeNull()
+    expect(normalizeImportEntryPath('__MACOSX/foo.typ')).toBeNull()
+  })
+
+  it('resolves in-root .. segments and rejects escapes', () => {
+    expect(normalizeImportEntryPath('src/../main.typ')).toBe('main.typ')
+    expect(() => normalizeImportEntryPath('../evil.typ')).toThrow(/escapes project root/)
+    expect(() => normalizeImportEntryPath('a/../../evil.typ')).toThrow(/escapes project root/)
   })
 })
 
@@ -299,6 +315,87 @@ describe('importAllProjects', () => {
     expect(paths).toEqual(['/main.typ', '/refs.bib'])
     expect(scaffold.mainFile).toBe('/main.typ')
   })
+
+  it('imports projects from Windows-style zip separators', async () => {
+    const zipped = zipSync({
+      'Alpha\\main.typ': strToU8('= Alpha\n'),
+      'Beta\\paper.typ': strToU8('= Beta\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'win.zip',
+      { type: 'application/zip' },
+    )
+
+    const imported = await importAllProjects(file)
+    expect(imported).toBe(2)
+    const byName = Object.fromEntries(
+      createProjectMock.mock.calls.map((call) => [call[0], call[1]]),
+    )
+    expect(byName.Alpha.files.map((entry: { path: string }) => entry.path)).toEqual(['/main.typ'])
+    expect(byName.Beta.files.map((entry: { path: string }) => entry.path)).toEqual(['/paper.typ'])
+  })
+
+  it('throws when createProject fails for a project folder', async () => {
+    createProjectMock.mockResolvedValue('')
+    const zipped = zipSync({
+      'Alpha/main.typ': strToU8('= Alpha\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'partial.zip',
+      { type: 'application/zip' },
+    )
+
+    await expect(importAllProjects(file)).rejects.toThrow(/Could not import project "Alpha"/)
+  })
+
+  it('rejects archives with path traversal entries', async () => {
+    const zipped = zipSync({
+      'Alpha/../../evil.typ': strToU8('= Evil\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'slip.zip',
+      { type: 'application/zip' },
+    )
+
+    await expect(importAllProjects(file)).rejects.toThrow(/escapes project root/)
+  })
+})
+
+describe('importProject', () => {
+  beforeEach(() => {
+    createProjectMock.mockReset()
+    createProjectMock.mockResolvedValue('project-id')
+  })
+
+  it('skips .folder markers and rejects zip-slip paths', async () => {
+    const zipped = zipSync({
+      'main.typ': strToU8('= Ok\n'),
+      '.folder': strToU8(''),
+      'chapters/.folder': strToU8(''),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'single.zip',
+      { type: 'application/zip' },
+    )
+
+    await importProject(file)
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    expect(scaffold.files.map((entry: { path: string }) => entry.path)).toEqual(['/main.typ'])
+
+    const slip = zipSync({
+      '../evil.typ': strToU8('= Evil\n'),
+    })
+    const slipFile = new File(
+      [slip.buffer.slice(slip.byteOffset, slip.byteOffset + slip.byteLength) as ArrayBuffer],
+      'slip.zip',
+      { type: 'application/zip' },
+    )
+    await expect(importProject(slipFile)).rejects.toThrow(/escapes project root/)
+  })
 })
 
 describe('export flush and nesting', () => {
@@ -342,5 +439,13 @@ describe('export flush and nesting', () => {
     const unzipped = unzipSync(buffer)
     expect(Object.keys(unzipped).sort()).toEqual(['Solo/main.typ'])
     expect(strFromU8(unzipped['Solo/main.typ']!)).toBe('= Solo\n')
+  })
+
+  it('throws when a binary export entry is missing binaryData', async () => {
+    getVaultExportBundleMock.mockResolvedValue({
+      files: [{ path: 'fig.png', isBinary: true }],
+    })
+
+    await expect(exportProject('/docs/Solo')).rejects.toThrow(/Missing binary data/)
   })
 })

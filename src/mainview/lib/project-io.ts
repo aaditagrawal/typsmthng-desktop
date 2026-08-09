@@ -55,6 +55,39 @@ function basenamePath(input: string): string {
   return separatorIndex === -1 ? normalized : normalized.slice(separatorIndex + 1)
 }
 
+function isSkippedZipMetaPath(path: string): boolean {
+  return path.includes('__MACOSX') || path.includes('.DS_Store')
+}
+
+function isFolderMarkerPath(path: string): boolean {
+  return path === '.folder' || path.endsWith('/.folder')
+}
+
+/** Normalize zip/folder entry paths; reject traversal and skip archive junk. */
+export function normalizeImportEntryPath(path: string): string | null {
+  const posix = path.replace(/\\/g, '/')
+  if (!posix || posix.endsWith('/')) return null
+  if (isSkippedZipMetaPath(posix)) return null
+
+  const withoutSlash = posix.replace(/^\/+/, '')
+  if (!withoutSlash || isFolderMarkerPath(withoutSlash)) return null
+
+  const resolved: string[] = []
+  for (const segment of withoutSlash.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      if (resolved.length === 0) {
+        throw new Error(`Archive path escapes project root: ${path}`)
+      }
+      resolved.pop()
+      continue
+    }
+    resolved.push(segment)
+  }
+  if (resolved.length === 0) return null
+  return resolved.join('/')
+}
+
 /** Prefer converted .tex→.typ over a same-named shipped .typ when both exist. */
 function setImportedTextFile(
   filesByPath: Map<string, ProjectFile>,
@@ -124,10 +157,15 @@ async function collectProjectExportFiles(project: Project): Promise<Record<strin
   }
   for (const file of bundle.files) {
     const zipPath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-    if (zipPath.endsWith('.folder')) continue
-    if (file.isBinary && file.binaryData) {
+    if (!zipPath || zipPath === '.folder' || zipPath.endsWith('/.folder')) continue
+    if (file.isBinary) {
+      if (!file.binaryData) {
+        throw new Error(
+          `Missing binary data for "${zipPath}" while exporting "${project.name}".`,
+        )
+      }
       files[zipPath] = file.binaryData
-    } else if (!file.isBinary) {
+    } else {
       files[zipPath] = strToU8(file.content ?? '')
     }
   }
@@ -262,12 +300,13 @@ export async function importAllProjects(file: File): Promise<number> {
   // Group files by top-level folder (each folder = one project)
   const projectFolders = new Map<string, Array<{ path: string; data: Uint8Array }>>()
 
-  for (const [path, data] of Object.entries(unzipped)) {
-    if (path.endsWith('/') || path.includes('__MACOSX') || path.includes('.DS_Store')) continue
-    const slashIndex = path.indexOf('/')
+  for (const [rawPath, data] of Object.entries(unzipped)) {
+    const normalized = normalizeImportEntryPath(rawPath)
+    if (!normalized) continue
+    const slashIndex = normalized.indexOf('/')
     if (slashIndex < 0) continue // skip files not in a folder
-    const folderName = path.slice(0, slashIndex)
-    const filePath = path.slice(slashIndex) // keeps leading slash
+    const folderName = normalized.slice(0, slashIndex)
+    const filePath = normalized.slice(slashIndex) // keeps leading slash
     if (!projectFolders.has(folderName)) {
       projectFolders.set(folderName, [])
     }
@@ -287,7 +326,6 @@ export async function importAllProjects(file: File): Promise<number> {
     const convertedFromTex = new Set<string>()
 
     for (const { path, data } of entries) {
-      if (path.endsWith('.folder')) continue
       const fullPath = applyZipCommonRootStrip(path, commonRoot)
       const isText = isKnownTextPath(path)
       if (isText) {
@@ -333,9 +371,12 @@ export async function importAllProjects(file: File): Promise<number> {
       })),
       mainFile: resolveImportedMainFile(projectFiles),
     }, { ifExists: 'fail', select: false })
-    if (id) {
-      imported++
+    if (!id) {
+      throw new Error(
+        `Could not import project "${folderName}" (cancelled or a project with that name already exists).`,
+      )
     }
+    imported++
   }
 
   // Go back to home after import
@@ -359,11 +400,10 @@ export async function importProject(file: File): Promise<void> {
 
   const filesByPath = new Map<string, ProjectFile>()
   const convertedFromTex = new Set<string>()
-  const zipEntries = Object.entries(unzipped).filter(([path]) => (
-    !path.endsWith('/')
-    && !path.includes('__MACOSX')
-    && !path.includes('.DS_Store')
-  ))
+  const zipEntries = Object.entries(unzipped).flatMap(([rawPath, data]) => {
+    const normalized = normalizeImportEntryPath(rawPath)
+    return normalized ? [[normalized, data] as const] : []
+  })
   const commonRoot = stripZipCommonRootPrefix(zipEntries.map(([path]) => path))
 
   for (const [path, data] of zipEntries) {
@@ -421,9 +461,15 @@ export async function importLatexProject(
   let texCount = 0
   let lastMeta: ConversionResult['metadata'] = { packages: [] }
 
-  const commonRoot = stripZipCommonRootPrefix(files.map((entry) => entry.relativePath))
+  const normalizedInputs = files.map((entry) => {
+    const normalized = normalizeImportEntryPath(entry.relativePath)
+    if (!normalized) return null
+    return { relativePath: normalized, file: entry.file }
+  }).filter((entry): entry is { relativePath: string; file: File } => entry !== null)
 
-  for (const { relativePath, file } of files) {
+  const commonRoot = stripZipCommonRootPrefix(normalizedInputs.map((entry) => entry.relativePath))
+
+  for (const { relativePath, file } of normalizedInputs) {
     const path = applyZipCommonRootStrip(relativePath, commonRoot)
 
     if (isLatexPath(file.name)) {
@@ -498,11 +544,10 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
   let texCount = 0
   let lastMeta: ConversionResult['metadata'] = { packages: [] }
 
-  const zipEntries = Object.entries(unzipped).filter(([path]) => (
-    !path.endsWith('/')
-    && !path.includes('__MACOSX')
-    && !path.includes('.DS_Store')
-  ))
+  const zipEntries = Object.entries(unzipped).flatMap(([rawPath, data]) => {
+    const normalized = normalizeImportEntryPath(rawPath)
+    return normalized ? [[normalized, data] as const] : []
+  })
   const commonRoot = stripZipCommonRootPrefix(zipEntries.map(([path]) => path))
 
   for (const [path, data] of zipEntries) {
