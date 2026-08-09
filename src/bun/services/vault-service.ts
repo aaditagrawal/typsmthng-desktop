@@ -244,7 +244,16 @@ export class VaultService {
         if (this.activeVaultRoot === override.rootPath) {
           await this.closeVault({ rootPath: override.rootPath });
         }
-        metadata = await this.appState.load();
+        // upsertRecentVault sets reopen; clear it so the next launch does not
+        // auto-open a vault that just failed to activate (openVault catch may
+        // already have cleared activeVaultRoot, skipping closeVault above).
+        metadata = await this.appState.update((current) => ({
+          ...current,
+          reopenLastVaultPath:
+            current.reopenLastVaultPath === override.rootPath
+              ? null
+              : current.reopenLastVaultPath,
+        }));
         return { metadata, activeVault: null };
       }
       if (override.selectFile) {

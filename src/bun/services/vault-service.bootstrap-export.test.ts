@@ -235,6 +235,13 @@ describe('VaultService.getBootstrapState / getVaultExportBundle', () => {
     const { VaultService } = await loadModule()
     const service = new VaultService()
     const closeVault = vi.spyOn(service, 'closeVault').mockResolvedValue({ ok: true as const })
+    appStateLoadMock.mockResolvedValue(
+      baseMetadata({ reopenLastVaultPath: '/partial-vault' }),
+    )
+    appStateUpdateMock.mockImplementation(async (mutator: (current: unknown) => unknown) => {
+      const next = mutator(baseMetadata({ reopenLastVaultPath: '/partial-vault' }))
+      return next
+    })
 
     service.setStartupVaultOverride('/partial-vault', null)
     vi.spyOn(
@@ -248,6 +255,32 @@ describe('VaultService.getBootstrapState / getVaultExportBundle', () => {
     const bootstrap = await service.getBootstrapState({} as never, { restoreActive: true })
     expect(bootstrap.activeVault).toBeNull()
     expect(closeVault).toHaveBeenCalledWith({ rootPath: '/partial-vault' })
+    expect(appStateUpdateMock).toHaveBeenCalled()
+    expect(bootstrap.metadata.reopenLastVaultPath).toBeNull()
+  })
+
+  it('getBootstrapState clears reopen when override openVault fails after catch cleared active', async () => {
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+    const closeVault = vi.spyOn(service, 'closeVault').mockResolvedValue({ ok: true as const })
+    appStateLoadMock.mockResolvedValue(
+      baseMetadata({ reopenLastVaultPath: '/failed-override' }),
+    )
+    appStateUpdateMock.mockImplementation(async (mutator: (current: unknown) => unknown) => {
+      const next = mutator(baseMetadata({ reopenLastVaultPath: '/failed-override' }))
+      return next
+    })
+
+    service.setStartupVaultOverride('/failed-override', null)
+    vi.spyOn(
+      service as unknown as { openVault: (...args: unknown[]) => Promise<unknown> },
+      'openVault',
+    ).mockResolvedValue(null)
+
+    const bootstrap = await service.getBootstrapState({} as never, { restoreActive: true })
+    expect(bootstrap.activeVault).toBeNull()
+    expect(closeVault).not.toHaveBeenCalled()
+    expect(bootstrap.metadata.reopenLastVaultPath).toBeNull()
   })
 
   it('flushes pending writes, rejects truncated indexes, and blocks path escape', async () => {
