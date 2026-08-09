@@ -74,17 +74,12 @@ async function createImportedProject(projectName: string, projectFiles: ProjectF
 async function collectProjectExportFiles(project: Project): Promise<Record<string, Uint8Array>> {
   const files: Record<string, Uint8Array> = {}
 
-  if (project.files.length > 0) {
-    for (const file of project.files) {
-      const zipPath = file.path.startsWith('/') ? file.path.slice(1) : file.path
-      if (zipPath.endsWith('.folder')) continue
-      if (file.isBinary && file.binaryData) {
-        files[zipPath] = file.binaryData
-      } else {
-        files[zipPath] = strToU8(file.content)
-      }
-    }
-    return files
+  // Always export from disk. Vault snapshots often keep only the main file hydrated,
+  // so serializing project.files would produce empty companion files/binaries.
+  try {
+    await desktopRpc.request.flushWrites({ rootPath: project.rootPath })
+  } catch (err) {
+    console.warn(`Failed to flush writes before exporting "${project.name}":`, err)
   }
 
   const bundle = await desktopRpc.request.getVaultExportBundle({ rootPath: project.rootPath })
@@ -96,7 +91,7 @@ async function collectProjectExportFiles(project: Project): Promise<Record<strin
     if (zipPath.endsWith('.folder')) continue
     if (file.isBinary && file.binaryData) {
       files[zipPath] = file.binaryData
-    } else {
+    } else if (!file.isBinary) {
       files[zipPath] = strToU8(file.content ?? '')
     }
   }

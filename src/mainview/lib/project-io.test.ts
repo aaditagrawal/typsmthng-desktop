@@ -29,6 +29,7 @@ vi.mock('@/lib/desktop-rpc', () => ({
   desktopRpc: {
     request: {
       getVaultExportBundle: vi.fn(),
+      flushWrites: vi.fn().mockResolvedValue({ ok: true }),
     },
   },
 }))
