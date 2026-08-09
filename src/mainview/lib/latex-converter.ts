@@ -907,7 +907,10 @@ function emitTableEnv(
       } else {
         tableContent += emitNode(node, warnings, false)
       }
-    } else if (node.type === 'environment' && ['tabular', 'tabular*', 'array'].includes((node as Ast.Environment).env)) {
+    } else if (
+      node.type === 'environment' &&
+      ['tabular', 'tabular*', 'array'].includes(getEnvName(node as Ast.Environment))
+    ) {
       tableContent += emitTable(node as Ast.Environment, warnings)
     } else if (node.type !== 'whitespace' && node.type !== 'parbreak') {
       tableContent += emitNode(node, warnings, false)

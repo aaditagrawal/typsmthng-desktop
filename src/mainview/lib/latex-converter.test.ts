@@ -159,4 +159,26 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).not.toContain('already.typ.typ')
     })
   })
+
+  describe('table environment with nested tabular', () => {
+    it('emits the table body for \\begin{table}...\\begin{tabular}', async () => {
+      const source =
+        '\\begin{table}\\begin{tabular}{cc} a & b \\\\ \\end{tabular}\\end{table}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('#table(')
+      expect(result.typst).toContain('columns: 2')
+      expect(result.typst).toContain('[a], [b]')
+    })
+
+    it('emits the table body for the table* variant', async () => {
+      const source =
+        '\\begin{table*}\\begin{tabular}{cc} a & b \\\\ \\end{tabular}\\end{table*}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('#table(')
+      expect(result.typst).toContain('columns: 2')
+      expect(result.typst).toContain('[a], [b]')
+    })
+  })
 })
