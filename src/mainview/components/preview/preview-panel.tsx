@@ -577,7 +577,7 @@ function applyZoomStyle(pageEl: HTMLElement, fitMode: 'width' | 'page' | 'custom
   if (fitMode === 'page') {
     pageEl.style.width = ''
     pageEl.style.maxWidth = '100%'
-    pageEl.style.maxHeight = 'calc(100vh - 140px)'
+    pageEl.style.maxHeight = 'calc(100dvh - 140px)'
     pageEl.style.transform = ''
     pageEl.style.transformOrigin = ''
     return

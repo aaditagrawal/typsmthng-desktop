@@ -6,17 +6,13 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import type { DesktopRPC } from "../shared/rpc";
 import type { UpdateState } from "../shared/update-types";
+import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
 import { runPlatformSetup } from "./services/platform-setup";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
-const DEFAULT_FRAME = {
-	x: 180,
-	y: 80,
-	width: 1480,
-	height: 940,
-};
+const DEFAULT_FRAME = DEFAULT_WINDOW_FRAME;
 const WINDOW_STATE_PERSIST_MS = 1_500;
 const MAC_TRAFFIC_LIGHTS_X = 14;
 const MAC_TRAFFIC_LIGHTS_Y = 14;
@@ -332,16 +328,22 @@ function setupMacOSMenu(window: BrowserWindow<DesktopBunRPC>) {
 }
 
 const storedWindowState = await vaultService.getStoredWindowState();
+const restoredFrame = clampWindowState({
+	x: storedWindowState?.x ?? DEFAULT_FRAME.x,
+	y: storedWindowState?.y ?? DEFAULT_FRAME.y,
+	width: storedWindowState?.width ?? DEFAULT_FRAME.width,
+	height: storedWindowState?.height ?? DEFAULT_FRAME.height,
+});
 const url = await getMainViewUrl();
 
 mainWindow = new BrowserWindow<DesktopBunRPC>({
 	title: "typsmthng",
 	url,
 	frame: {
-		x: storedWindowState?.x ?? DEFAULT_FRAME.x,
-		y: storedWindowState?.y ?? DEFAULT_FRAME.y,
-		width: storedWindowState?.width ?? DEFAULT_FRAME.width,
-		height: storedWindowState?.height ?? DEFAULT_FRAME.height,
+		x: restoredFrame.x ?? DEFAULT_FRAME.x,
+		y: restoredFrame.y ?? DEFAULT_FRAME.y,
+		width: restoredFrame.width,
+		height: restoredFrame.height,
 	},
 	titleBarStyle: isMacOS ? "hiddenInset" : "hidden",
 	transparent: isMacOS,

@@ -3,6 +3,7 @@ import path from "node:path";
 import { Utils } from "electrobun/bun";
 
 import type { AppMetadata, RecentVaultRecord, WindowState } from "../../shared/rpc";
+import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../../shared/window-state";
 
 const METADATA_FILENAME = "app-state.json";
 
@@ -11,8 +12,10 @@ const DEFAULT_METADATA: AppMetadata = {
   recentVaults: [],
   reopenLastVaultPath: null,
   windowState: {
-    width: 1440,
-    height: 920,
+    x: DEFAULT_WINDOW_FRAME.x,
+    y: DEFAULT_WINDOW_FRAME.y,
+    width: DEFAULT_WINDOW_FRAME.width,
+    height: DEFAULT_WINDOW_FRAME.height,
   },
 };
 
@@ -55,7 +58,9 @@ function normalizeMetadata(metadata: AppMetadata): AppMetadata {
       })
       .slice(0, 24),
     reopenLastVaultPath: metadata.reopenLastVaultPath ?? null,
-    windowState: metadata.windowState ?? DEFAULT_METADATA.windowState,
+    windowState: metadata.windowState
+      ? clampWindowState(metadata.windowState)
+      : DEFAULT_METADATA.windowState,
   };
 }
 
@@ -176,7 +181,7 @@ export class AppStateService {
   async setWindowState(windowState: WindowState): Promise<AppMetadata> {
     return this.update((current) => ({
       ...current,
-      windowState,
+      windowState: clampWindowState(windowState),
     }));
   }
 

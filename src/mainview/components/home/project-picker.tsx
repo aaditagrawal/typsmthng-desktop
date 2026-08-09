@@ -814,7 +814,16 @@ export function ProjectPicker({
       <div style={{ maxWidth: '760px', margin: '0 auto', padding: '52px 24px 36px' }}>
 
         {/* ── Header ── */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '32px',
+            position: 'relative',
+            zIndex: 10,
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <img
               src={new URL('../../../../assets/icon.png', import.meta.url).href}
@@ -1822,7 +1831,7 @@ export function ProjectPicker({
             style={{
               width: '100%',
               maxWidth: '720px',
-              maxHeight: 'calc(100vh - 48px)',
+              maxHeight: 'calc(100dvh - 48px)',
               background: 'var(--bg-surface)',
               border: '1px solid var(--border-strong)',
               borderRadius: '2px',

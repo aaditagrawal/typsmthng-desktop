@@ -477,6 +477,8 @@ export function GuidePage({ onBack }: { onBack: () => void }) {
             padding: '0 10px',
             border: '1px solid var(--border-default)',
             borderRadius: '2px',
+            position: 'relative',
+            zIndex: 10,
             background: 'var(--bg-surface)',
             color: 'var(--text-secondary)',
             fontFamily: 'var(--font-mono)',

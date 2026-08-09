@@ -239,7 +239,7 @@ export function SettingsModal() {
         style={{
           width: 'calc(100% - 48px)',
           maxWidth: '480px',
-          maxHeight: 'calc(100vh - 80px)',
+          maxHeight: 'calc(100dvh - 80px)',
           background: 'rgba(20, 20, 20, 0.45)',
           backdropFilter: 'blur(50px) saturate(180%)',
           WebkitBackdropFilter: 'blur(50px) saturate(180%)',
