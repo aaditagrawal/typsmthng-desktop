@@ -211,7 +211,13 @@ jobs:
           fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — uploading/replacing assets"
+            echo "Release $TAG already exists — retargeting to ${{ github.sha }} and replacing assets"
+            gh release edit "$TAG" --target "${{ github.sha }}" --title "$TAG"
+            if [[ "$PRERELEASE" == "true" ]]; then
+              gh release edit "$TAG" --prerelease
+            else
+              gh release edit "$TAG" --latest
+            fi
             gh release upload "$TAG" artifacts/* --clobber
           else
             gh release create "$TAG" --title "$TAG" "${FLAGS[@]}" artifacts/*
