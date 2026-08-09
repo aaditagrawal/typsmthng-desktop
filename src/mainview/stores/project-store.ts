@@ -530,12 +530,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     return project?.id ?? null;
   },
 
-  loadProjects: async () => {
+  loadProjects: async (options) => {
     const start = perfMark();
     bindSubscriptions();
     await desktopRpc.request.waitUntilReady();
-    const bootstrap = await desktopRpc.request.getBootstrapState();
-    const activeProject = bootstrap.activeVault;
+    const restoreActive = options?.restoreActive !== false;
+    const bootstrap = await desktopRpc.request.getBootstrapState({ restoreActive });
+    const activeProject = restoreActive ? bootstrap.activeVault : null;
+
+    if (!restoreActive) {
+      // Home import/refresh: update recents only; keep the user on home.
+      set((state) => ({
+        metadata: bootstrap.metadata,
+        projects: mergeProjects(bootstrap.metadata, getActiveProject(state) ?? null),
+        loading: false,
+      }));
+      updateWindowTitle();
+      perfMeasure("store.load_projects", start, { restored: 0, metadataOnly: 1 });
+      return;
+    }
 
     set({
       metadata: bootstrap.metadata,
