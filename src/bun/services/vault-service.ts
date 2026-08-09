@@ -163,11 +163,31 @@ export class VaultService {
     // If a vault is already open (CLI race, prior bootstrap), return it instead of
     // forcing reopenLastVaultPath again and yanking the user off home/CLI target.
     if (this.activeVaultRoot) {
-      // CLI already won the race — drop any leftover override so later loadProjects
-      // calls (home import, etc.) do not reopen it.
+      const pendingOverride = this.startupVaultOverride;
+      // Drop leftover override so later loadProjects calls do not reopen it.
       this.startupVaultOverride = null;
       try {
-        const activeVault = await this.loadVaultSnapshot(this.activeVaultRoot, metadata);
+        if (
+          pendingOverride?.selectFile
+          && pendingOverride.rootPath === this.activeVaultRoot
+        ) {
+          try {
+            await this.appState.persistLastFile(
+              pendingOverride.rootPath,
+              pendingOverride.selectFile,
+            );
+            metadata = await this.appState.load();
+          } catch {}
+        }
+        const preferredMainFile =
+          pendingOverride?.rootPath === this.activeVaultRoot
+            ? pendingOverride.selectFile
+            : null;
+        const activeVault = await this.loadVaultSnapshot(
+          this.activeVaultRoot,
+          metadata,
+          preferredMainFile,
+        );
         return { metadata, activeVault };
       } catch (error) {
         console.error("Failed to snapshot active vault during bootstrap", error);
