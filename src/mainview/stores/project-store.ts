@@ -64,7 +64,7 @@ interface ProjectState {
   hasSelectedProject: boolean;
   activeConflict: FileConflictState | null;
   openProjectDialog: () => Promise<string | null>;
-  loadProjects: () => Promise<void>;
+  loadProjects: (options?: { restoreActive?: boolean }) => Promise<void>;
   createProject: (
     name: string,
     scaffold?: ProjectScaffold,

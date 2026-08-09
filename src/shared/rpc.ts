@@ -149,7 +149,7 @@ export type DesktopRPC = {
         response: { ready: true };
       };
       getBootstrapState: {
-        params: void;
+        params: { restoreActive?: boolean } | void;
         response: BootstrapState;
       };
       openVaultDialog: {

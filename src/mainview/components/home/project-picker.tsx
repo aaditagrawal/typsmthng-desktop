@@ -1042,9 +1042,12 @@ export function ProjectPicker({
             setImportAllResult(null)
             setImportAllError(null)
             void importAllProjects(file)
-              .then((count) => {
+              .then(async (count) => {
                 setImportAllResult(`Imported ${count} project${count === 1 ? '' : 's'}`)
-                void loadProjects()
+                try {
+                  await desktopRpc.request.closeVault()
+                } catch {}
+                void loadProjects({ restoreActive: false })
               })
               .catch((err) => {
                 setImportAllError(err instanceof Error ? err.message : 'Import failed')
@@ -1061,10 +1064,13 @@ export function ProjectPicker({
             setImportAllResult(null)
             setImportAllError(null)
             void importProject(file)
-              .then(() => {
+              .then(async () => {
                 const name = file.name.replace(/\.zip$/i, '')
                 setImportAllResult(`Imported project "${name}"`)
-                void loadProjects()
+                try {
+                  await desktopRpc.request.closeVault()
+                } catch {}
+                void loadProjects({ restoreActive: false })
               })
               .catch((err) => {
                 setImportAllError(err instanceof Error ? err.message : 'Import failed')

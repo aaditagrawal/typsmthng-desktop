@@ -147,8 +147,18 @@ export class VaultService {
       : null;
   }
 
-  async getBootstrapState(window: DesktopWindow): Promise<BootstrapState> {
+  async getBootstrapState(
+    window: DesktopWindow,
+    options?: { restoreActive?: boolean },
+  ): Promise<BootstrapState> {
     let metadata = await this.hydrateRecentVaultMetadata(await this.appState.load());
+    const restoreActive = options?.restoreActive !== false;
+
+    // Metadata-only refresh (e.g. after home import) must not open/select a vault.
+    if (!restoreActive) {
+      this.startupVaultOverride = null;
+      return { metadata, activeVault: null };
+    }
 
     // If a vault is already open (CLI race, prior bootstrap), return it instead of
     // forcing reopenLastVaultPath again and yanking the user off home/CLI target.
@@ -161,6 +171,11 @@ export class VaultService {
         return { metadata, activeVault };
       } catch (error) {
         console.error("Failed to snapshot active vault during bootstrap", error);
+        // Snapshot failed while backend still thinks a vault is open — tear it down so
+        // renderer/backend stay aligned instead of falling through into reopen logic.
+        await this.closeVault();
+        metadata = await this.appState.load();
+        return { metadata, activeVault: null };
       }
     }
 
