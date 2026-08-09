@@ -482,14 +482,25 @@ export class VaultService {
       const files = (
         await Promise.all(
           fileEntries.map(async (entry) => {
-            const loaded = await this.readFileEntry(rootPath, entry.path, false);
-            if (!loaded) return null;
-            return {
-              path: entry.path,
-              isBinary: loaded.isBinary,
-              content: loaded.isBinary ? undefined : loaded.content,
-              binaryData: loaded.isBinary ? loaded.binaryData : undefined,
-            };
+            const absolutePath = path.join(rootPath, entry.path);
+            try {
+              if (entry.isBinary) {
+                const buffer = await fs.readFile(absolutePath);
+                return {
+                  path: entry.path,
+                  isBinary: true,
+                  binaryData: new Uint8Array(buffer),
+                };
+              }
+              const content = await fs.readFile(absolutePath, "utf8");
+              return {
+                path: entry.path,
+                isBinary: false,
+                content,
+              };
+            } catch {
+              return null;
+            }
           }),
         )
       ).filter((file): file is NonNullable<typeof file> => file !== null);

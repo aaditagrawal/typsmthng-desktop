@@ -1553,6 +1553,12 @@ export function ProjectPicker({
                 const selectedVisibleIds = selectedProjectIds.filter((id) =>
                   visibleProjects.some((project) => project.id === id),
                 )
+                // If the user has a selection that is no longer visible (filter change),
+                // do not silently export a different project.
+                if (selectedProjectIds.length > 0 && selectedVisibleIds.length === 0) {
+                  setImportAllError('Selected projects are hidden by the current filter. Clear selection or switch workspace.')
+                  return
+                }
                 const targetIds = selectedVisibleIds.length > 0
                   ? selectedVisibleIds
                   : (() => {
