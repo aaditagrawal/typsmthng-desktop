@@ -143,7 +143,17 @@ export function CommandSearch() {
           const file = project?.files.find((entry) => entry.path === path || entry.path === `/${path}`)
           return Boolean(file?.loaded || file?.content)
         },
+        isEditorReady: (path) => {
+          const bound = useEditorStore.getState().boundPath
+          return Boolean(bound && (bound === path || bound === `/${path}` || bound.replace(/^\/+/, '') === path.replace(/^\/+/, '')))
+        },
         getEditorView: () => useEditorStore.getState().editorView,
+        getEditorDoc: () => useEditorStore.getState().editorView?.state.doc.toString() ?? null,
+        getFileContent: (path) => {
+          const project = useProjectStore.getState().getCurrentProject()
+          const file = project?.files.find((entry) => entry.path === path || entry.path === `/${path}`)
+          return file && !file.isBinary && file.loaded ? file.content : null
+        },
       })
       if (view) {
         const lineNumber = Math.max(1, Math.min(item.line, view.state.doc.lines))

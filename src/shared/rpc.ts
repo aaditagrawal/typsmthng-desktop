@@ -129,6 +129,8 @@ export interface CreateVaultParams {
   ifExists?: CreateVaultIfExistsPolicy;
   /** When false, write/register the vault without activating it in the UI. Default: true. */
   activate?: boolean;
+  /** Skip the folder picker and create under this directory (bulk import). */
+  parentPath?: string;
 }
 
 export interface VaultExportFile {

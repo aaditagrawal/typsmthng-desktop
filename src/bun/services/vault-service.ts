@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
@@ -121,6 +122,14 @@ function assertSafeVaultRelativePath(input: string): string {
     throw new Error(`Path escapes vault root: ${input}`);
   }
   return normalized;
+}
+
+function isEnoent(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "EEXIST");
 }
 
 /** Single-segment project folder name; strips parents and rejects empty / `.` / `..`. */
@@ -337,21 +346,25 @@ export class VaultService {
       scaffold?: ProjectScaffold;
       ifExists?: "open" | "fail";
       activate?: boolean;
+      parentPath?: string;
     },
     window: DesktopWindow,
   ): Promise<VaultRecord | null> {
     const name = sanitizeCreateVaultFolderName(params.name);
     if (!name) return null;
 
-    const [selectedParent] = await Utils.openFileDialog({
-      startingFolder: Utils.paths.documents,
-      allowedFileTypes: "*",
-      canChooseFiles: false,
-      canChooseDirectory: true,
-      allowsMultipleSelection: false,
-    });
-
-    if (!selectedParent) return null;
+    let selectedParent = params.parentPath?.trim() || "";
+    if (!selectedParent) {
+      const [picked] = await Utils.openFileDialog({
+        startingFolder: Utils.paths.documents,
+        allowedFileTypes: "*",
+        canChooseFiles: false,
+        canChooseDirectory: true,
+        allowsMultipleSelection: false,
+      });
+      if (!picked) return null;
+      selectedParent = picked;
+    }
 
     const rootPath = path.join(selectedParent, name);
     const ifExists = params.ifExists ?? "open";
@@ -360,6 +373,7 @@ export class VaultService {
     // Check if directory exists and already has content — open as existing vault
     // instead of overwriting to prevent data loss (GitHub issue #8).
     // Imports pass ifExists: "fail" so a collision is not reported as a successful import.
+    let rollbackOnFailure = false;
     try {
       const entries = await fs.readdir(rootPath);
       if (entries.length > 0) {
@@ -369,30 +383,51 @@ export class VaultService {
         }
         return this.openVault(rootPath, window);
       }
-    } catch {
-      // Directory doesn't exist yet — proceed with creation
+      rollbackOnFailure = true;
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+      rollbackOnFailure = true;
     }
 
-    await fs.mkdir(rootPath, { recursive: true });
+    try {
+      await fs.mkdir(rootPath, { recursive: true });
 
-    const scaffold = params.scaffold ?? this.createBlankScaffold(name);
-    for (const file of scaffold.files) {
-      const relativePath = assertSafeVaultRelativePath(file.path);
-      const absolutePath = path.join(rootPath, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      if (file.isBinary && file.binaryData) {
-        await fs.writeFile(absolutePath, file.binaryData);
-      } else if (file.isBinary) {
-        throw new Error(`Scaffold binary "${file.path}" is missing file data.`);
-      } else {
-        await fs.writeFile(absolutePath, file.content, "utf8");
+      const scaffold = params.scaffold ?? this.createBlankScaffold(name);
+      for (const file of scaffold.files) {
+        const relativePath = assertSafeVaultRelativePath(file.path);
+        const absolutePath = path.join(rootPath, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        if (file.isBinary && file.binaryData) {
+          await fs.writeFile(absolutePath, file.binaryData);
+        } else if (file.isBinary) {
+          throw new Error(`Scaffold binary "${file.path}" is missing file data.`);
+        } else {
+          await fs.writeFile(absolutePath, file.content, "utf8");
+        }
       }
-    }
 
-    if (!activate) {
-      return this.registerVaultWithoutActivating(rootPath, scaffold.mainFile);
+      if (!activate) {
+        const record = await this.registerVaultWithoutActivating(rootPath, scaffold.mainFile);
+        if (!record) {
+          throw new Error("Failed to register the new project.");
+        }
+        return record;
+      }
+      const opened = await this.openVault(rootPath, window, scaffold.mainFile);
+      if (!opened) {
+        throw new Error("Failed to open the new project.");
+      }
+      return opened;
+    } catch (error) {
+      if (rollbackOnFailure) {
+        try {
+          await fs.rm(rootPath, { recursive: true, force: true });
+        } catch (cleanupError) {
+          console.error("Failed to roll back createVault directory", cleanupError);
+        }
+      }
+      throw error;
     }
-    return this.openVault(rootPath, window, scaffold.mainFile);
   }
 
   /** Upsert recents + return a snapshot without watcher/activeVaultOpened (import/bulk). */
@@ -533,14 +568,22 @@ export class VaultService {
     return { ok: true };
   }
 
+  /** Best-effort disk write for pending buffers when the process is about to die. */
+  flushWritesSync(): void {
+    for (const pending of this.pendingWrites.values()) {
+      try {
+        if (pending.timer) clearTimeout(pending.timer);
+        const safePath = assertSafeVaultRelativePath(pending.filePath);
+        writeFileSync(path.join(pending.rootPath, safePath), pending.content, "utf8");
+      } catch (error) {
+        console.error("Failed to flush write on exit", error);
+      }
+    }
+    this.pendingWrites.clear();
+  }
+
   async createFile(rootPath: string, filePath: string, content = ""): Promise<VaultFileEntry | null> {
-    const safePath = assertSafeVaultRelativePath(filePath);
-    const absolutePath = path.join(rootPath, safePath);
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, content, "utf8");
-    this.indexService.invalidate(rootPath);
-    this.contentCache.get(rootPath)?.delete(safePath);
-    return this.readFileEntry(rootPath, safePath, true);
+    return this.writeTextFile(rootPath, filePath, content, { exclusive: true });
   }
 
   async createFilesBatch(
@@ -548,9 +591,35 @@ export class VaultService {
     entries: Array<{ path: string; content: string }>,
   ): Promise<{ ok: true }> {
     for (const entry of entries) {
-      await this.createFile(rootPath, entry.path, entry.content);
+      await this.writeTextFile(rootPath, entry.path, entry.content, { exclusive: false });
     }
     return { ok: true };
+  }
+
+  private async writeTextFile(
+    rootPath: string,
+    filePath: string,
+    content: string,
+    options: { exclusive: boolean },
+  ): Promise<VaultFileEntry | null> {
+    const safePath = assertSafeVaultRelativePath(filePath);
+    const absolutePath = path.join(rootPath, safePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    try {
+      await fs.writeFile(
+        absolutePath,
+        content,
+        options.exclusive ? { encoding: "utf8", flag: "wx" } : "utf8",
+      );
+    } catch (error) {
+      if (options.exclusive && isAlreadyExists(error)) {
+        throw new Error(`A file already exists at "${safePath}".`);
+      }
+      throw error;
+    }
+    this.indexService.invalidate(rootPath);
+    this.contentCache.get(rootPath)?.delete(safePath);
+    return this.readFileEntry(rootPath, safePath, true);
   }
 
   async addBinaryFilesBatch(
@@ -592,8 +661,18 @@ export class VaultService {
   async renamePath(rootPath: string, oldPath: string, newPath: string): Promise<{ ok: true }> {
     const safeOld = assertSafeVaultRelativePath(oldPath);
     const safeNew = assertSafeVaultRelativePath(newPath);
-    await fs.mkdir(path.dirname(path.join(rootPath, safeNew)), { recursive: true });
-    await fs.rename(path.join(rootPath, safeOld), path.join(rootPath, safeNew));
+    if (safeOld === safeNew) return { ok: true };
+
+    const dest = path.join(rootPath, safeNew);
+    try {
+      await fs.lstat(dest);
+      throw new Error(`A file or folder already exists at "${safeNew}".`);
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+    }
+
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.rename(path.join(rootPath, safeOld), dest);
     this.indexService.invalidate(rootPath);
     this.migratePendingWrites(rootPath, safeOld, safeNew);
     const cache = this.contentCache.get(rootPath);

@@ -8,6 +8,8 @@ describe('file-classification', () => {
     expect(isKnownTextPath('macros.sty')).toBe(true)
     expect(isKnownTextPath('plain.bst')).toBe(true)
     expect(isLatexPath('main.tex')).toBe(true)
+    expect(isLatexPath('extra.ltx')).toBe(true)
+    expect(isKnownTextPath('extra.ltx')).toBe(true)
     expect(isLatexPath('main.TYP')).toBe(false)
   })
 })

@@ -2,17 +2,19 @@ import { ApplicationMenu, BrowserView, BrowserWindow, Updater } from "electrobun
 import { dlopen, FFIType } from "bun:ffi";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer, connect } from "node:net";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 
 import type { DesktopRPC } from "../shared/rpc";
 import type { UpdateState } from "../shared/update-types";
 import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
-import { runPlatformSetup } from "./services/platform-setup";
+import { ensurePackagedWorkingDirectory, runPlatformSetup } from "./services/platform-setup";
 import { saveDownloadFile } from "./services/save-download";
 import { loadUserSettings, saveUserSettings } from "./services/user-settings";
 import { loadSystemFontFiles } from "./services/system-fonts";
+
+ensurePackagedWorkingDirectory();
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -72,9 +74,18 @@ async function performUpdateCheck(): Promise<UpdateState> {
 		}
 
 		setUpdateState({ status: "checking", error: null });
-		const info = await Updater.checkForUpdate();
+		const info = await Updater.checkForUpdate() as {
+			updateAvailable?: boolean;
+			version?: string;
+			error?: unknown;
+		};
 
-		if (info.updateAvailable) {
+		if (info.error) {
+			setUpdateState({
+				status: "error",
+				error: info.error instanceof Error ? info.error.message : String(info.error),
+			});
+		} else if (info.updateAvailable) {
 			setUpdateState({
 				status: "available",
 				availableVersion: info.version ?? null,
@@ -126,7 +137,7 @@ function parseStartupArgs(): { vaultPath: string | null; selectFile: string | nu
 					const stat = statSync(resolved);
 					if (stat.isDirectory()) {
 						vaultPath = resolved;
-					} else if (stat.isFile() && resolved.endsWith(".typ")) {
+					} else if (stat.isFile() && extname(resolved).toLowerCase() === ".typ") {
 						const fromTyp = resolveVaultRootFromTypFile(resolved);
 						vaultPath = fromTyp.vaultPath;
 						selectFile = fromTyp.selectFile;
@@ -226,6 +237,7 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 			},
 			quitApp: async () => {
 				try {
+					vaultService.flushWritesSync();
 					await vaultService.flushWrites({});
 				} catch {}
 				mainWindow?.close();
@@ -466,6 +478,7 @@ function startCliServer() {
 startCliServer();
 
 mainWindow.on("close", () => {
+	vaultService.flushWritesSync();
 	void (async () => {
 		try {
 			await vaultService.flushWrites({});

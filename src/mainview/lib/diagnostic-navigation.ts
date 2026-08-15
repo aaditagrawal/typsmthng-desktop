@@ -12,7 +12,10 @@ export async function waitForEditorPath<TView>(
     timeoutMs?: number
     isCurrentPath?: () => string | null
     isFileLoaded?: (path: string) => boolean
+    isEditorReady?: (path: string) => boolean
     getEditorView?: () => TView | null
+    getEditorDoc?: () => string | null
+    getFileContent?: (path: string) => string | null
   },
 ): Promise<TView | null> {
   const normalizedTarget = targetPath ? normalizeDiagnosticPath(targetPath) : null
@@ -24,9 +27,13 @@ export async function waitForEditorPath<TView>(
     const normalizedCurrent = currentPath ? normalizeDiagnosticPath(currentPath) : null
     const pathReady = !normalizedTarget || normalizedCurrent === normalizedTarget
     const loaded = !normalizedTarget || (options?.isFileLoaded?.(normalizedTarget) ?? true)
+    const editorReady = !normalizedTarget || (options?.isEditorReady?.(normalizedTarget) ?? true)
     const view = options?.getEditorView?.() ?? null
+    const doc = options?.getEditorDoc?.() ?? null
+    const fileContent = normalizedTarget ? (options?.getFileContent?.(normalizedTarget) ?? null) : null
+    const docReady = fileContent === null || doc === null || doc === fileContent
 
-    if (pathReady && loaded && view) {
+    if (pathReady && loaded && editorReady && docReady && view) {
       return view
     }
 

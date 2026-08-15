@@ -113,6 +113,9 @@ export function TypstEditor() {
     const filePath = useProjectStore.getState().currentFilePath
     const file = project?.files.find((f) => f.path === filePath && (f.kind ?? 'file') === 'file' && !f.isBinary)
     const initialDoc = file?.content || SAMPLE_DOCUMENT
+    if (filePath && file?.loaded) {
+      useEditorStore.getState().setBoundPath(filePath)
+    }
 
     const state = EditorState.create({
       doc: initialDoc,
@@ -169,12 +172,13 @@ export function TypstEditor() {
 
             // Update editor store
             useEditorStore.getState().setSource(source)
-            // Sync back to project store
-            const path = useProjectStore.getState().currentFilePath
-            if (path) {
-              scheduleProjectSync(path, source)
+            // Sync back to the document this view is bound to, not whatever
+            // currentFilePath the tree last clicked (images / still-hydrating files).
+            const boundPath = useEditorStore.getState().boundPath
+            if (boundPath) {
+              scheduleProjectSync(boundPath, source)
             }
-            requestCompile(source, path)
+            requestCompile(source, boundPath)
           }
         }),
       ],
@@ -203,6 +207,7 @@ export function TypstEditor() {
       viewRef.current?.destroy()
       viewRef.current = null
       useEditorStore.getState().setEditorView(null)
+      useEditorStore.getState().setBoundPath(null)
     }
   }, [flushPendingProjectSync, scheduleProjectSync, setCursorPosition])
 
@@ -268,6 +273,8 @@ export function TypstEditor() {
     const project = useProjectStore.getState().getCurrentProject()
     const file = project?.files.find((f) => f.path === currentFilePath && (f.kind ?? 'file') === 'file' && !f.isBinary)
     if (!file?.loaded) return
+
+    useEditorStore.getState().setBoundPath(currentFilePath)
 
     const currentContent = view.state.doc.toString()
     if (currentContent === file.content) return

@@ -397,4 +397,41 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
 
     await fs.rm(tempRoot, { recursive: true, force: true })
   })
+
+  it('refuses createFile and renamePath when the destination exists', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-exists-'))
+    await fs.writeFile(path.join(tempRoot, 'main.typ'), '= Main\n', 'utf8')
+    await fs.writeFile(path.join(tempRoot, 'notes.typ'), '= Notes\n', 'utf8')
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+
+    await expect(service.createFile(tempRoot, 'main.typ', '= New\n')).rejects.toThrow(/already exists/)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('= Main\n')
+
+    await expect(service.renamePath(tempRoot, 'notes.typ', 'main.typ')).rejects.toThrow(/already exists/)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('= Main\n')
+    expect(await fs.readFile(path.join(tempRoot, 'notes.typ'), 'utf8')).toBe('= Notes\n')
+
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
+
+  it('flushWritesSync writes pending buffers immediately', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-sync-flush-'))
+    await fs.writeFile(path.join(tempRoot, 'main.typ'), 'old', 'utf8')
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService() as unknown as {
+      stageFileWrite: (rootPath: string, filePath: string, content: string) => Promise<{ queuedAt: number }>
+      flushWritesSync: () => void
+      pendingWrites: PendingWriteMap
+    }
+
+    await service.stageFileWrite(tempRoot, 'main.typ', 'new')
+    service.flushWritesSync()
+    expect(service.pendingWrites.size).toBe(0)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('new')
+
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
 })

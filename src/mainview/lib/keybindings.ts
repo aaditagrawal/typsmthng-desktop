@@ -15,9 +15,9 @@ export const typstKeymap: KeyBinding[] = [
     key: 'Mod-s',
     run: () => {
       const projectStore = useProjectStore.getState()
-      const currentPath = projectStore.currentFilePath
-      if (currentPath) {
-        projectStore.updateFileContent(currentPath, useEditorStore.getState().source)
+      const boundPath = useEditorStore.getState().boundPath
+      if (boundPath) {
+        projectStore.updateFileContent(boundPath, useEditorStore.getState().source)
       }
       projectStore.saveCurrentProject()
       return true

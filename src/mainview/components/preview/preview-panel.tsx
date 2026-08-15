@@ -1022,7 +1022,17 @@ function usePreviewClickHandler(ignoreClickRef?: { current: boolean }) {
             const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
             return Boolean(file?.loaded || file?.content)
           },
+          isEditorReady: (path) => {
+            const bound = useEditorStore.getState().boundPath
+            return Boolean(bound && normalizeDiagnosticPath(bound) === path)
+          },
           getEditorView: () => useEditorStore.getState().editorView,
+          getEditorDoc: () => useEditorStore.getState().editorView?.state.doc.toString() ?? null,
+          getFileContent: (path) => {
+            const project = useProjectStore.getState().getCurrentProject()
+            const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
+            return file && !file.isBinary && file.loaded ? file.content : null
+          },
         })
         if (ready) {
           source = useEditorStore.getState().source
@@ -1188,7 +1198,17 @@ export function PreviewPanel() {
         const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
         return Boolean(file && (file.kind ?? 'file') === 'file' && file.loaded)
       },
+      isEditorReady: (path) => {
+        const bound = useEditorStore.getState().boundPath
+        return Boolean(bound && normalizeDiagnosticPath(bound) === path)
+      },
       getEditorView: () => useEditorStore.getState().editorView,
+      getEditorDoc: () => useEditorStore.getState().editorView?.state.doc.toString() ?? null,
+      getFileContent: (path) => {
+        const project = useProjectStore.getState().getCurrentProject()
+        const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
+        return file && !file.isBinary && file.loaded ? file.content : null
+      },
     }).then((view) => {
       if (!view || token !== jumpToErrorTokenRef.current) return
       const latestPath = useProjectStore.getState().currentFilePath

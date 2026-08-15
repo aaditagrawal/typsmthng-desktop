@@ -19,11 +19,12 @@ import {
 
 import type { LucideIcon } from 'lucide-react'
 import { ContextMenu, type ContextMenuAction } from '@/components/ui/context-menu'
-import { isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
+import { isLatexPath, isPreviewableImagePath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst } from '@/lib/latex-converter'
 import { revealLabel } from '@/lib/platform'
 import { normalizeImportEntryPath } from '@/lib/project-io'
 import { useProjectStore, type ProjectFile } from '@/stores/project-store'
+import { useUIStore } from '@/stores/ui-store'
 
 function fileIcon(name: string): LucideIcon {
   const ext = name.lastIndexOf('.') !== -1 ? name.slice(name.lastIndexOf('.')).toLowerCase() : ''
@@ -187,6 +188,16 @@ function flattenTree(nodes: TreeNode[], expanded: Set<string>, depth = 0): FlatN
   return items
 }
 
+function suggestUntitledTypstPath(existingPaths: Iterable<string>, directory: string): string {
+  const taken = new Set([...existingPaths].map((entry) => entry.replace(/^\/+/, '')))
+  const folder = directory.replace(/^\/+/, '').replace(/\/+$/, '')
+  const prefix = folder ? `${folder}/untitled` : 'untitled'
+  if (!taken.has(`${prefix}.typ`)) return `${prefix}.typ`
+  let n = 2
+  while (taken.has(`${prefix}-${n}.typ`)) n += 1
+  return `${prefix}-${n}.typ`
+}
+
 function buildDuplicatePath(existingPaths: Iterable<string>, path: string): string {
   const taken = new Set(existingPaths)
   const directory = parentPath(path)
@@ -248,10 +259,10 @@ async function processImportedFiles(files: FileList | File[], basePath: string):
         try {
           const result = await convertLatexToTypst(content)
           content = result.typst
-          path = targetPath.replace(/\.tex$/i, '.typ')
+          path = targetPath.replace(/\.(tex|ltx)$/i, '.typ')
         } catch (err) {
           console.warn(`LaTeX conversion failed for "${file.name}":`, err)
-          path = targetPath.replace(/\.tex$/i, '.typ')
+          path = targetPath.replace(/\.(tex|ltx)$/i, '.typ')
           content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
         }
         if (path !== targetPath && existingPaths.has(targetPath)) {
@@ -315,6 +326,7 @@ export function FileTree() {
   const currentProject = useProjectStore((s) => s.getCurrentProject())
   const currentFilePath = useProjectStore((s) => s.currentFilePath)
   const selectFile = useProjectStore((s) => s.selectFile)
+  const setImagePreviewPath = useUIStore((s) => s.setImagePreviewPath)
   const createFile = useProjectStore((s) => s.createFile)
   const createFolder = useProjectStore((s) => s.createFolder)
   const duplicateFile = useProjectStore((s) => s.duplicateFile)
@@ -387,7 +399,10 @@ export function FileTree() {
   }, [currentFilePath, currentProject?.files])
 
   const promptForFile = async (baseDirectory = activeDirectory) => {
-    const suggestion = baseDirectory ? `${baseDirectory}/main.typ` : 'main.typ'
+    const existing = (currentProject?.files ?? [])
+      .filter((entry) => (entry.kind ?? 'file') === 'file')
+      .map((entry) => entry.path)
+    const suggestion = suggestUntitledTypstPath(existing, baseDirectory)
     const nextPath = window.prompt('New file path', suggestion)?.trim()
     if (nextPath) {
       try {
@@ -649,6 +664,10 @@ export function FileTree() {
                       else next.add(row.node.path)
                       return next
                     })
+                    return
+                  }
+                  if (isPreviewableImagePath(row.node.path)) {
+                    setImagePreviewPath(row.node.path)
                     return
                   }
                   selectFile(row.node.path)

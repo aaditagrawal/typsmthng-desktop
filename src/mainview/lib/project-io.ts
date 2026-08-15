@@ -17,7 +17,10 @@ export interface LatexImportResult {
   metadata: ConversionResult['metadata']
 }
 
-export function resolveImportedMainFile(projectFiles: Array<{ path: string }>): string {
+export function resolveImportedMainFile(
+  projectFiles: Array<{ path: string; content?: string }>,
+  options?: { documentPaths?: Iterable<string> },
+): string {
   const typFiles = projectFiles.filter((file) => file.path.toLowerCase().endsWith('.typ'))
   const mainFiles = typFiles.filter((file) => {
     const base = basenamePath(file.path).toLowerCase()
@@ -31,8 +34,46 @@ export function resolveImportedMainFile(projectFiles: Array<{ path: string }>): 
     })
     return mainFiles[0].path
   }
+
+  const documentSet = new Set(
+    [...(options?.documentPaths ?? [])].map((path) => (path.startsWith('/') ? path : `/${path}`)),
+  )
+  const documentFiles = typFiles.filter((file) => {
+    const normalized = file.path.startsWith('/') ? file.path : `/${file.path}`
+    return documentSet.has(normalized) || looksLikeConvertedDocument(file.content ?? '')
+  })
+  if (documentFiles.length === 1) return documentFiles[0].path
+  if (documentFiles.length > 1) {
+    documentFiles.sort((left, right) => (right.content?.length ?? 0) - (left.content?.length ?? 0))
+    return documentFiles[0].path
+  }
+
+  const bySize = [...typFiles].sort(
+    (left, right) => (right.content?.length ?? 0) - (left.content?.length ?? 0),
+  )
+  if ((bySize[0]?.content?.length ?? 0) > 0) return bySize[0].path
+
   const rootTyp = typFiles.find((file) => !file.path.replace(/^\/+/, '').includes('/'))
   return rootTyp?.path || typFiles[0]?.path || projectFiles[0]?.path || '/main.typ'
+}
+
+function looksLikeConvertedDocument(content: string): boolean {
+  return /#set document\(/.test(content) || /\\begin\s*\{document\}/.test(content)
+}
+
+function latexToTypstPath(input: string): string {
+  return input.replace(/\.(tex|ltx)$/i, '.typ')
+}
+
+function isLatexDocumentSource(source: string): boolean {
+  return /\\begin\s*\{document\}/i.test(source) || /\\documentclass/i.test(source)
+}
+
+function parentOsDirectory(rootPath: string): string | undefined {
+  const trimmed = rootPath.replace(/[\\/]+$/, '')
+  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (idx <= 0) return undefined
+  return trimmed.slice(0, idx)
 }
 
 /** Strip a single shared top-level folder from zip paths (Overleaf-style archives). */
@@ -125,7 +166,11 @@ function setImportedTextFile(
   if (fromTex) convertedFromTex.add(filePath)
 }
 
-async function createImportedProject(projectName: string, projectFiles: ProjectFile[]): Promise<string> {
+async function createImportedProject(
+  projectName: string,
+  projectFiles: ProjectFile[],
+  options?: { documentPaths?: Iterable<string>; parentPath?: string },
+): Promise<string> {
   const scaffold: ProjectScaffold = {
     files: projectFiles.map((file) => ({
       path: file.path,
@@ -133,13 +178,16 @@ async function createImportedProject(projectName: string, projectFiles: ProjectF
       isBinary: file.isBinary,
       binaryData: file.binaryData,
     })),
-    mainFile: resolveImportedMainFile(projectFiles),
+    mainFile: resolveImportedMainFile(projectFiles, { documentPaths: options?.documentPaths }),
   }
 
-  const id = await useProjectStore.getState().createProject(projectName, scaffold, {
+  const createOptions: { ifExists: 'fail'; select: false; parentPath?: string } = {
     ifExists: 'fail',
     select: false,
-  })
+  }
+  if (options?.parentPath) createOptions.parentPath = options.parentPath
+
+  const id = await useProjectStore.getState().createProject(projectName, scaffold, createOptions)
   if (!id) {
     throw new Error(
       'Project creation was cancelled or a project with that name already exists in the chosen folder.',
@@ -418,11 +466,14 @@ export async function importAllProjects(file: File): Promise<number> {
 
   const store = useProjectStore.getState()
   let imported = 0
+  let parentPath: string | undefined
+  const failed: string[] = []
 
   for (const [folderName, entries] of grouped) {
     const commonRoot = stripZipCommonRootPrefix(entries.map((entry) => entry.path))
     const filesByPath = new Map<string, ProjectFile>()
     const convertedFromTex = new Set<string>()
+    const documentPaths = new Set<string>()
 
     for (const { path, data } of entries) {
       const fullPath = applyZipCommonRootStrip(path, commonRoot)
@@ -434,13 +485,17 @@ export async function importAllProjects(file: File): Promise<number> {
 
         if (isLatexPath(path)) {
           fromTex = true
+          const source = content
+          if (isLatexDocumentSource(source)) {
+            documentPaths.add(latexToTypstPath(fullPath))
+          }
           try {
             const result = await convertLatexToTypst(content)
             content = result.typst
-            filePath = fullPath.replace(/\.tex$/i, '.typ')
+            filePath = latexToTypstPath(fullPath)
           } catch (err) {
             console.warn(`LaTeX conversion failed for "${path}":`, err)
-            filePath = fullPath.replace(/\.tex$/i, '.typ')
+            filePath = latexToTypstPath(fullPath)
             content = latexConversionFallback(content)
           }
         }
@@ -461,6 +516,12 @@ export async function importAllProjects(file: File): Promise<number> {
     const projectFiles = applyAssetRewrites([...filesByPath.values()])
     if (projectFiles.length === 0) continue
 
+    const createOptions: { ifExists: 'fail'; select: false; parentPath?: string } = {
+      ifExists: 'fail',
+      select: false,
+    }
+    if (parentPath) createOptions.parentPath = parentPath
+
     const id = await store.createProject(folderName, {
       files: projectFiles.map((projectFile) => ({
         path: projectFile.path,
@@ -468,14 +529,20 @@ export async function importAllProjects(file: File): Promise<number> {
         isBinary: projectFile.isBinary,
         binaryData: projectFile.binaryData,
       })),
-      mainFile: resolveImportedMainFile(projectFiles),
-    }, { ifExists: 'fail', select: false })
+      mainFile: resolveImportedMainFile(projectFiles, { documentPaths }),
+    }, createOptions)
     if (!id) {
-      throw new Error(
-        `Could not import project "${folderName}" (cancelled or a project with that name already exists).`,
-      )
+      failed.push(folderName)
+      continue
     }
+    parentPath = parentOsDirectory(id) ?? parentPath
     imported++
+  }
+
+  if (imported === 0 && failed.length > 0) {
+    throw new Error(
+      `Could not import project "${failed[0]}" (cancelled or a project with that name already exists).`,
+    )
   }
 
   // Go back to home after import
@@ -521,10 +588,10 @@ export async function importProject(file: File): Promise<void> {
         try {
           const result = await convertLatexToTypst(content)
           content = result.typst
-          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          filePath = latexToTypstPath(fullPath)
         } catch (err) {
           console.warn(`LaTeX conversion failed for "${path}":`, err)
-          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          filePath = latexToTypstPath(fullPath)
           content = latexConversionFallback(content)
         }
       }
@@ -557,8 +624,9 @@ export async function importLatexProject(
   const allWarnings: ConversionWarning[] = []
   const filesByPath = new Map<string, ProjectFile>()
   const convertedFromTex = new Set<string>()
+  const documentPaths = new Set<string>()
+  const metaByTypPath = new Map<string, ConversionResult['metadata']>()
   let texCount = 0
-  let lastMeta: ConversionResult['metadata'] = { packages: [], graphicspath: [] }
 
   const normalizedInputs = files.map((entry) => {
     const normalized = normalizeImportEntryPath(entry.relativePath)
@@ -571,15 +639,15 @@ export async function importLatexProject(
   for (const { relativePath, file } of normalizedInputs) {
     const path = applyZipCommonRootStrip(relativePath, commonRoot)
 
-    if (isLatexPath(file.name)) {
+    if (isLatexPath(file.name) || isLatexPath(path)) {
       const source = await file.text()
-      const typPath = path.replace(/\.tex$/i, '.typ')
+      const typPath = latexToTypstPath(path)
       let content: string
       try {
         const result = await convertLatexToTypst(source)
         content = result.typst
         allWarnings.push(...result.warnings)
-        if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
+        metaByTypPath.set(typPath, result.metadata)
       } catch (err) {
         console.warn(`LaTeX conversion failed for "${file.name}":`, err)
         allWarnings.push({
@@ -588,6 +656,7 @@ export async function importLatexProject(
         })
         content = latexConversionFallback(source)
       }
+      if (isLatexDocumentSource(source)) documentPaths.add(typPath)
       setImportedTextFile(filesByPath, convertedFromTex, typPath, content, true)
       texCount++
     } else if (shouldTreatUploadAsText(file)) {
@@ -610,13 +679,20 @@ export async function importLatexProject(
     throw new Error('No files found to import')
   }
 
-  // Determine project name: metadata title > first .tex filename > generic
-  const fallbackName = texCount === 1
-    ? files.find((f) => isLatexPath(f.file.name))!.file.name.replace(/\.tex$/i, '')
+  const mainFile = resolveImportedMainFile(projectFiles, { documentPaths })
+  const lastMeta = metaByTypPath.get(mainFile)
+    ?? [...metaByTypPath.values()].find((meta) => meta.title)
+    ?? { packages: [], graphicspath: [] }
+
+  const latexInput = normalizedInputs.find((entry) => (
+    isLatexPath(entry.file.name) || isLatexPath(entry.relativePath)
+  ))
+  const fallbackName = texCount === 1 && latexInput
+    ? latexInput.file.name.replace(/\.(tex|ltx)$/i, '')
     : `LaTeX Import (${texCount} files)`
   const projectName = sanitizeImportedProjectName(lastMeta.title, fallbackName)
 
-  await createImportedProject(projectName, projectFiles)
+  await createImportedProject(projectName, projectFiles, { documentPaths })
 
   return {
     projectName,
@@ -640,8 +716,9 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
   const allWarnings: ConversionWarning[] = []
   const filesByPath = new Map<string, ProjectFile>()
   const convertedFromTex = new Set<string>()
+  const documentPaths = new Set<string>()
+  const metaByTypPath = new Map<string, ConversionResult['metadata']>()
   let texCount = 0
-  let lastMeta: ConversionResult['metadata'] = { packages: [], graphicspath: [] }
 
   const zipEntries = maybeUnwrapNestedZip(Object.entries(unzipped).flatMap(([rawPath, data]) => {
     const normalized = normalizeImportEntryPath(rawPath)
@@ -660,23 +737,24 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
 
       if (isLatexPath(path)) {
         fromTex = true
+        const source = content
         try {
           const result = await convertLatexToTypst(content)
           content = result.typst
-          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          filePath = latexToTypstPath(fullPath)
           allWarnings.push(...result.warnings)
-          if (result.metadata.title || result.metadata.author) lastMeta = result.metadata
-          texCount++
+          metaByTypPath.set(filePath, result.metadata)
         } catch (err) {
           console.warn(`LaTeX conversion failed for "${path}":`, err)
           allWarnings.push({
             message: `Conversion failed for ${path}: ${err instanceof Error ? err.message : 'unknown error'}`,
             construct: path,
           })
-          filePath = fullPath.replace(/\.tex$/i, '.typ')
+          filePath = latexToTypstPath(fullPath)
           content = latexConversionFallback(content)
-          texCount++
         }
+        if (isLatexDocumentSource(source)) documentPaths.add(filePath)
+        texCount++
       }
 
       setImportedTextFile(filesByPath, convertedFromTex, filePath, content, fromTex)
@@ -699,9 +777,14 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
     throw new Error('No .tex files found in the archive.')
   }
 
+  const mainFile = resolveImportedMainFile(projectFiles, { documentPaths })
+  const lastMeta = metaByTypPath.get(mainFile)
+    ?? [...metaByTypPath.values()].find((meta) => meta.title)
+    ?? { packages: [], graphicspath: [] }
+
   const projectName = sanitizeImportedProjectName(lastMeta.title, file.name.replace(/\.zip$/i, ''))
 
-  await createImportedProject(projectName, projectFiles)
+  await createImportedProject(projectName, projectFiles, { documentPaths })
 
   return {
     projectName,

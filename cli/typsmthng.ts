@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { resolve } from "node:path";
+import { extname, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { connect } from "node:net";
 import { execSync, spawn } from "node:child_process";
@@ -32,7 +32,7 @@ let vaultPath: string;
 let selectFile: string | null = null;
 
 if (stat.isFile()) {
-	if (!target.endsWith(".typ")) {
+	if (extname(target).toLowerCase() !== ".typ") {
 		console.error(`typsmthng: not a .typ file: ${target}`);
 		process.exit(1);
 	}

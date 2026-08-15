@@ -45,11 +45,48 @@ export async function convertLatexToTypst(source: string): Promise<ConversionRes
 }
 
 function escapeTypstMarkup(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/#/g, '\\#').replace(/\$/g, '\\$')
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/#/g, '\\#')
+    .replace(/\$/g, '\\$')
+    .replace(/]/g, '\\]')
 }
 
 function escapeTypstString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+const MATH_ESCAPED_CHARS: Record<string, string> = {
+  '&': '&',
+  '%': '%',
+  '$': '\\$',
+  '#': '\\#',
+  '_': '\\_',
+  '{': '{',
+  '}': '}',
+  ' ': ' ',
+  ',': ' ',
+  ';': ' ',
+  '!': '',
+  '\\': '\n',
+}
+
+/** Typst `document.date` is auto | none | datetime, never a string. */
+function emitTypstDocumentDate(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed || /^(?:\\)?today$/i.test(trimmed)) return 'auto'
+
+  const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (iso) {
+    return `datetime(year: ${Number(iso[1])}, month: ${Number(iso[2])}, day: ${Number(iso[3])})`
+  }
+
+  const year = trimmed.match(/^(\d{4})$/)
+  if (year) {
+    return `datetime(year: ${year[1]}, month: 1, day: 1)`
+  }
+
+  return 'auto'
 }
 
 export function normalizeLatexResourcePath(input: string): string {
@@ -320,7 +357,7 @@ function emitRoot(
     const setArgs: string[] = []
     if (metadata.title) setArgs.push(`  title: [${escapeTypstMarkup(metadata.title)}],`)
     if (metadata.author) setArgs.push(`  author: "${escapeTypstString(metadata.author)}",`)
-    if (metadata.date) setArgs.push(`  date: "${escapeTypstString(metadata.date)}",`)
+    if (metadata.date) setArgs.push(`  date: ${emitTypstDocumentDate(metadata.date)},`)
     parts.push(`#set document(\n${setArgs.join('\n')}\n)`)
     parts.push('')
   }
@@ -480,7 +517,7 @@ function emitMacro(
   if (name in SECTIONING) {
     const depth = SECTIONING[name]
     const heading = '='.repeat(depth || 1)
-    const title = args[0] || ''
+    const title = escapeTypstMarkup(args[0] || '')
     return `\n${heading} ${title}\n`
   }
 
@@ -510,17 +547,17 @@ function emitMacro(
     case 'href': {
       const url = args[0] || ''
       const text = args[1] || url
-      return `#link("${url}")[${text}]`
+      return `#link("${escapeTypstString(url)}")[${escapeTypstMarkup(text)}]`
     }
 
     case 'url':
-      return `#link("${args[0] || ''}")`
+      return `#link("${escapeTypstString(args[0] || '')}")`
 
     case 'includegraphics': {
       const file = args[0] || getOptionalArg(macro) || ''
       const mandatoryArgs = getMandatoryArgs(macro)
       const imgPath = normalizeLatexResourcePath(mandatoryArgs[mandatoryArgs.length - 1] || file)
-      return `#image("${imgPath}")`
+      return `#image("${escapeTypstString(imgPath)}")`
     }
 
     case 'caption':
@@ -556,7 +593,7 @@ function emitMacro(
       if (!/\.typ$/i.test(file)) {
         file = file.replace(/\.tex$/i, '') + '.typ'
       }
-      return `#include "${file}"`
+      return `#include "${escapeTypstString(file)}"`
     }
 
     case 'textcolor': {
@@ -652,12 +689,13 @@ function emitMathMacro(
   // Text inside math
   if (name === 'text' || name === 'textrm' || name === 'mathrm') {
     const args = getArgs(macro)
-    return `"${args[0] || ''}"`
+    return `"${escapeTypstString(args[0] || '')}"`
   }
 
-  // Escaped special chars in math
-  if (['&', '%', '$', '#', '_', '{', '}', ' ', ',', ';', '!', '\\'].includes(name)) {
-    return emitMacro(macro, warnings, true)
+  // Escaped special chars in math. Handle here — emitMacro(inMath) calls this
+  // function, so bouncing back hangs the converter on \\ in align/gather.
+  if (name in MATH_ESCAPED_CHARS) {
+    return MATH_ESCAPED_CHARS[name]
   }
 
   // Subscript/superscript handled by parser as _ and ^
@@ -1032,13 +1070,15 @@ function emitFigure(
     }
   }
 
+  const body = imagePath
+    ? `image("${escapeTypstString(imagePath)}")`
+    : (otherContent.join('').trim() || '[/* figure content missing */]')
+
   const parts: string[] = []
   parts.push('#figure(')
-  if (imagePath) {
-    parts.push(`  image("${imagePath}"),`)
-  }
+  parts.push(`  ${body},`)
   if (caption) {
-    parts.push(`  caption: [${caption}],`)
+    parts.push(`  caption: [${escapeTypstMarkup(caption)}],`)
   }
   parts.push(')')
   if (label) {
@@ -1085,7 +1125,7 @@ function emitTableEnv(
     parts.push('#figure(')
     parts.push(`  ${tableContent.trim()},`)
     if (caption) {
-      parts.push(`  caption: [${caption}],`)
+      parts.push(`  caption: [${escapeTypstMarkup(caption)}],`)
     }
     parts.push(')')
     if (label) {
@@ -1121,9 +1161,9 @@ function emitBibliographyCommand(raw: string): string {
     return '#bibliography("")'
   }
   if (entries.length === 1) {
-    return `#bibliography("${entries[0]}")`
+    return `#bibliography("${escapeTypstString(entries[0])}")`
   }
-  return `#bibliography((${entries.map((e) => `"${e}"`).join(', ')}))`
+  return `#bibliography((${entries.map((e) => `"${escapeTypstString(e)}"`).join(', ')}))`
 }
 
 function emitBibliography(

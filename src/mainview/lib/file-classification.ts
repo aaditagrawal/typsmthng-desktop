@@ -19,6 +19,7 @@ export const LATEX_TEXT_EXTENSIONS: readonly string[] = [
   '.clo',
   '.def',
   '.fd',
+  '.ltx',
 ] as const
 
 export const GENERAL_TEXT_EXTENSIONS: readonly string[] = [
@@ -73,7 +74,22 @@ export function isBibliographyPath(pathOrName: string): boolean {
 }
 
 export function isLatexPath(pathOrName: string): boolean {
-  return normalizeExtension(pathOrName) === '.tex'
+  const extension = normalizeExtension(pathOrName)
+  return extension === '.tex' || extension === '.ltx'
+}
+
+const IMAGE_PREVIEW_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.svg',
+  '.webp',
+])
+
+export function isPreviewableImagePath(pathOrName: string): boolean {
+  const extension = normalizeExtension(pathOrName)
+  return extension !== '' && IMAGE_PREVIEW_EXTENSIONS.has(extension)
 }
 
 export function shouldTreatUploadAsText(file: File): boolean {
