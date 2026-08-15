@@ -143,6 +143,20 @@ export interface VaultExportBundle {
   files: VaultExportFile[];
 }
 
+export interface UserSettings {
+  fontSize?: number;
+  autoCompile?: boolean;
+  compileDelay?: number;
+  lineWrapping?: boolean;
+  lineNumbers?: boolean;
+  theme?: "light" | "dark" | "system";
+  vimMode?: boolean;
+  pageSize?: string;
+  systemFontsEnabled?: boolean;
+  googleFontsEnabled?: boolean;
+  translucent?: boolean;
+}
+
 export type DesktopRPC = {
   bun: RPCSchema<{
     requests: {
@@ -257,6 +271,18 @@ export type DesktopRPC = {
       saveDownload: {
         params: { filename: string; data: Uint8Array };
         response: { ok: true; path: string };
+      };
+      getUserSettings: {
+        params: void;
+        response: UserSettings | null;
+      };
+      setUserSettings: {
+        params: { settings: UserSettings };
+        response: { ok: true };
+      };
+      loadSystemFonts: {
+        params: { families: string[] };
+        response: { files: Array<{ family: string; data: Uint8Array }> };
       };
       setWindowTitle: {
         params: { title: string };

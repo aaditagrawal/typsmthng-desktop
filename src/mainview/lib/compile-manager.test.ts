@@ -252,6 +252,34 @@ describe('compile-manager', () => {
     expect(compileTypstMock).toHaveBeenCalledTimes(1)
   })
 
+  it('shifts main-file diagnostics by the injected page preamble', async () => {
+    projectState.getCompileBundle.mockResolvedValue({
+      mainPath: '/main.typ',
+      mainSource: 'Hello',
+      extraFiles: [],
+      extraBinaryFiles: [],
+    })
+    compileTypstMock.mockResolvedValue({
+      svg: null,
+      vectorData: null,
+      pageDimensions: [],
+      diagnostics: [{
+        severity: 'error',
+        path: 'main.typ',
+        range: '1:0-1:5',
+        message: 'unknown variable',
+      }],
+      success: false,
+      timings: { compileMs: 1, renderMs: 0, totalMs: 1 },
+    })
+
+    const { compileManager, useCompileStore, useSettingsStore } = await loadHarness()
+    useSettingsStore.setState({ pageSize: 'a4' })
+    await compileManager.forceCompile('Hello', 'main.typ')
+
+    expect(useCompileStore.getState().diagnostics[0]?.range).toBe('0:0-0:5')
+  })
+
   it('exports PDF with the same package-compat and preamble transforms as preview', async () => {
     projectState.getCompileBundle.mockResolvedValue({
       mainPath: '/main.typ',

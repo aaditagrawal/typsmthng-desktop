@@ -48,6 +48,13 @@ describe('resolveCompileMainFile', () => {
     )).toBe('main.typ')
   })
 
+  it('prefers a nested main.typ as the compile root', () => {
+    expect(resolveCompileMainFile(
+      [file('chapters/intro.typ'), file('src/main.typ')],
+      'chapters/intro.typ',
+    )).toBe('src/main.typ')
+  })
+
   it('falls back to the current .typ file when main.typ is absent', () => {
     expect(resolveCompileMainFile(
       [file('paper.typ'), file('notes.typ')],

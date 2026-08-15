@@ -14,6 +14,7 @@ export interface ConversionResult {
     date?: string
     documentclass?: string
     packages: string[]
+    graphicspath: string[]
   }
 }
 
@@ -33,10 +34,45 @@ export async function convertLatexToTypst(source: string): Promise<ConversionRes
   const ast = parse(source)
 
   const warnings: ConversionWarning[] = []
-  const metadata: ConversionResult['metadata'] = { packages: [] }
+  const metadata: ConversionResult['metadata'] = { packages: [], graphicspath: [] }
 
   const typst = emitRoot(ast, warnings, metadata)
-  return { typst, warnings, metadata }
+  return {
+    typst: rewriteConvertedAssetPaths(typst, metadata.graphicspath),
+    warnings,
+    metadata,
+  }
+}
+
+function escapeTypstMarkup(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/#/g, '\\#').replace(/\$/g, '\\$')
+}
+
+function escapeTypstString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+export function normalizeLatexResourcePath(input: string): string {
+  return input.trim().replace(/\\/g, '/')
+}
+
+function emitCiteKeys(raw: string): string {
+  const keys = raw.split(',').map((key) => key.trim()).filter(Boolean)
+  if (keys.length === 0) return '@'
+  return keys.map((key) => `@${key}`).join(' ')
+}
+
+function rewriteConvertedAssetPaths(typst: string, graphicspath: string[]): string {
+  const prefixes = ['', ...graphicspath.map((entry) => entry.replace(/\/?$/, '/'))]
+  return typst.replace(/(\bimage\(")([^"]+)("\))/g, (full, prefix, rawPath, suffix) => {
+    const normalized = normalizeLatexResourcePath(rawPath)
+    if (!normalized) return full
+    if (/\.[a-z0-9]+$/i.test(normalized)) {
+      return `${prefix}${normalized}${suffix}`
+    }
+    const withPrefix = prefixes[0] ? `${prefixes[0]}${normalized}` : normalized
+    return `${prefix}${withPrefix}${suffix}`
+  })
 }
 
 // ── Heading depth map ──
@@ -97,6 +133,7 @@ const PREAMBLE_MACROS = new Set([
   'author',
   'date',
   'bibliographystyle',
+  'graphicspath',
 ])
 
 const MAKETITLE_TYPST = [
@@ -281,9 +318,9 @@ function emitRoot(
   // Emit metadata as Typst #set / #show rules
   if (metadata.title || metadata.author || metadata.date) {
     const setArgs: string[] = []
-    if (metadata.title) setArgs.push(`  title: [${metadata.title}],`)
-    if (metadata.author) setArgs.push(`  author: "${metadata.author}",`)
-    if (metadata.date) setArgs.push(`  date: "${metadata.date}",`)
+    if (metadata.title) setArgs.push(`  title: [${escapeTypstMarkup(metadata.title)}],`)
+    if (metadata.author) setArgs.push(`  author: "${escapeTypstString(metadata.author)}",`)
+    if (metadata.date) setArgs.push(`  date: "${escapeTypstString(metadata.date)}",`)
     parts.push(`#set document(\n${setArgs.join('\n')}\n)`)
     parts.push('')
   }
@@ -356,6 +393,11 @@ function extractPreambleMetadata(
       case 'date':
         metadata.date = args[0]
         break
+      case 'graphicspath': {
+        const paths = args.flatMap((arg) => arg.split(/\s+/)).map((entry) => normalizeLatexResourcePath(entry.replace(/[{}]/g, '')))
+        metadata.graphicspath.push(...paths.filter(Boolean))
+        break
+      }
     }
   }
 }
@@ -476,9 +518,8 @@ function emitMacro(
 
     case 'includegraphics': {
       const file = args[0] || getOptionalArg(macro) || ''
-      // Get the last mandatory arg (the file), since first may be options
       const mandatoryArgs = getMandatoryArgs(macro)
-      const imgPath = mandatoryArgs[mandatoryArgs.length - 1] || file
+      const imgPath = normalizeLatexResourcePath(mandatoryArgs[mandatoryArgs.length - 1] || file)
       return `#image("${imgPath}")`
     }
 
@@ -498,7 +539,7 @@ function emitMacro(
     case 'citep':
     case 'citet':
     case 'autocite':
-      return `@${args[0] || ''}`
+      return emitCiteKeys(args[0] || '')
 
     case 'bibliography':
       return emitBibliographyCommand(args[0] || '')
@@ -506,9 +547,12 @@ function emitMacro(
     case 'bibliographystyle':
       return '' // no typst equivalent
 
+    case 'graphicspath':
+      return ''
+
     case 'input':
     case 'include': {
-      let file = args[0] || ''
+      let file = normalizeLatexResourcePath(args[0] || '')
       if (!/\.typ$/i.test(file)) {
         file = file.replace(/\.tex$/i, '') + '.typ'
       }
@@ -973,7 +1017,7 @@ function emitFigure(
       const macro = node as Ast.Macro
       if (macro.content === 'includegraphics') {
         const mandatoryArgs = getMandatoryArgs(macro)
-        imagePath = mandatoryArgs[mandatoryArgs.length - 1] || ''
+        imagePath = normalizeLatexResourcePath(mandatoryArgs[mandatoryArgs.length - 1] || '')
       } else if (macro.content === 'caption') {
         caption = getArgs(macro)[0] || ''
       } else if (macro.content === 'label') {
@@ -1057,9 +1101,10 @@ function emitTableEnv(
 
 /** Ensure a bibliography path ends with .bib exactly once. */
 function normalizeBibPath(path: string): string {
-  const trimmed = path.trim()
+  const trimmed = normalizeLatexResourcePath(path)
   if (!trimmed) return trimmed
-  return trimmed.endsWith('.bib') ? trimmed : `${trimmed}.bib`
+  if (/\.(bib|bibtex|biblatex)$/i.test(trimmed)) return trimmed
+  return `${trimmed}.bib`
 }
 
 /**

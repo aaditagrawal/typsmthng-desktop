@@ -15,6 +15,12 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).not.toContain('refs.bib.bib')
     })
 
+    it('does not double-append .bib for uppercase bibliography paths', async () => {
+      const result = await convertLatexToTypst('\\bibliography{refs.BIB}')
+      expect(result.typst).toContain('#bibliography("refs.BIB")')
+      expect(result.typst).not.toContain('refs.BIB.bib')
+    })
+
     it('normalizes each entry in a comma-separated bibliography list', async () => {
       const result = await convertLatexToTypst('\\bibliography{refs, more.bib, extra}')
       expect(result.typst).toContain(
@@ -130,6 +136,11 @@ describe('convertLatexToTypst', () => {
 
       expect(result.typst).toContain('@knuth84')
       expect(result.typst).toContain('@fig:plot')
+    })
+
+    it('splits multi-key cite commands', async () => {
+      const result = await convertLatexToTypst('See \\cite{knuth84,lamport94}.')
+      expect(result.typst).toContain('@knuth84 @lamport94')
     })
 
     it('converts \\eqref and cite variants', async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, keymap } from '@codemirror/view'
-import { EditorState, Compartment } from '@codemirror/state'
+import { EditorState, Compartment, Prec } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
@@ -142,9 +142,9 @@ export function TypstEditor() {
         themeCompartment.of(createEditorTheme(useUIStore.getState().resolvedTheme)),
         sourceHighlightField,
         diagnosticField,
+        Prec.highest(keymap.of(typstKeymap)),
         keymap.of([
           indentWithTab,
-          ...typstKeymap,
           ...closeBracketsKeymap,
           ...defaultKeymap,
           ...searchKeymap,

@@ -113,6 +113,7 @@ describe('compiler-client', () => {
     }
     class MockWorker {
       terminate = vi.fn()
+      addEventListener = vi.fn()
     }
 
     Object.defineProperty(globalThis, 'Worker', {
@@ -205,6 +206,7 @@ describe('compiler-client', () => {
     }
     class MockWorker {
       terminate = vi.fn()
+      addEventListener = vi.fn()
     }
 
     Object.defineProperty(globalThis, 'Worker', {
@@ -225,6 +227,7 @@ describe('compiler-client', () => {
     let lastWorker: { terminate: ReturnType<typeof vi.fn> } | null = null
     class MockWorker {
       terminate = vi.fn()
+      addEventListener = vi.fn()
 
       constructor() {
         lastWorker = this

@@ -14,7 +14,14 @@ export async function runInitCommand(command: string): Promise<InitCommandResult
   const enrichedScaffold = withInitCommandInScaffold(scaffold, command.trim())
 
   const projectName = parsed.dir ?? parsed.spec.name
-  await useProjectStore.getState().createProject(projectName, enrichedScaffold)
+  const id = await useProjectStore.getState().createProject(projectName, enrichedScaffold, {
+    ifExists: 'fail',
+  })
+  if (!id) {
+    throw new Error(
+      'Project creation was cancelled or a project with that name already exists in the chosen folder.',
+    )
+  }
 
   return {
     projectName,

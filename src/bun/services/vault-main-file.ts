@@ -31,10 +31,14 @@ export function resolveCompileMainFile(
     return extension === ".typ";
   });
 
-  const mainTyp = typFiles.find(
-    (file) => normalizeVaultRelativePath(file.path) === "main.typ",
-  );
-  if (mainTyp) return "main.typ";
+  const mainTyp = typFiles
+    .map((file) => normalizeVaultRelativePath(file.path))
+    .filter((path) => {
+      const base = path.split("/").pop()?.toLowerCase()
+      return base === "main.typ"
+    })
+    .sort((left, right) => left.split("/").length - right.split("/").length)[0]
+  if (mainTyp) return mainTyp
 
   if (
     normalizedCurrent
@@ -75,8 +79,12 @@ export function resolveVaultMainFile(
   if (recentPath && files.some((file) => file.path === recentPath)) {
     return recentPath;
   }
-  const mainTyp = files.find((file) => file.path === "main.typ");
-  if (mainTyp) return mainTyp.path;
+  const mainTyp = files
+    .filter((file) => file.kind === "file")
+    .map((file) => file.path)
+    .filter((path) => (path.split("/").pop() ?? "").toLowerCase() === "main.typ")
+    .sort((left, right) => left.split("/").length - right.split("/").length)[0]
+  if (mainTyp) return mainTyp
   const firstTyp = files.find((file) => file.kind === "file" && file.extension === ".typ");
   if (firstTyp) return firstTyp.path;
   const firstText = files.find((file) => file.kind === "file" && !file.isBinary);

@@ -120,7 +120,7 @@ describe('compiler-backend', () => {
     mod.configureCompilerBackend({ fontData: [localFont] })
     await mod.initCompilerBackend()
 
-    expect(loadFontsMock).toHaveBeenCalledWith([localFont], { assets: ['text'] })
+    expect(loadFontsMock).toHaveBeenCalledWith([localFont], expect.objectContaining({ assets: ['text'] }))
   })
 
   it('compiles typst, maps diagnostics, and renders svg output', async () => {
@@ -204,7 +204,7 @@ describe('compiler-backend', () => {
       mainFilePath: '/main.typ',
       root: '/',
       format: 1,
-      diagnostics: 'none',
+      diagnostics: 'full',
     })
   })
 

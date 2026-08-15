@@ -450,6 +450,7 @@ function bindSubscriptions() {
     useProjectStore.setState((state) => {
       const project = getActiveProject(state);
       if (!project || project.rootPath !== rootPath) return state;
+      const includeHidden = state.metadata?.recentVaults.find((vault) => vault.rootPath === rootPath)?.hiddenFilesVisible ?? false;
 
       let nextFiles = project.files;
       let nextMainFile = project.mainFile;
@@ -469,6 +470,7 @@ function bindSubscriptions() {
         }
 
         if (event.kind === "addDir") {
+          if (!includeHidden && isHiddenPath(event.path)) continue;
           nextFiles = replaceEntry(nextFiles, {
             path: event.path,
             name: basenameOf(event.path),
@@ -486,6 +488,7 @@ function bindSubscriptions() {
         }
 
         const existing = nextFiles.find((entry) => entry.path === event.path);
+        if (!includeHidden && isHiddenPath(event.path) && !existing) continue;
         nextFiles = replaceEntry(nextFiles, {
           path: event.path,
           name: basenameOf(event.path),

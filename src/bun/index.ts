@@ -1,7 +1,7 @@
 import { ApplicationMenu, BrowserView, BrowserWindow, Updater } from "electrobun/bun";
 import { dlopen, FFIType } from "bun:ffi";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer, connect } from "node:net";
 import { join, resolve } from "node:path";
 
 import type { DesktopRPC } from "../shared/rpc";
@@ -11,6 +11,8 @@ import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
 import { runPlatformSetup } from "./services/platform-setup";
 import { saveDownloadFile } from "./services/save-download";
+import { loadUserSettings, saveUserSettings } from "./services/user-settings";
+import { loadSystemFontFiles } from "./services/system-fonts";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -208,6 +210,9 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 			getVaultExportBundle: ({ rootPath }) =>
 				vaultService.getVaultExportBundle(rootPath),
 			saveDownload: ({ filename, data }) => saveDownloadFile(filename, data),
+			getUserSettings: () => loadUserSettings(),
+			setUserSettings: ({ settings }) => saveUserSettings(settings),
+			loadSystemFonts: ({ families }) => loadSystemFontFiles(families),
 			setWindowTitle: ({ title }) => {
 				requireMainWindow().setTitle(title);
 				return { ok: true as const };
@@ -331,6 +336,44 @@ function setupMacOSMenu(window: BrowserWindow<DesktopBunRPC>) {
 	});
 }
 
+const isWindows = process.platform === "win32";
+const SOCKET_DIR = isWindows
+	? ""
+	: join(process.env.HOME ?? process.env.USERPROFILE ?? "/tmp", ".typsmthng");
+const SOCKET_PATH = isWindows
+	? "\\\\.\\pipe\\typsmthng-cli"
+	: join(SOCKET_DIR, "cli.sock");
+
+let cliServer: ReturnType<typeof createServer> | null = null;
+
+function tryForwardToRunningInstance(): Promise<boolean> {
+	return new Promise((resolve) => {
+		const client = connect(SOCKET_PATH);
+		const timer = setTimeout(() => {
+			client.destroy();
+			resolve(false);
+		}, 400);
+		client.on("connect", () => {
+			clearTimeout(timer);
+			const args = parseStartupArgs();
+			const payload = args.vaultPath
+				? { action: "open", path: args.vaultPath, selectFile: args.selectFile }
+				: { action: "focus" };
+			client.write(JSON.stringify(payload));
+			client.end();
+			resolve(true);
+		});
+		client.on("error", () => {
+			clearTimeout(timer);
+			resolve(false);
+		});
+	});
+}
+
+if (await tryForwardToRunningInstance()) {
+	process.exit(0);
+}
+
 const storedWindowState = await vaultService.getStoredWindowState();
 const restoredFrame = clampWindowState({
 	x: storedWindowState?.x ?? DEFAULT_FRAME.x,
@@ -372,27 +415,18 @@ const framePersistTimer = setInterval(() => {
 	void persistWindowFrame();
 }, WINDOW_STATE_PERSIST_MS);
 
-// --- IPC socket server for CLI ---
-const isWindows = process.platform === "win32";
-const SOCKET_DIR = isWindows
-	? ""
-	: join(process.env.HOME ?? process.env.USERPROFILE ?? "/tmp", ".typsmthng");
-const SOCKET_PATH = isWindows
-	? "\\\\.\\pipe\\typsmthng-cli"
-	: join(SOCKET_DIR, "cli.sock");
-
-let cliServer: ReturnType<typeof createServer> | null = null;
-
-async function handleOpenFromCli(vaultPath: string, selectFile: string | null) {
+async function handleOpenFromCli(vaultPath: string | null, selectFile: string | null) {
 	const window = requireMainWindow();
-	const vault = await vaultService.openRecentVault(vaultPath, window, selectFile);
-	if (vault && selectFile) {
-		try {
-			await vaultService.persistLastFile(vaultPath, selectFile);
-		} catch {}
-	}
-	if (vault) {
-		await vaultService.resendActiveVault(window);
+	if (vaultPath) {
+		const vault = await vaultService.openRecentVault(vaultPath, window, selectFile);
+		if (vault && selectFile) {
+			try {
+				await vaultService.persistLastFile(vaultPath, selectFile);
+			} catch {}
+		}
+		if (vault) {
+			await vaultService.resendActiveVault(window);
+		}
 	}
 	window.focus();
 }
@@ -415,6 +449,8 @@ function startCliServer() {
 				const msg = JSON.parse(data);
 				if (msg.action === "open" && msg.path) {
 					void handleOpenFromCli(msg.path, msg.selectFile ?? null);
+				} else if (msg.action === "focus") {
+					void handleOpenFromCli(null, null);
 				}
 			} catch {}
 		});

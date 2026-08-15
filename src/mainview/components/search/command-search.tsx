@@ -3,6 +3,8 @@ import { FileText, Search, TextCursorInput } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { desktopRpc } from '@/lib/desktop-rpc'
+import { waitForEditorPath } from '@/lib/diagnostic-navigation'
+import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useUIStore } from '@/stores/ui-store'
 
@@ -133,6 +135,25 @@ export function CommandSearch() {
     if (!item) return
     useProjectStore.getState().selectFile(item.path)
     useProjectStore.getState().setSidebarOpen(true)
+    if (item.kind === 'text') {
+      const view = await waitForEditorPath(item.path, {
+        isCurrentPath: () => useProjectStore.getState().currentFilePath,
+        isFileLoaded: (path) => {
+          const project = useProjectStore.getState().getCurrentProject()
+          const file = project?.files.find((entry) => entry.path === path || entry.path === `/${path}`)
+          return Boolean(file?.loaded || file?.content)
+        },
+        getEditorView: () => useEditorStore.getState().editorView,
+      })
+      if (view) {
+        const lineNumber = Math.max(1, Math.min(item.line, view.state.doc.lines))
+        const line = view.state.doc.line(lineNumber)
+        view.dispatch({
+          selection: { anchor: line.from },
+          scrollIntoView: true,
+        })
+      }
+    }
     close()
   }
 

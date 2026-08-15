@@ -2,7 +2,7 @@ import type { EditorView } from '@codemirror/view'
 import type { ChangeSpec } from '@codemirror/state'
 
 const COMMENT_PREFIX = '// '
-const COMMENT_PATTERN = /^(\s*)\/\/ ?/
+const COMMENT_PATTERN = /^(\s*)\/\/\/? ?/
 
 function getSelectedLineNumbers(view: EditorView): number[] {
   const lines = new Set<number>()
@@ -24,7 +24,9 @@ export function toggleTypstLineComment(view: EditorView): boolean {
   if (lineNumbers.length === 0) return false
 
   const lines = lineNumbers.map((lineNumber) => view.state.doc.line(lineNumber))
-  const shouldUncomment = lines.every((line) => COMMENT_PATTERN.test(line.text))
+  const contentLines = lines.filter((line) => line.text.trim().length > 0)
+  const shouldUncomment = contentLines.length > 0
+    && contentLines.every((line) => COMMENT_PATTERN.test(line.text))
 
   const changes: ChangeSpec[] = []
   for (const line of lines) {
@@ -40,6 +42,8 @@ export function toggleTypstLineComment(view: EditorView): boolean {
       })
       continue
     }
+
+    if (line.text.trim().length === 0) continue
 
     changes.push({
       from: line.from + indentLength,

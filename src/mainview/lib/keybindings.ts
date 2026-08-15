@@ -1,7 +1,7 @@
 import type { KeyBinding } from '@codemirror/view'
 import { useProjectStore } from '@/stores/project-store'
 import { useEditorStore } from '@/stores/editor-store'
-import { useUIStore } from '@/stores/ui-store'
+import { useSettingsStore } from '@/stores/settings-store'
 import { forceCompile, compileCurrentToPdf } from './compile-manager'
 import { toggleTypstLineComment } from './commenting'
 import { downloadBlob } from './download-blob'
@@ -52,7 +52,7 @@ export const typstKeymap: KeyBinding[] = [
   {
     key: 'Mod-j',
     run: () => {
-      const { theme, setTheme } = useUIStore.getState()
+      const { theme, setTheme } = useSettingsStore.getState()
       const next = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
       setTheme(next)
       return true

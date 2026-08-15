@@ -6,6 +6,7 @@ import type { PageSize } from '@/stores/settings-store'
 import { initCompiler, compileTypst, compileToPdf, ensurePackagesForCompile, getPackageRuntimeEpoch } from './compiler'
 import { applyPackageImportCompatRewrites } from './package-compat'
 import { normalizeExtension } from './file-classification'
+import { shiftMainFileDiagnostics } from './diagnostic-shift'
 import { perfMark, perfMeasure, perfSample } from './perf'
 
 const MIN_COMPILE_DELAY_MS = 120
@@ -130,11 +131,37 @@ interface CompileRequest {
 
 let pendingRequest: CompileRequest | null = null
 let compiling = false
+let compileLockWaiters: Array<() => void> = []
 let initPromise: Promise<void> | null = null
 let lastEnsuredPackagesKey: string | null = null
 let smoothedCompileTimeMs = 0
 let nextCompileRequestId = 0
 let latestRequestedCompileId = 0
+
+async function acquireCompileLock(): Promise<void> {
+  if (!compiling) {
+    compiling = true
+    return
+  }
+  await new Promise<void>((resolve) => {
+    compileLockWaiters.push(resolve)
+  })
+  compiling = true
+}
+
+function releaseCompileLock(): void {
+  const nextWaiter = compileLockWaiters.shift()
+  if (nextWaiter) {
+    nextWaiter()
+    return
+  }
+  compiling = false
+  if (pendingRequest !== null) {
+    const next = pendingRequest
+    pendingRequest = null
+    scheduleDeferredCompile(next)
+  }
+}
 
 function nextRequestId(): number {
   nextCompileRequestId += 1
@@ -336,6 +363,8 @@ async function doCompile(request: CompileRequest): Promise<void> {
       sourcePath,
     )
     const transformed = transformCompileInputs(compileInputs)
+    const preambleLines = getInjectedPreambleLineCount(transformed.mainSource)
+    store.setCompiledMainPath(transformed.mainPath)
     perfMeasure('compile.input-build', inputStart, {
       files: 1 + compileInputs.extraFiles.length + compileInputs.extraBinaryFiles.length,
       requestId: request.requestId,
@@ -394,7 +423,11 @@ async function doCompile(request: CompileRequest): Promise<void> {
     }
 
     store.setCompileTime(Math.round(totalSample.ms))
-    store.setDiagnostics(result.diagnostics)
+    store.setDiagnostics(shiftMainFileDiagnostics(
+      result.diagnostics,
+      transformed.mainPath,
+      preambleLines,
+    ))
 
     if (result.timings) {
       perfSample('compile.engine.compile', result.timings.compileMs, {
@@ -424,13 +457,7 @@ async function doCompile(request: CompileRequest): Promise<void> {
       }])
     }
   } finally {
-    compiling = false
-
-    if (pendingRequest !== null) {
-      const next = pendingRequest
-      pendingRequest = null
-      scheduleDeferredCompile(next)
-    }
+    releaseCompileLock()
   }
 }
 
@@ -458,26 +485,43 @@ async function ensureCompilerReadyForSource(
 }
 
 export async function compileCurrentToPdf(): Promise<Uint8Array | null> {
-  const projectStore = useProjectStore.getState()
-  const currentFilePath = projectStore.currentFilePath
-  const liveSource = useEditorStore.getState().source
-  const compileInputs = await projectStore.getCompileBundle(liveSource, currentFilePath)
-  const transformed = transformCompileInputs(compileInputs)
+  await acquireCompileLock()
+  const store = useCompileStore.getState()
+  try {
+    const projectStore = useProjectStore.getState()
+    const currentFilePath = projectStore.currentFilePath
+    const liveSource = useEditorStore.getState().source
+    const compileInputs = await projectStore.getCompileBundle(liveSource, currentFilePath)
+    const transformed = transformCompileInputs(compileInputs)
+    store.setCompiledMainPath(transformed.mainPath)
 
-  await ensureCompilerReadyForSource(transformed.mainSource, transformed.extraFiles)
-  const packagesReady = await ensurePreviewPackages(
-    transformed.mainSource,
-    transformed.extraFiles,
-    transformed.mainPath,
-  )
-  if (!packagesReady) return null
+    await ensureCompilerReadyForSource(transformed.mainSource, transformed.extraFiles)
+    const packagesReady = await ensurePreviewPackages(
+      transformed.mainSource,
+      transformed.extraFiles,
+      transformed.mainPath,
+    )
+    if (!packagesReady) return null
 
-  return compileToPdf(
-    transformed.finalSource,
-    transformed.extraFiles,
-    transformed.mainPath,
-    transformed.extraBinaryFiles,
-  )
+    return await compileToPdf(
+      transformed.finalSource,
+      transformed.extraFiles,
+      transformed.mainPath,
+      transformed.extraBinaryFiles,
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'PDF export failed'
+    store.setStatus('error')
+    store.setDiagnostics([{
+      severity: 'error',
+      path: store.compiledMainPath ?? '',
+      range: '',
+      message,
+    }])
+    throw err
+  } finally {
+    releaseCompileLock()
+  }
 }
 
 export function requestCompile(source: string, sourcePath?: string | null): void {

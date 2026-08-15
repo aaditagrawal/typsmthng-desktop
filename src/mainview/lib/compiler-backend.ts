@@ -167,16 +167,40 @@ export async function initCompilerBackend(): Promise<void> {
   initPromise = (async () => {
     try {
       compiler = createTypstCompiler()
-      await compiler.init({
-        getModule: () => loadWasmModule(compilerWasmUrl),
-        beforeBuild: [
-          loadFonts(additionalFontData, { assets: ['text'] }),
-          initOptions.withAccessModel(packageAccessModel as never),
-          initOptions.withPackageRegistry({
-            resolve: (spec: unknown) => ensurePackageInAccessModel(spec),
-          } as never),
-        ],
-      })
+      const fontFetcher = ((url: string) => loadWasmModule(url)) as unknown as typeof fetch
+      const fontLoaders = [
+        loadFonts(additionalFontData, {
+          assets: ['text'],
+          fetcher: fontFetcher,
+        }),
+      ]
+      try {
+        await compiler.init({
+          getModule: () => loadWasmModule(compilerWasmUrl),
+          beforeBuild: [
+            ...fontLoaders,
+            initOptions.withAccessModel(packageAccessModel as never),
+            initOptions.withPackageRegistry({
+              resolve: (spec: unknown) => ensurePackageInAccessModel(spec),
+            } as never),
+          ],
+        })
+      } catch (fontErr) {
+        // CDN text assets fail on some views:// origins and offline. Retry with
+        // bundled/user fonts only so the compiler can still start.
+        console.warn('Typst text font assets failed to load, retrying without CDN fonts:', fontErr)
+        compiler = createTypstCompiler()
+        await compiler.init({
+          getModule: () => loadWasmModule(compilerWasmUrl),
+          beforeBuild: [
+            loadFonts(additionalFontData, { assets: false, fetcher: fontFetcher }),
+            initOptions.withAccessModel(packageAccessModel as never),
+            initOptions.withPackageRegistry({
+              resolve: (spec: unknown) => ensurePackageInAccessModel(spec),
+            } as never),
+          ],
+        })
+      }
 
       renderer = createTypstRenderer()
       await renderer.init({
@@ -418,14 +442,22 @@ export async function compileToPdfBackend(
     }
   }
 
-  const { result } = await compiler.compile({
+  const { result, diagnostics: rawDiags } = await compiler.compile({
     mainFilePath: normalizedMainFilePath,
     root: PROJECT_ROOT,
     format: 1,
-    diagnostics: 'none',
+    diagnostics: 'full',
   })
 
-  return result ?? null
+  if (result) return result
+
+  const messages = (rawDiags ?? [])
+    .map((entry) => {
+      const diag = entry as unknown as Record<string, unknown>
+      return String(diag.message || '').trim()
+    })
+    .filter(Boolean)
+  throw new Error(messages.join('\n') || 'PDF export failed')
 }
 
 export async function ensurePackagesForCompileBackend(specs: string[]): Promise<void> {

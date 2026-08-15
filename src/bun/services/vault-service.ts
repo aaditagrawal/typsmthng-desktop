@@ -12,6 +12,7 @@ import {
   type ExternalVaultEvent,
   type PathSearchResult,
   type ProjectScaffold,
+  type ProjectTemplateMeta,
   type RecentVaultRecord,
   type TextSearchResult,
   type VaultExportBundle,
@@ -124,7 +125,7 @@ function assertSafeVaultRelativePath(input: string): string {
 
 /** Single-segment project folder name; strips parents and rejects empty / `.` / `..`. */
 function sanitizeCreateVaultFolderName(input: string): string | null {
-  const name = path.basename(input.trim());
+  const name = path.basename(input.trim()).replace(/[/\\:*?"<>|]/g, "_").trim();
   if (!name || name === "." || name === "..") return null;
   return name;
 }
@@ -777,7 +778,7 @@ export class VaultService {
           entry.kind === "file"
           && entry.path !== ".folder"
           && !entry.path.endsWith("/.folder")
-          && !entry.path.startsWith(".typsmthng/"),
+          && (entry.path === ".typsmthng/template.json" || !entry.path.startsWith(".typsmthng/")),
       );
 
       const files = await Promise.all(
@@ -809,9 +810,24 @@ export class VaultService {
         }),
       );
 
+      const exportFiles = [...files];
+      const hasTemplateMeta = exportFiles.some((file) => file.path === ".typsmthng/template.json");
+      if (!hasTemplateMeta) {
+        try {
+          const content = await fs.readFile(path.join(rootPath, ".typsmthng", "template.json"), "utf8");
+          exportFiles.push({
+            path: ".typsmthng/template.json",
+            isBinary: false,
+            content,
+          });
+        } catch {
+          // Optional template metadata.
+        }
+      }
+
       return {
         name: path.basename(rootPath),
-        files,
+        files: exportFiles,
       };
     } catch (error) {
       console.error("Failed to build vault export bundle", error);
@@ -944,7 +960,19 @@ export class VaultService {
       mainFile,
       createdAt: now,
       updatedAt: now,
+      templateMeta: await this.readTemplateMeta(rootPath),
     };
+  }
+
+  private async readTemplateMeta(rootPath: string): Promise<ProjectTemplateMeta | undefined> {
+    try {
+      const raw = await fs.readFile(path.join(rootPath, ".typsmthng", "template.json"), "utf8");
+      const parsed = JSON.parse(raw) as ProjectTemplateMeta;
+      if (!parsed || typeof parsed !== "object") return undefined;
+      return parsed;
+    } catch {
+      return undefined;
+    }
   }
 
   private async hydrateRecentVaultMetadata(metadata: AppMetadata): Promise<AppMetadata> {

@@ -30,6 +30,14 @@ describe('toggleTypstLineComment', () => {
     expect(view.state.doc.toString()).toBe('  Hello world')
   })
 
+  it('does not treat blank lines as uncommented when toggling a comment block', () => {
+    const doc = ['// alpha', '', '// gamma'].join('\n')
+    const view = createTestView(doc, EditorSelection.single(0, doc.length))
+
+    expect(toggleTypstLineComment(view as never)).toBe(true)
+    expect(view.state.doc.toString()).toBe(['alpha', '', 'gamma'].join('\n'))
+  })
+
   it('comments all selected lines at their indentation level', () => {
     const doc = ['alpha', '  beta', 'gamma'].join('\n')
     const view = createTestView(doc, EditorSelection.single(0, doc.length))

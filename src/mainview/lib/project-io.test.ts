@@ -71,6 +71,13 @@ describe('resolveImportedMainFile', () => {
     ])).toBe('/main.typ')
   })
 
+  it('prefers a nested main.typ over the first zip entry', () => {
+    expect(resolveImportedMainFile([
+      { path: '/chapters/intro.typ' },
+      { path: '/src/main.typ' },
+    ])).toBe('/src/main.typ')
+  })
+
   it('falls back to the first .typ file', () => {
     expect(resolveImportedMainFile([
       { path: '/readme.md' },
@@ -141,6 +148,7 @@ describe('normalizeImportEntryPath', () => {
     expect(normalizeImportEntryPath('src/../main.typ')).toBe('main.typ')
     expect(() => normalizeImportEntryPath('../evil.typ')).toThrow(/escapes project root/)
     expect(() => normalizeImportEntryPath('a/../../evil.typ')).toThrow(/escapes project root/)
+    expect(() => normalizeImportEntryPath('C:/Users/me/main.typ')).toThrow(/escapes project root/)
   })
 })
 
@@ -235,6 +243,26 @@ describe('importLatexZip', () => {
     expect(main?.content).toContain('// converted')
     expect(main?.content).toContain('From tex')
     expect(main?.content).not.toContain('Stale typ')
+  })
+
+  it('unwraps a nested zip when the outer archive has no source files', async () => {
+    const inner = zipSync({
+      'main.tex': strToU8('\\begin{document}Inner\\end{document}\n'),
+    })
+    const outer = zipSync({
+      'source.zip': inner,
+    })
+    const file = new File(
+      [outer.buffer.slice(outer.byteOffset, outer.byteOffset + outer.byteLength) as ArrayBuffer],
+      'nested.zip',
+      { type: 'application/zip' },
+    )
+
+    await importLatexZip(file)
+
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    expect(scaffold.files.map((entry: { path: string }) => entry.path)).toEqual(['/main.typ'])
+    expect(scaffold.files[0]?.content).toContain('Inner')
   })
 })
 

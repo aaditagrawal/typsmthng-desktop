@@ -366,7 +366,10 @@ export function SettingsModal() {
           <SettingRow label="Page Size" description="Overridden by #set page() in source">
             <select
               value={pageSize}
-              onChange={(e) => setPageSize(e.target.value as PageSize)}
+              onChange={(e) => {
+                setPageSize(e.target.value as PageSize)
+                forceRecompile()
+              }}
               style={{
                 fontFamily: 'var(--font-mono)',
                 fontSize: '11px',

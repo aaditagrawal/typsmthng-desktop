@@ -333,25 +333,39 @@ export function FileTree() {
   const [viewportHeight, setViewportHeight] = useState(480)
   const [dragActive, setDragActive] = useState(false)
 
+  const includeHidden = useProjectStore((s) => (
+    s.metadata?.recentVaults.find((vault) => vault.rootPath === s.currentProjectId)?.hiddenFilesVisible ?? false
+  ))
   const treeSignature = useMemo(() => structureSignature(currentProject?.files ?? []), [currentProject?.files])
-  const tree = useMemo(() => buildTree(currentProject?.files ?? []), [currentProject?.files, treeSignature])
+  const visibleFiles = useMemo(() => {
+    const files = currentProject?.files ?? []
+    if (includeHidden) return files
+    return files.filter((file) => !file.isHidden && !normalizePath(file.path).split('/').some((segment) => segment.startsWith('.')))
+  }, [currentProject?.files, includeHidden])
+  const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles, treeSignature])
   const rows = useMemo(() => flattenTree(tree, expanded), [expanded, tree])
 
   useEffect(() => {
-    const nextExpanded = new Set<string>()
-    for (const node of tree) {
-      if (node.kind === 'directory') nextExpanded.add(node.path)
-    }
+    setExpanded(() => {
+      const next = new Set<string>()
+      for (const node of tree) {
+        if (node.kind === 'directory') next.add(node.path)
+      }
+      return next
+    })
+  }, [currentProject?.id])
 
-    if (currentFilePath) {
+  useEffect(() => {
+    if (!currentFilePath) return
+    setExpanded((prev) => {
+      const next = new Set(prev)
       const segments = normalizePath(currentFilePath).split('/')
       for (let index = 1; index < segments.length; index += 1) {
-        nextExpanded.add(segments.slice(0, index).join('/'))
+        next.add(segments.slice(0, index).join('/'))
       }
-    }
-
-    setExpanded(nextExpanded)
-  }, [currentProject?.id, currentFilePath, tree])
+      return next
+    })
+  }, [currentFilePath])
 
   useEffect(() => {
     const list = listRef.current
@@ -375,13 +389,25 @@ export function FileTree() {
   const promptForFile = async (baseDirectory = activeDirectory) => {
     const suggestion = baseDirectory ? `${baseDirectory}/main.typ` : 'main.typ'
     const nextPath = window.prompt('New file path', suggestion)?.trim()
-    if (nextPath) await createFile(nextPath)
+    if (nextPath) {
+      try {
+        await createFile(nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to create file.')
+      }
+    }
   }
 
   const promptForFolder = async (baseDirectory = activeDirectory) => {
     const suggestion = baseDirectory ? `${baseDirectory}/notes` : 'notes'
     const nextPath = window.prompt('New folder path', suggestion)?.trim()
-    if (nextPath) await createFolder(nextPath)
+    if (nextPath) {
+      try {
+        await createFolder(nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to create folder.')
+      }
+    }
   }
 
   const renameNode = async (node: TreeNode) => {
@@ -392,9 +418,17 @@ export function FileTree() {
     const parent = parentPath(node.path)
     const nextPath = parent ? `${parent}/${nextName}` : nextName
     if (node.kind === 'directory') {
-      await renameFolder(node.path, nextPath)
+      try {
+        await renameFolder(node.path, nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to rename folder.')
+      }
     } else {
-      await renameFile(node.path, nextPath)
+      try {
+        await renameFile(node.path, nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to rename file.')
+      }
     }
   }
 
@@ -406,7 +440,11 @@ export function FileTree() {
         .map((entry) => entry.path),
       node.path,
     )
-    await duplicateFile(node.path, nextPath)
+    try {
+      await duplicateFile(node.path, nextPath)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to duplicate file.')
+    }
   }
 
   const actionsForNode = (node: TreeNode): ContextMenuAction[] => [
@@ -459,8 +497,14 @@ export function FileTree() {
       danger: true,
       onClick: () => {
         if (!window.confirm(`Delete ${node.name}?`)) return
-        if (node.kind === 'directory') void deleteFolder(node.path)
-        else void deleteFile(node.path)
+        void (async () => {
+          try {
+            if (node.kind === 'directory') await deleteFolder(node.path)
+            else await deleteFile(node.path)
+          } catch (error) {
+            window.alert(error instanceof Error ? error.message : 'Failed to delete.')
+          }
+        })()
       },
     },
   ]

@@ -11,7 +11,6 @@ import {
   Star,
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { useUIStore } from '@/stores/ui-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { isMacOS, revealLabel } from '@/lib/platform'
@@ -19,8 +18,8 @@ import { compileCurrentToPdf } from '@/lib/compile-manager'
 import { downloadBlob } from '@/lib/download-blob'
 
 function ThemeToggle() {
-  const theme = useUIStore((s) => s.theme)
-  const setTheme = useUIStore((s) => s.setTheme)
+  const theme = useSettingsStore((s) => s.theme)
+  const setTheme = useSettingsStore((s) => s.setTheme)
 
   const cycle = () => {
     const next = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'

@@ -18,10 +18,21 @@ export interface LatexImportResult {
 }
 
 export function resolveImportedMainFile(projectFiles: Array<{ path: string }>): string {
-  return projectFiles.find((f) => f.path === '/main.typ')?.path
-    || projectFiles.find((f) => f.path.endsWith('.typ'))?.path
-    || projectFiles[0]?.path
-    || '/main.typ'
+  const typFiles = projectFiles.filter((file) => file.path.toLowerCase().endsWith('.typ'))
+  const mainFiles = typFiles.filter((file) => {
+    const base = basenamePath(file.path).toLowerCase()
+    return base === 'main.typ'
+  })
+  if (mainFiles.length > 0) {
+    mainFiles.sort((left, right) => {
+      const leftDepth = left.path.split('/').length
+      const rightDepth = right.path.split('/').length
+      return leftDepth - rightDepth
+    })
+    return mainFiles[0].path
+  }
+  const rootTyp = typFiles.find((file) => !file.path.replace(/^\/+/, '').includes('/'))
+  return rootTyp?.path || typFiles[0]?.path || projectFiles[0]?.path || '/main.typ'
 }
 
 /** Strip a single shared top-level folder from zip paths (Overleaf-style archives). */
@@ -81,6 +92,9 @@ export function normalizeImportEntryPath(path: string): string | null {
       }
       resolved.pop()
       continue
+    }
+    if (/^[a-zA-Z]:$/.test(segment)) {
+      throw new Error(`Archive path escapes project root: ${path}`)
     }
     resolved.push(segment)
   }
@@ -195,6 +209,85 @@ export function uniqueExportFolderName(project: Project, usedNames: Set<string>)
   return candidate
 }
 
+export function sanitizeImportedProjectName(input: string | undefined, fallback: string): string {
+  const sanitized = (input ?? '').replace(/[/\\:*?"<>|]/g, '_').trim()
+  return sanitized || fallback
+}
+
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.pdf', '.webp']
+
+function rewriteImportedTypstAssets(
+  content: string,
+  availablePaths: string[],
+): string {
+  const normalizedAvailable = availablePaths.map((path) => path.replace(/^\/+/, ''))
+  return content.replace(/(\bimage\(")([^"]+)("\))/g, (full, prefix, rawPath, suffix) => {
+    const requested = rawPath.replace(/\\/g, '/').replace(/^\/+/, '')
+    if (!requested) return full
+    const candidates = [
+      requested,
+      ...IMAGE_EXTENSIONS.map((ext) => `${requested}${ext}`),
+    ]
+    for (const candidate of candidates) {
+      const match = normalizedAvailable.find((path) => path === candidate || path.endsWith(`/${candidate}`))
+      if (match) return `${prefix}/${match}${suffix}`
+    }
+    return `${prefix}${requested}${suffix}`
+  })
+}
+
+function applyAssetRewrites(files: ProjectFile[]): ProjectFile[] {
+  const available = files.map((file) => file.path)
+  return files.map((file) => {
+    if (file.isBinary || !file.path.toLowerCase().endsWith('.typ')) return file
+    return { ...file, content: rewriteImportedTypstAssets(file.content, available) }
+  })
+}
+
+function unzipEntries(data: Uint8Array): Array<[string, Uint8Array]> {
+  const unzipped = unzipSync(data)
+  return Object.entries(unzipped).flatMap(([rawPath, bytes]) => {
+    const normalized = normalizeImportEntryPath(rawPath)
+    return normalized ? [[normalized, bytes] as const] : []
+  })
+}
+
+function maybeUnwrapNestedZip(entries: Array<readonly [string, Uint8Array]>): Array<readonly [string, Uint8Array]> {
+  const hasSource = entries.some(([path]) => isLatexPath(path) || path.toLowerCase().endsWith('.typ'))
+  if (hasSource) return entries
+  const innerZips = entries.filter(([path]) => path.toLowerCase().endsWith('.zip'))
+  if (innerZips.length !== 1) return entries
+  try {
+    return unzipEntries(innerZips[0][1])
+  } catch {
+    return entries
+  }
+}
+
+function unwrapImportAllWrapper(
+  projectFolders: Map<string, Array<{ path: string; data: Uint8Array }>>,
+): Map<string, Array<{ path: string; data: Uint8Array }>> {
+  if (projectFolders.size !== 1) return projectFolders
+  const [wrapperName, entries] = [...projectFolders.entries()][0]
+  const childFolders = new Map<string, Array<{ path: string; data: Uint8Array }>>()
+  let hasRootFiles = false
+  for (const entry of entries) {
+    const relative = entry.path.replace(/^\/+/, '')
+    const slashIndex = relative.indexOf('/')
+    if (slashIndex < 0) {
+      hasRootFiles = true
+      break
+    }
+    const child = relative.slice(0, slashIndex)
+    const rest = relative.slice(slashIndex)
+    if (!childFolders.has(child)) childFolders.set(child, [])
+    childFolders.get(child)!.push({ path: rest, data: entry.data })
+  }
+  if (hasRootFiles || childFolders.size < 2) return projectFolders
+  void wrapperName
+  return childFolders
+}
+
 export async function exportProject(projectId?: string): Promise<void> {
   const state = useProjectStore.getState()
   const project = projectId
@@ -297,12 +390,16 @@ export async function importAllProjects(file: File): Promise<number> {
     throw new Error('The file does not appear to be a valid zip archive.')
   }
 
+  const rawEntries = Object.entries(unzipped).flatMap(([rawPath, data]) => {
+    const normalized = normalizeImportEntryPath(rawPath)
+    return normalized ? [[normalized, data] as const] : []
+  })
+  const unwrapped = maybeUnwrapNestedZip(rawEntries)
+
   // Group files by top-level folder (each folder = one project)
   const projectFolders = new Map<string, Array<{ path: string; data: Uint8Array }>>()
 
-  for (const [rawPath, data] of Object.entries(unzipped)) {
-    const normalized = normalizeImportEntryPath(rawPath)
-    if (!normalized) continue
+  for (const [normalized, data] of unwrapped) {
     const slashIndex = normalized.indexOf('/')
     if (slashIndex < 0) continue // skip files not in a folder
     const folderName = normalized.slice(0, slashIndex)
@@ -313,14 +410,16 @@ export async function importAllProjects(file: File): Promise<number> {
     projectFolders.get(folderName)!.push({ path: filePath, data })
   }
 
-  if (projectFolders.size === 0) {
+  const grouped = unwrapImportAllWrapper(projectFolders)
+
+  if (grouped.size === 0) {
     throw new Error('No project folders found in the archive.')
   }
 
   const store = useProjectStore.getState()
   let imported = 0
 
-  for (const [folderName, entries] of projectFolders) {
+  for (const [folderName, entries] of grouped) {
     const commonRoot = stripZipCommonRootPrefix(entries.map((entry) => entry.path))
     const filesByPath = new Map<string, ProjectFile>()
     const convertedFromTex = new Set<string>()
@@ -359,7 +458,7 @@ export async function importAllProjects(file: File): Promise<number> {
       }
     }
 
-    const projectFiles = [...filesByPath.values()]
+    const projectFiles = applyAssetRewrites([...filesByPath.values()])
     if (projectFiles.length === 0) continue
 
     const id = await store.createProject(folderName, {
@@ -400,10 +499,10 @@ export async function importProject(file: File): Promise<void> {
 
   const filesByPath = new Map<string, ProjectFile>()
   const convertedFromTex = new Set<string>()
-  const zipEntries = Object.entries(unzipped).flatMap(([rawPath, data]) => {
+  const zipEntries = maybeUnwrapNestedZip(Object.entries(unzipped).flatMap(([rawPath, data]) => {
     const normalized = normalizeImportEntryPath(rawPath)
     return normalized ? [[normalized, data] as const] : []
-  })
+  }))
   const commonRoot = stripZipCommonRootPrefix(zipEntries.map(([path]) => path))
 
   for (const [path, data] of zipEntries) {
@@ -442,7 +541,7 @@ export async function importProject(file: File): Promise<void> {
     }
   }
 
-  const projectFiles = [...filesByPath.values()]
+  const projectFiles = applyAssetRewrites([...filesByPath.values()])
   if (projectFiles.length === 0) {
     throw new Error('The zip archive contains no importable files.')
   }
@@ -459,7 +558,7 @@ export async function importLatexProject(
   const filesByPath = new Map<string, ProjectFile>()
   const convertedFromTex = new Set<string>()
   let texCount = 0
-  let lastMeta: ConversionResult['metadata'] = { packages: [] }
+  let lastMeta: ConversionResult['metadata'] = { packages: [], graphicspath: [] }
 
   const normalizedInputs = files.map((entry) => {
     const normalized = normalizeImportEntryPath(entry.relativePath)
@@ -506,16 +605,16 @@ export async function importLatexProject(
     }
   }
 
-  const projectFiles = [...filesByPath.values()]
+  const projectFiles = applyAssetRewrites([...filesByPath.values()])
   if (projectFiles.length === 0) {
     throw new Error('No files found to import')
   }
 
   // Determine project name: metadata title > first .tex filename > generic
-  const projectName = lastMeta.title
-    || (texCount === 1
-      ? files.find((f) => isLatexPath(f.file.name))!.file.name.replace(/\.tex$/i, '')
-      : `LaTeX Import (${texCount} files)`)
+  const fallbackName = texCount === 1
+    ? files.find((f) => isLatexPath(f.file.name))!.file.name.replace(/\.tex$/i, '')
+    : `LaTeX Import (${texCount} files)`
+  const projectName = sanitizeImportedProjectName(lastMeta.title, fallbackName)
 
   await createImportedProject(projectName, projectFiles)
 
@@ -542,12 +641,12 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
   const filesByPath = new Map<string, ProjectFile>()
   const convertedFromTex = new Set<string>()
   let texCount = 0
-  let lastMeta: ConversionResult['metadata'] = { packages: [] }
+  let lastMeta: ConversionResult['metadata'] = { packages: [], graphicspath: [] }
 
-  const zipEntries = Object.entries(unzipped).flatMap(([rawPath, data]) => {
+  const zipEntries = maybeUnwrapNestedZip(Object.entries(unzipped).flatMap(([rawPath, data]) => {
     const normalized = normalizeImportEntryPath(rawPath)
     return normalized ? [[normalized, data] as const] : []
-  })
+  }))
   const commonRoot = stripZipCommonRootPrefix(zipEntries.map(([path]) => path))
 
   for (const [path, data] of zipEntries) {
@@ -592,13 +691,15 @@ export async function importLatexZip(file: File): Promise<LatexImportResult> {
     }
   }
 
-  const projectFiles = [...filesByPath.values()]
+  const projectFiles = applyAssetRewrites([...filesByPath.values()])
   if (projectFiles.length === 0) {
     throw new Error('The zip archive contains no importable files.')
   }
+  if (texCount === 0) {
+    throw new Error('No .tex files found in the archive.')
+  }
 
-  const projectName = lastMeta.title
-    || file.name.replace(/\.zip$/i, '')
+  const projectName = sanitizeImportedProjectName(lastMeta.title, file.name.replace(/\.zip$/i, ''))
 
   await createImportedProject(projectName, projectFiles)
 
