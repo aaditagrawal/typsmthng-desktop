@@ -3,7 +3,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import type { PageSize } from '@/stores/settings-store'
-import { initCompiler, compileTypst, ensurePackagesForCompile, getPackageRuntimeEpoch } from './compiler'
+import { initCompiler, compileTypst, compileToPdf, ensurePackagesForCompile, getPackageRuntimeEpoch } from './compiler'
 import { applyPackageImportCompatRewrites } from './package-compat'
 import { normalizeExtension } from './file-classification'
 import { perfMark, perfMeasure, perfSample } from './perf'
@@ -147,6 +147,87 @@ function applyPackageCompatIfNeeded(source: string): string {
   return applyPackageImportCompatRewrites(source)
 }
 
+interface TransformedCompileInputs {
+  mainPath: string
+  mainSource: string
+  extraFiles: Array<{ path: string; content: string }>
+  extraBinaryFiles: Array<{ path: string; data: Uint8Array }>
+  finalSource: string
+}
+
+function transformCompileInputs(compileInputs: {
+  mainPath: string
+  mainSource: string
+  extraFiles: Array<{ path: string; content: string }>
+  extraBinaryFiles: Array<{ path: string; data: Uint8Array }>
+}): TransformedCompileInputs {
+  const mainSource = applyPackageCompatIfNeeded(compileInputs.mainSource)
+  const extraFiles = compileInputs.extraFiles.map((file) => ({
+    ...file,
+    content: applyPackageCompatIfNeeded(file.content),
+  }))
+  const preamble = buildPagePreamble(
+    useSettingsStore.getState().pageSize,
+    mainSource,
+    currentProjectLayoutLocked(),
+  )
+  return {
+    mainPath: compileInputs.mainPath,
+    mainSource,
+    extraFiles,
+    extraBinaryFiles: compileInputs.extraBinaryFiles,
+    finalSource: preamble ? preamble + mainSource : mainSource,
+  }
+}
+
+async function ensurePreviewPackages(
+  mainSource: string,
+  extraFiles: Array<{ path: string; content: string }>,
+  mainPath: string,
+  requestId?: number,
+): Promise<boolean> {
+  const packageSpecs = new Set<string>()
+  const activePaths = new Set<string>()
+
+  activePaths.add(mainPath)
+  collectPreviewSpecsCached(mainPath, mainSource, packageSpecs)
+
+  for (const file of extraFiles) {
+    activePaths.add(file.path)
+    collectPreviewSpecsCached(file.path, file.content, packageSpecs)
+  }
+  pruneSpecCache(activePaths)
+
+  if (packageSpecs.size === 0) {
+    lastEnsuredPackagesKey = ''
+    return true
+  }
+
+  const specList = [...packageSpecs].sort()
+  const ensureKey = `${getPackageRuntimeEpoch()}|${specList.join('|')}`
+  if (ensureKey === lastEnsuredPackagesKey) return true
+
+  try {
+    await ensurePackagesForCompile(specList)
+    lastEnsuredPackagesKey = ensureKey
+    return true
+  } catch (err) {
+    lastEnsuredPackagesKey = null
+    if (requestId === undefined || !isStaleRequest(requestId)) {
+      useCompileStore.getState().setStatus('error')
+      useCompileStore.getState().setDiagnostics([{
+        severity: 'error',
+        path: '',
+        range: '',
+        message: `Failed to resolve package dependencies: ${
+          err instanceof Error ? err.message : 'unknown package resolution error'
+        }. Retry compilation when network is available.`,
+      }])
+    }
+    return false
+  }
+}
+
 function effectiveCompileDelay(baseDelay: number): number {
   const adaptiveDelay = smoothedCompileTimeMs > 0
     ? Math.round(smoothedCompileTimeMs * COMPILE_DELAY_MULTIPLIER)
@@ -156,9 +237,8 @@ function effectiveCompileDelay(baseDelay: number): number {
 }
 
 export async function ensureCompilerReady(): Promise<void> {
-  const store = useCompileStore.getState()
-  store.setCompilerReady(false)
   if (initPromise) return initPromise
+  if (useCompileStore.getState().compilerReady) return
 
   initPromise = initCompiler()
     .then(() => {
@@ -255,72 +335,32 @@ async function doCompile(request: CompileRequest): Promise<void> {
       request.source,
       sourcePath,
     )
-    const transformedMainSource = applyPackageCompatIfNeeded(compileInputs.mainSource)
-    const transformedExtraFiles = compileInputs.extraFiles.map((file) => ({
-      ...file,
-      content: applyPackageCompatIfNeeded(file.content),
-    }))
+    const transformed = transformCompileInputs(compileInputs)
     perfMeasure('compile.input-build', inputStart, {
       files: 1 + compileInputs.extraFiles.length + compileInputs.extraBinaryFiles.length,
       requestId: request.requestId,
     })
 
-    await ensureCompilerReadyForSource(transformedMainSource, transformedExtraFiles)
+    await ensureCompilerReadyForSource(transformed.mainSource, transformed.extraFiles)
 
     const packageStart = perfMark()
-    const packageSpecs = new Set<string>()
-    const activePaths = new Set<string>()
-
-    activePaths.add(compileInputs.mainPath)
-    collectPreviewSpecsCached(compileInputs.mainPath, transformedMainSource, packageSpecs)
-
-    for (const file of transformedExtraFiles) {
-      activePaths.add(file.path)
-      collectPreviewSpecsCached(file.path, file.content, packageSpecs)
-    }
-    pruneSpecCache(activePaths)
-
-    if (packageSpecs.size > 0) {
-      const specList = [...packageSpecs].sort()
-      const ensureKey = `${getPackageRuntimeEpoch()}|${specList.join('|')}`
-      if (ensureKey !== lastEnsuredPackagesKey) {
-        try {
-          await ensurePackagesForCompile(specList)
-          lastEnsuredPackagesKey = ensureKey
-        } catch (err) {
-          lastEnsuredPackagesKey = null
-          if (!isStaleRequest(request.requestId)) {
-            store.setStatus('error')
-            store.setDiagnostics([{
-              severity: 'error',
-              path: '',
-              range: '',
-              message: `Failed to resolve package dependencies: ${
-                err instanceof Error ? err.message : 'unknown package resolution error'
-              }. Retry compilation when network is available.`,
-            }])
-          }
-          return
-        }
-      }
-    } else {
-      lastEnsuredPackagesKey = ''
-    }
+    const packagesReady = await ensurePreviewPackages(
+      transformed.mainSource,
+      transformed.extraFiles,
+      transformed.mainPath,
+      request.requestId,
+    )
+    if (!packagesReady) return
 
     perfMeasure('compile.package-resolve', packageStart, {
-      packages: packageSpecs.size,
       requestId: request.requestId,
     })
 
-    const { pageSize } = useSettingsStore.getState()
-    const preamble = buildPagePreamble(pageSize, transformedMainSource, currentProjectLayoutLocked())
-    const finalSource = preamble ? preamble + transformedMainSource : transformedMainSource
-
     const compileStageStart = perfMark()
     const result = await compileTypst(
-      finalSource,
-      transformedExtraFiles,
-      compileInputs.mainPath,
+      transformed.finalSource,
+      transformed.extraFiles,
+      transformed.mainPath,
       compileInputs.extraBinaryFiles,
     )
     perfMeasure('compile.run', compileStageStart, {
@@ -398,12 +438,8 @@ async function ensureCompilerReadyForSource(
   source: string,
   extraFiles: Array<{ path: string; content: string }>,
 ): Promise<void> {
-  const store = useCompileStore.getState()
-  store.setCompilerReady(false)
-
   if (initPromise) {
     await initPromise
-    return
   }
 
   initPromise = initCompiler(source, extraFiles)
@@ -419,6 +455,29 @@ async function ensureCompilerReadyForSource(
     })
 
   return initPromise
+}
+
+export async function compileCurrentToPdf(): Promise<Uint8Array | null> {
+  const projectStore = useProjectStore.getState()
+  const currentFilePath = projectStore.currentFilePath
+  const liveSource = useEditorStore.getState().source
+  const compileInputs = await projectStore.getCompileBundle(liveSource, currentFilePath)
+  const transformed = transformCompileInputs(compileInputs)
+
+  await ensureCompilerReadyForSource(transformed.mainSource, transformed.extraFiles)
+  const packagesReady = await ensurePreviewPackages(
+    transformed.mainSource,
+    transformed.extraFiles,
+    transformed.mainPath,
+  )
+  if (!packagesReady) return null
+
+  return compileToPdf(
+    transformed.finalSource,
+    transformed.extraFiles,
+    transformed.mainPath,
+    transformed.extraBinaryFiles,
+  )
 }
 
 export function requestCompile(source: string, sourcePath?: string | null): void {

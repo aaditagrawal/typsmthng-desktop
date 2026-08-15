@@ -396,6 +396,29 @@ describe('importProject', () => {
     )
     await expect(importProject(slipFile)).rejects.toThrow(/escapes project root/)
   })
+
+  it('imports Overleaf .sty and .cls files as text alongside converted .tex', async () => {
+    const zipped = zipSync({
+      'Paper/main.tex': strToU8('\\begin{document}Hi\\end{document}\n'),
+      'Paper/ieee.cls': strToU8('\\ProvidesClass{ieee}\n'),
+      'Paper/macros.sty': strToU8('\\newcommand{\\foo}{bar}\n'),
+    })
+    const file = new File(
+      [zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer],
+      'overleaf.zip',
+      { type: 'application/zip' },
+    )
+
+    await importProject(file)
+    const scaffold = createProjectMock.mock.calls[0]?.[1]
+    const byPath = Object.fromEntries(
+      scaffold.files.map((entry: { path: string; isBinary?: boolean; content?: string }) => [entry.path, entry]),
+    )
+    expect(Object.keys(byPath).sort()).toEqual(['/ieee.cls', '/macros.sty', '/main.typ'])
+    expect(byPath['/ieee.cls']?.isBinary).toBe(false)
+    expect(byPath['/macros.sty']?.content).toContain('\\newcommand')
+    expect(byPath['/main.typ']?.content).toContain('// converted')
+  })
 })
 
 describe('export flush and nesting', () => {

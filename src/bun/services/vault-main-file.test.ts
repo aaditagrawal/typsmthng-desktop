@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveVaultMainFile } from './vault-main-file'
+import { resolveCompileMainFile, resolveVaultMainFile } from './vault-main-file'
 
 function file(path: string, extension = '.typ') {
   return {
@@ -37,5 +37,21 @@ describe('resolveVaultMainFile', () => {
 
   it('prefers conventional main.typ when no preference is set', () => {
     expect(resolveVaultMainFile([file('a.typ'), file('main.typ')])).toBe('main.typ')
+  })
+})
+
+describe('resolveCompileMainFile', () => {
+  it('prefers conventional main.typ as the compile root', () => {
+    expect(resolveCompileMainFile(
+      [file('chapters/intro.typ'), file('main.typ')],
+      'chapters/intro.typ',
+    )).toBe('main.typ')
+  })
+
+  it('falls back to the current .typ file when main.typ is absent', () => {
+    expect(resolveCompileMainFile(
+      [file('paper.typ'), file('notes.typ')],
+      '/notes.typ',
+    )).toBe('notes.typ')
   })
 })

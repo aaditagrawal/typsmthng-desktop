@@ -76,6 +76,9 @@ describe('compiler-backend', () => {
     vi.clearAllMocks()
     MockXMLHttpRequest.requestedUrls = []
     globalThis.XMLHttpRequest = MockXMLHttpRequest as unknown as typeof XMLHttpRequest
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('fetch unavailable')
+    }) as unknown as typeof fetch
 
     compilerMock.init.mockImplementation(async (options?: { getModule?: () => Promise<ArrayBuffer> }) => {
       await options?.getModule?.()
@@ -97,10 +100,17 @@ describe('compiler-backend', () => {
 
     expect(createTypstCompilerMock).toHaveBeenCalledTimes(1)
     expect(createTypstRendererMock).toHaveBeenCalledTimes(1)
-    expect(MockXMLHttpRequest.requestedUrls).toEqual(['/compiler.wasm', '/renderer.wasm'])
+    expect(MockXMLHttpRequest.requestedUrls.some((url) => url.endsWith('/compiler.wasm') || url === '/compiler.wasm')).toBe(true)
+    expect(MockXMLHttpRequest.requestedUrls.some((url) => url.endsWith('/renderer.wasm') || url === '/renderer.wasm')).toBe(true)
     expect(loadFontsMock).toHaveBeenCalled()
     expect(withAccessModelMock).toHaveBeenCalled()
     expect(withPackageRegistryMock).toHaveBeenCalled()
+  })
+
+  it('keeps path-only wasm URLs intact under file:// test runtimes', async () => {
+    const mod = await loadModule()
+    expect(mod.resolveAssetUrl('/compiler.wasm')).toBe('/compiler.wasm')
+    expect(mod.resolveAssetUrl('https://cdn.example/compiler.wasm')).toBe('https://cdn.example/compiler.wasm')
   })
 
   it('includes configured external fonts in the compiler font loader', async () => {

@@ -216,7 +216,7 @@ export async function exportProject(projectId?: string): Promise<void> {
     console.error('Failed to export project:', err)
     throw new Error(`Failed to zip project "${project.name}".`)
   }
-  downloadBlob(`${project.name}.zip`, new Blob([zipped as BlobPart], { type: 'application/zip' }))
+  await downloadBlob(`${project.name}.zip`, new Blob([zipped as BlobPart], { type: 'application/zip' }))
 }
 
 async function exportProjectsAsFolderArchive(
@@ -260,7 +260,7 @@ async function exportProjectsAsFolderArchive(
     console.error('Failed to export selected projects:', err)
     throw new Error('Failed to zip the selected projects.')
   }
-  downloadBlob(downloadName, new Blob([zipped as BlobPart], { type: 'application/zip' }))
+  await downloadBlob(downloadName, new Blob([zipped as BlobPart], { type: 'application/zip' }))
 }
 
 export async function exportProjects(projectIds: string[]): Promise<void> {

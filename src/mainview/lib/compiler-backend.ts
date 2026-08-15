@@ -41,7 +41,29 @@ function normalizeWorkspacePath(input: string): string {
   return normalized ? `/${normalized}` : PROJECT_ROOT
 }
 
-async function loadWasmModule(url: string): Promise<ArrayBuffer> {
+/**
+ * Resolve a Vite `?url` asset so XHR/fetch work in the window and in workers
+ * under `views://mainview/...` as well as the Vite HMR origin.
+ */
+export function resolveAssetUrl(url: string): string {
+  if (!url) return url
+  if (/^(https?:|views:|blob:|data:|file:)/i.test(url)) return url
+
+  try {
+    if (url.startsWith('/')) {
+      const runtimeBase = typeof location !== 'undefined' && location.href && !location.href.startsWith('file:')
+        ? location.href
+        : import.meta.url
+      if (runtimeBase.startsWith('file:')) return url
+      return new URL(url, runtimeBase).href
+    }
+    return new URL(url, import.meta.url).href
+  } catch {
+    return url
+  }
+}
+
+function loadWasmViaXhr(url: string): Promise<ArrayBuffer> {
   return new Promise<ArrayBuffer>((resolve, reject) => {
     const request = new XMLHttpRequest()
     request.open('GET', url, true)
@@ -50,7 +72,7 @@ async function loadWasmModule(url: string): Promise<ArrayBuffer> {
     request.onload = () => {
       const okStatus = request.status === 200 || request.status === 0
       const response = request.response
-      if (okStatus && response instanceof ArrayBuffer) {
+      if (okStatus && response instanceof ArrayBuffer && response.byteLength > 0) {
         resolve(response)
         return
       }
@@ -64,6 +86,24 @@ async function loadWasmModule(url: string): Promise<ArrayBuffer> {
 
     request.send()
   })
+}
+
+async function loadWasmModule(url: string): Promise<ArrayBuffer> {
+  const resolved = resolveAssetUrl(url)
+
+  try {
+    const response = await fetch(resolved)
+    const okStatus = response.ok || response.status === 0
+    if (okStatus) {
+      const buffer = await response.arrayBuffer()
+      if (buffer.byteLength > 0) return buffer
+    }
+  } catch {
+    // Some native webviews reject fetch() for WASM with a bogus MIME type.
+    // Fall through to XHR + arraybuffer, which does not stream-compile.
+  }
+
+  return loadWasmViaXhr(resolved)
 }
 
 function decodeVersion(version: unknown): string {

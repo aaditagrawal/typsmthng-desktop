@@ -254,6 +254,10 @@ export type DesktopRPC = {
         params: { rootPath: string };
         response: VaultExportBundle | null;
       };
+      saveDownload: {
+        params: { filename: string; data: Uint8Array };
+        response: { ok: true; path: string };
+      };
       setWindowTitle: {
         params: { title: string };
         response: { ok: true };

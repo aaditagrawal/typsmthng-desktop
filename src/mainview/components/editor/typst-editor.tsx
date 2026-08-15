@@ -24,6 +24,8 @@ import { useCompileStore } from '@/stores/compile-store'
 // Compartments for live reconfiguration
 const themeCompartment = new Compartment()
 const vimCompartment = new Compartment()
+const lineNumbersCompartment = new Compartment()
+const lineWrappingCompartment = new Compartment()
 const PROJECT_SYNC_DELAY_MS = 800
 
 export function TypstEditor() {
@@ -46,6 +48,9 @@ export function TypstEditor() {
     return `${file.path}:${file.lastModified}:${file.loaded ? 1 : 0}:${file.content.length}`
   })
   const vimMode = useSettingsStore((s) => s.vimMode)
+  const lineNumbersEnabled = useSettingsStore((s) => s.lineNumbers)
+  const lineWrappingEnabled = useSettingsStore((s) => s.lineWrapping)
+  const fontSize = useSettingsStore((s) => s.fontSize)
 
   const flushPendingProjectSync = useCallback(() => {
     if (projectSyncTimerRef.current) {
@@ -112,7 +117,7 @@ export function TypstEditor() {
     const state = EditorState.create({
       doc: initialDoc,
       extensions: [
-        lineNumbers(),
+        lineNumbersCompartment.of(useSettingsStore.getState().lineNumbers ? lineNumbers() : []),
         highlightActiveLine(),
         highlightActiveLineGutter(),
         history(),
@@ -121,7 +126,7 @@ export function TypstEditor() {
         indentOnInput(),
         highlightSelectionMatches(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        EditorView.lineWrapping,
+        lineWrappingCompartment.of(useSettingsStore.getState().lineWrapping ? EditorView.lineWrapping : []),
         typst(),
         indentationMarkers({
           hideFirstIndent: false,
@@ -236,6 +241,22 @@ export function TypstEditor() {
     })
   }, [vimMode])
 
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: lineNumbersCompartment.reconfigure(lineNumbersEnabled ? lineNumbers() : []),
+    })
+  }, [lineNumbersEnabled])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: lineWrappingCompartment.reconfigure(lineWrappingEnabled ? EditorView.lineWrapping : []),
+    })
+  }, [lineWrappingEnabled])
+
   // React to file/project changes — swap document content
   useEffect(() => {
     // Persist pending edits from the previous file before changing documents.
@@ -301,7 +322,10 @@ export function TypstEditor() {
     <div
       ref={editorRef}
       className="h-full w-full overflow-hidden"
-      style={{ background: 'var(--bg-surface)' }}
+      style={{
+        background: 'var(--bg-surface)',
+        ['--editor-font-size' as string]: `${fontSize}px`,
+      }}
       // Suppress native context menu — CodeMirror handles its own interactions
       onContextMenu={(e) => e.preventDefault()}
     />

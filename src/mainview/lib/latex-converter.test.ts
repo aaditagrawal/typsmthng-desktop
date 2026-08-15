@@ -153,11 +153,11 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('#include "methods.typ"')
     })
 
-    it('leaves existing .typ paths unchanged', async () => {
-      const result = await convertLatexToTypst('\\input{already.typ}')
-      expect(result.typst).toContain('#include "already.typ"')
-      expect(result.typst).not.toContain('already.typ.typ')
-    })
+  it('rewrites .TEX includes case-insensitively', async () => {
+    const result = await convertLatexToTypst('\\input{chapters/INTRO.TEX}')
+    expect(result.typst).toContain('#include "chapters/INTRO.typ"')
+    expect(result.typst).not.toContain('.TEX.typ')
+  })
   })
 
   describe('table environment with nested tabular', () => {

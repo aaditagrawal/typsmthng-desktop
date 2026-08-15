@@ -197,7 +197,7 @@ describe('VaultService.getCompileBundle', () => {
     service.pendingWrites.clear()
   })
 
-  it('uses the persisted recent file when no explicit current file is provided', async () => {
+  it('uses the persisted main.typ as the compile root when no current file is provided', async () => {
     appStateLoadMock.mockResolvedValue({
       version: 1,
       recentVaults: [
@@ -241,9 +241,40 @@ describe('VaultService.getCompileBundle', () => {
     }
 
     expect(getIndexMock).toHaveBeenCalledWith('/vault', true)
-    expect(bundle.mainPath).toBe('/notes/intro.typ')
-    expect(bundle.mainSource).toBe('recent file body')
-    expect(bundle.extraFiles).toEqual([{ path: '/main.typ', content: 'main body' }])
+    expect(bundle.mainPath).toBe('/main.typ')
+    expect(bundle.mainSource).toBe('main body')
+    expect(bundle.extraFiles).toEqual([{ path: '/notes/intro.typ', content: 'recent file body' }])
+  })
+
+  it('injects live source into a chapter while compiling main.typ', async () => {
+    getIndexMock.mockResolvedValue({
+      entries: [
+        fileEntry('main.typ'),
+        fileEntry('chapter.typ'),
+      ],
+    })
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService() as unknown as {
+      getCompileBundle: (rootPath: string, currentFilePath: string | null, liveSource: string) => Promise<unknown>
+      readFileEntry: ReturnType<typeof vi.fn>
+    }
+
+    service.readFileEntry = vi.fn(async (_rootPath: string, path: string) => {
+      if (path === 'main.typ') return fileEntry('main.typ', { content: 'stale main' })
+      if (path === 'chapter.typ') return fileEntry('chapter.typ', { content: 'stale chapter' })
+      return null
+    })
+
+    const bundle = await service.getCompileBundle('/vault', 'chapter.typ', 'live chapter') as {
+      mainPath: string
+      mainSource: string
+      extraFiles: Array<{ path: string; content: string }>
+    }
+
+    expect(bundle.mainPath).toBe('/main.typ')
+    expect(bundle.mainSource).toBe('stale main')
+    expect(bundle.extraFiles).toEqual([{ path: '/chapter.typ', content: 'live chapter' }])
   })
 })
 

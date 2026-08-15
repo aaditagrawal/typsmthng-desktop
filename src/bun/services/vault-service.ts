@@ -25,7 +25,7 @@ import { AppStateService } from "./app-state";
 import { BackgroundTaskQueue } from "./background-task-queue";
 import { FullTextSearchService } from "./full-text-search";
 import { VaultIndexService } from "./vault-index";
-import { resolveVaultMainFile } from "./vault-main-file";
+import { resolveCompileMainFile, resolveVaultMainFile } from "./vault-main-file";
 import { shouldReopenVault } from "./vault-reopen";
 
 const WRITE_DEBOUNCE_MS = 450;
@@ -56,6 +56,16 @@ const IMAGE_EXTENSION_SET = new Set([
   ".bmp",
   ".avif",
   ".tiff",
+]);
+
+const COMPILE_BINARY_EXTENSION_SET = new Set([
+  ...IMAGE_EXTENSION_SET,
+  ".pdf",
+  ".ttf",
+  ".otf",
+  ".ttc",
+  ".woff",
+  ".woff2",
 ]);
 
 type DesktopBunRPC = ReturnType<typeof BrowserView.defineRPC<DesktopRPC>>;
@@ -129,7 +139,7 @@ function isHiddenPath(relativePath: string): boolean {
 }
 
 function shouldLoadBinary(relativePath: string, sizeBytes: number): boolean {
-  return IMAGE_EXTENSION_SET.has(normalizeExtension(relativePath)) && sizeBytes <= MAX_EAGER_BINARY_BYTES;
+  return COMPILE_BINARY_EXTENSION_SET.has(normalizeExtension(relativePath)) && sizeBytes <= MAX_EAGER_BINARY_BYTES;
 }
 
 function defaultMainFile(
@@ -687,16 +697,9 @@ export class VaultService {
     const index = await this.indexService.getIndex(rootPath, includeHidden);
 
     const fileEntries = index.entries.filter((entry) => entry.kind === "file");
-    const mainPath = currentFilePath
-      ?? defaultMainFile(
-        fileEntries.map((entry) => ({
-          ...entry,
-          loaded: false,
-          content: "",
-        })),
-        recent,
-      );
-    const normalizedMainPath = toWorkspacePath(mainPath);
+    const compileMain = resolveCompileMainFile(fileEntries, currentFilePath);
+    const normalizedMainPath = toWorkspacePath(compileMain);
+    const currentRel = currentFilePath ? sanitizeRelativePath(currentFilePath) : null;
 
     const textFiles = await Promise.all(
       fileEntries
@@ -715,20 +718,24 @@ export class VaultService {
     const extraFiles = resolvedTextFiles
       .map((file) => {
         const pending = this.pendingWrites.get(`${rootPath}::${file.path}`);
+        const isCurrent = currentRel !== null && file.path === currentRel;
         return {
           path: toWorkspacePath(file.path),
-          content: file.path === mainPath ? liveSource : (pending?.content ?? file.content),
+          content: isCurrent ? liveSource : (pending?.content ?? file.content),
         };
       })
       .filter((file) => file.path !== normalizedMainPath);
 
-    const mainEntry = resolvedTextFiles.find((file) => file.path === mainPath);
-    const mainSource = currentFilePath === mainPath ? liveSource : mainEntry?.content ?? liveSource;
+    const mainEntry = resolvedTextFiles.find((file) => file.path === compileMain);
+    const mainPending = this.pendingWrites.get(`${rootPath}::${compileMain}`);
+    const mainSource = currentRel === compileMain
+      ? liveSource
+      : (mainPending?.content ?? mainEntry?.content ?? liveSource);
     const resolvedBinaryFiles = binaryFiles.filter(
       (file): file is VaultFileEntry & { binaryData: Uint8Array } => Boolean(file?.binaryData),
     );
     const extraBinaryFiles = resolvedBinaryFiles
-      .filter((file) => file.path !== mainPath)
+      .filter((file) => file.path !== compileMain)
       .map((file) => ({
         path: toWorkspacePath(file.path),
         data: file.binaryData,

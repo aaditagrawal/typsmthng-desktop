@@ -12,6 +12,15 @@ export const BIBLIOGRAPHY_TEXT_EXTENSIONS: readonly string[] = [
   '.yml',
 ] as const
 
+export const LATEX_TEXT_EXTENSIONS: readonly string[] = [
+  '.sty',
+  '.cls',
+  '.bst',
+  '.clo',
+  '.def',
+  '.fd',
+] as const
+
 export const GENERAL_TEXT_EXTENSIONS: readonly string[] = [
   '.typ',
   '.txt',
@@ -38,7 +47,7 @@ export const GENERAL_TEXT_EXTENSIONS: readonly string[] = [
 ] as const
 
 export const ALL_TEXT_EXTENSIONS = Array.from(
-  new Set([...GENERAL_TEXT_EXTENSIONS, ...BIBLIOGRAPHY_TEXT_EXTENSIONS])
+  new Set([...GENERAL_TEXT_EXTENSIONS, ...BIBLIOGRAPHY_TEXT_EXTENSIONS, ...LATEX_TEXT_EXTENSIONS])
 )
 
 const ALL_TEXT_EXTENSION_SET = new Set(ALL_TEXT_EXTENSIONS)

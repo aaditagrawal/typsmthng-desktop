@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const initCompilerMock = vi.fn()
 const compileTypstMock = vi.fn()
+const compileToPdfMock = vi.fn()
 const ensurePackagesForCompileMock = vi.fn()
 const getPackageRuntimeEpochMock = vi.fn(() => 0)
 const applyPackageImportCompatRewritesMock = vi.fn((source: string) => source)
@@ -21,6 +22,7 @@ const projectState = {
 vi.mock('./compiler', () => ({
   initCompiler: initCompilerMock,
   compileTypst: compileTypstMock,
+  compileToPdf: compileToPdfMock,
   ensurePackagesForCompile: ensurePackagesForCompileMock,
   getPackageRuntimeEpoch: getPackageRuntimeEpochMock,
 }))
@@ -98,6 +100,7 @@ describe('compile-manager', () => {
     initCompilerMock.mockResolvedValue(undefined)
     ensurePackagesForCompileMock.mockResolvedValue(undefined)
     getPackageRuntimeEpochMock.mockReturnValue(0)
+    compileToPdfMock.mockResolvedValue(new Uint8Array([9, 9]))
     compileTypstMock.mockResolvedValue({
       svg: '<svg />',
       vectorData: new Uint8Array([1]),
@@ -247,5 +250,36 @@ describe('compile-manager', () => {
 
     await vi.advanceTimersByTimeAsync(1)
     expect(compileTypstMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('exports PDF with the same package-compat and preamble transforms as preview', async () => {
+    projectState.getCompileBundle.mockResolvedValue({
+      mainPath: '/main.typ',
+      mainSource: '@preview/example:1.0.0\nHello',
+      extraFiles: [
+        { path: '/chapter.typ', content: '#import "@preview/example:1.0.0": demo' },
+      ],
+      extraBinaryFiles: [
+        { path: '/assets/logo.png', data: new Uint8Array([2, 4]) },
+      ],
+    })
+    applyPackageImportCompatRewritesMock.mockImplementation((source: string) => source.replace(
+      '@preview/example:1.0.0',
+      '@preview/example:1.0.1',
+    ))
+
+    const { compileManager, useSettingsStore } = await loadHarness()
+    useSettingsStore.setState({ pageSize: 'a4' })
+
+    const pdf = await compileManager.compileCurrentToPdf()
+
+    expect(ensurePackagesForCompileMock).toHaveBeenCalledWith(['@preview/example:1.0.1'])
+    expect(compileToPdfMock).toHaveBeenCalledWith(
+      '#set page(paper: "a4")\n@preview/example:1.0.1\nHello',
+      [{ path: '/chapter.typ', content: '#import "@preview/example:1.0.1": demo' }],
+      '/main.typ',
+      [{ path: '/assets/logo.png', data: new Uint8Array([2, 4]) }],
+    )
+    expect(pdf).toEqual(new Uint8Array([9, 9]))
   })
 })

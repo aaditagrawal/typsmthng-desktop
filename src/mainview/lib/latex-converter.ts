@@ -509,8 +509,8 @@ function emitMacro(
     case 'input':
     case 'include': {
       let file = args[0] || ''
-      if (!file.endsWith('.typ')) {
-        file = file.replace(/\.tex$/, '') + '.typ'
+      if (!/\.typ$/i.test(file)) {
+        file = file.replace(/\.tex$/i, '') + '.typ'
       }
       return `#include "${file}"`
     }

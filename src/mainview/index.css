@@ -173,7 +173,7 @@ body {
 .cm-editor {
   height: 100% !important;
   font-family: var(--font-mono) !important;
-  font-size: 15px !important;
+  font-size: var(--editor-font-size, 15px) !important;
   line-height: 1.6 !important;
   font-variant-ligatures: contextual;
 }

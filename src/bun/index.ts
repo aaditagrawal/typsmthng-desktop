@@ -10,6 +10,7 @@ import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
 import { runPlatformSetup } from "./services/platform-setup";
+import { saveDownloadFile } from "./services/save-download";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -206,6 +207,7 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 				vaultService.getVaultStats(rootPath, includeHidden),
 			getVaultExportBundle: ({ rootPath }) =>
 				vaultService.getVaultExportBundle(rootPath),
+			saveDownload: ({ filename, data }) => saveDownloadFile(filename, data),
 			setWindowTitle: ({ title }) => {
 				requireMainWindow().setTitle(title);
 				return { ok: true as const };

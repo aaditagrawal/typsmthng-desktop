@@ -1,10 +1,8 @@
 import type { KeyBinding } from '@codemirror/view'
 import { useProjectStore } from '@/stores/project-store'
 import { useEditorStore } from '@/stores/editor-store'
-import { forceCompile, applyPagePreamble, ensureCompilerReady } from './compile-manager'
 import { useUIStore } from '@/stores/ui-store'
-import { compileToPdf, ensurePackagesForCompile } from './compiler'
-import { findPreviewImportSpecs } from './universe-registry'
+import { forceCompile, compileCurrentToPdf } from './compile-manager'
 import { toggleTypstLineComment } from './commenting'
 import { downloadBlob } from './download-blob'
 
@@ -36,34 +34,12 @@ export const typstKeymap: KeyBinding[] = [
   {
     key: 'Mod-Shift-Enter',
     run: (view) => {
-      const currentFilePath = useProjectStore.getState().currentFilePath
-      const liveSource = view.state.doc.toString()
-      useProjectStore.getState().getCompileBundle(liveSource, currentFilePath)
-        .then(async (compileInputs) => {
-          const source = applyPagePreamble(compileInputs.mainSource)
-          const packageSpecs = new Set<string>(findPreviewImportSpecs(compileInputs.mainSource))
-          for (const file of compileInputs.extraFiles) {
-            for (const spec of findPreviewImportSpecs(file.content)) {
-              packageSpecs.add(spec)
-            }
-          }
-
-          await ensureCompilerReady()
-          if (packageSpecs.size > 0) {
-            await ensurePackagesForCompile([...packageSpecs])
-          }
-
-          return compileToPdf(
-            source,
-            compileInputs.extraFiles,
-            compileInputs.mainPath,
-            compileInputs.extraBinaryFiles,
-          )
-        })
-        .then((pdf) => {
+      useEditorStore.setState({ source: view.state.doc.toString() })
+      void compileCurrentToPdf()
+        .then(async (pdf) => {
           if (pdf) {
             const blob = new Blob([new Uint8Array(pdf)], { type: 'application/pdf' })
-            downloadBlob('document.pdf', blob)
+            await downloadBlob('document.pdf', blob)
           }
         })
         .catch((err) => {
