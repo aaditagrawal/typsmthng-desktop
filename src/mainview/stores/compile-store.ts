@@ -23,12 +23,14 @@ interface CompileState {
   warningCount: number
   compileTime: number
   autoCompile: boolean
+  compiledMainPath: string | null
   setStatus: (status: CompileStatus) => void
   setCompilerReady: (ready: boolean) => void
   setDiagnostics: (diagnostics: Diagnostic[]) => void
   setSvgResult: (svg: string, vectorData: Uint8Array, pageDimensions: PageDimension[]) => void
   setCompileTime: (ms: number) => void
   setAutoCompile: (auto: boolean) => void
+  setCompiledMainPath: (path: string | null) => void
 }
 
 export const useCompileStore = create<CompileState>((set) => ({
@@ -43,6 +45,7 @@ export const useCompileStore = create<CompileState>((set) => ({
   warningCount: 0,
   compileTime: 0,
   autoCompile: true,
+  compiledMainPath: null,
   setStatus: (status) => set({ status }),
   setCompilerReady: (compilerReady) => set({ compilerReady }),
   setDiagnostics: (diagnostics) => set({
@@ -58,4 +61,5 @@ export const useCompileStore = create<CompileState>((set) => ({
   }),
   setCompileTime: (compileTime) => set({ compileTime }),
   setAutoCompile: (autoCompile) => set({ autoCompile }),
+  setCompiledMainPath: (compiledMainPath) => set({ compiledMainPath }),
 }))

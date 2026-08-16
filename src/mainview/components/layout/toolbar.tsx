@@ -11,19 +11,15 @@ import {
   Star,
 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { useUIStore } from '@/stores/ui-store'
-import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
-import { compileToPdf, ensurePackagesForCompile } from '@/lib/compiler'
 import { useSettingsStore } from '@/stores/settings-store'
 import { isMacOS, revealLabel } from '@/lib/platform'
-import { applyPagePreamble, ensureCompilerReady } from '@/lib/compile-manager'
-import { findPreviewImportSpecs } from '@/lib/universe-registry'
+import { compileCurrentToPdf } from '@/lib/compile-manager'
 import { downloadBlob } from '@/lib/download-blob'
 
 function ThemeToggle() {
-  const theme = useUIStore((s) => s.theme)
-  const setTheme = useUIStore((s) => s.setTheme)
+  const theme = useSettingsStore((s) => s.theme)
+  const setTheme = useSettingsStore((s) => s.setTheme)
 
   const cycle = () => {
     const next = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
@@ -46,36 +42,12 @@ function ThemeToggle() {
 
 async function handleDownloadPdf() {
   try {
-    const store = useProjectStore.getState()
-    const project = store.getCurrentProject()
-    const currentFilePath = store.currentFilePath
-    const liveSource = useEditorStore.getState().source
-    const compileInputs = await store.getCompileBundle(liveSource, currentFilePath)
-
-    await ensureCompilerReady()
-
-    const packageSpecs = new Set<string>(findPreviewImportSpecs(compileInputs.mainSource))
-    for (const file of compileInputs.extraFiles) {
-      for (const spec of findPreviewImportSpecs(file.content)) {
-        packageSpecs.add(spec)
-      }
-    }
-
-    if (packageSpecs.size > 0) {
-      await ensurePackagesForCompile([...packageSpecs])
-    }
-
-    const pdf = await compileToPdf(
-      applyPagePreamble(compileInputs.mainSource),
-      compileInputs.extraFiles,
-      compileInputs.mainPath,
-      compileInputs.extraBinaryFiles,
-    )
-
+    const project = useProjectStore.getState().getCurrentProject()
+    const pdf = await compileCurrentToPdf()
     if (!pdf) return
 
     const blob = new Blob([new Uint8Array(pdf)], { type: 'application/pdf' })
-    downloadBlob(`${project?.name ?? 'document'}.pdf`, blob)
+    await downloadBlob(`${project?.name ?? 'document'}.pdf`, blob)
   } catch (error) {
     console.error('Failed to export PDF:', error)
     window.alert('Failed to export PDF. Please try again.')

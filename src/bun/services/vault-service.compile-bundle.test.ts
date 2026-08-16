@@ -197,7 +197,7 @@ describe('VaultService.getCompileBundle', () => {
     service.pendingWrites.clear()
   })
 
-  it('uses the persisted recent file when no explicit current file is provided', async () => {
+  it('uses the persisted main.typ as the compile root when no current file is provided', async () => {
     appStateLoadMock.mockResolvedValue({
       version: 1,
       recentVaults: [
@@ -241,9 +241,40 @@ describe('VaultService.getCompileBundle', () => {
     }
 
     expect(getIndexMock).toHaveBeenCalledWith('/vault', true)
-    expect(bundle.mainPath).toBe('/notes/intro.typ')
-    expect(bundle.mainSource).toBe('recent file body')
-    expect(bundle.extraFiles).toEqual([{ path: '/main.typ', content: 'main body' }])
+    expect(bundle.mainPath).toBe('/main.typ')
+    expect(bundle.mainSource).toBe('main body')
+    expect(bundle.extraFiles).toEqual([{ path: '/notes/intro.typ', content: 'recent file body' }])
+  })
+
+  it('injects live source into a chapter while compiling main.typ', async () => {
+    getIndexMock.mockResolvedValue({
+      entries: [
+        fileEntry('main.typ'),
+        fileEntry('chapter.typ'),
+      ],
+    })
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService() as unknown as {
+      getCompileBundle: (rootPath: string, currentFilePath: string | null, liveSource: string) => Promise<unknown>
+      readFileEntry: ReturnType<typeof vi.fn>
+    }
+
+    service.readFileEntry = vi.fn(async (_rootPath: string, path: string) => {
+      if (path === 'main.typ') return fileEntry('main.typ', { content: 'stale main' })
+      if (path === 'chapter.typ') return fileEntry('chapter.typ', { content: 'stale chapter' })
+      return null
+    })
+
+    const bundle = await service.getCompileBundle('/vault', 'chapter.typ', 'live chapter') as {
+      mainPath: string
+      mainSource: string
+      extraFiles: Array<{ path: string; content: string }>
+    }
+
+    expect(bundle.mainPath).toBe('/main.typ')
+    expect(bundle.mainSource).toBe('stale main')
+    expect(bundle.extraFiles).toEqual([{ path: '/chapter.typ', content: 'live chapter' }])
   })
 })
 
@@ -363,6 +394,43 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
     await service.flushWrites({ rootPath: tempRoot, path: filePath })
     expect(service.pendingWrites.has(key)).toBe(false)
     expect(await fs.readFile(absolutePath, 'utf8')).toBe('first body')
+
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
+
+  it('refuses createFile and renamePath when the destination exists', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-exists-'))
+    await fs.writeFile(path.join(tempRoot, 'main.typ'), '= Main\n', 'utf8')
+    await fs.writeFile(path.join(tempRoot, 'notes.typ'), '= Notes\n', 'utf8')
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+
+    await expect(service.createFile(tempRoot, 'main.typ', '= New\n')).rejects.toThrow(/already exists/)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('= Main\n')
+
+    await expect(service.renamePath(tempRoot, 'notes.typ', 'main.typ')).rejects.toThrow(/already exists/)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('= Main\n')
+    expect(await fs.readFile(path.join(tempRoot, 'notes.typ'), 'utf8')).toBe('= Notes\n')
+
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
+
+  it('flushWritesSync writes pending buffers immediately', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-sync-flush-'))
+    await fs.writeFile(path.join(tempRoot, 'main.typ'), 'old', 'utf8')
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService() as unknown as {
+      stageFileWrite: (rootPath: string, filePath: string, content: string) => Promise<{ queuedAt: number }>
+      flushWritesSync: () => void
+      pendingWrites: PendingWriteMap
+    }
+
+    await service.stageFileWrite(tempRoot, 'main.typ', 'new')
+    service.flushWritesSync()
+    expect(service.pendingWrites.size).toBe(0)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('new')
 
     await fs.rm(tempRoot, { recursive: true, force: true })
   })

@@ -8,7 +8,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { resolveSourceLocBatch } from '@/lib/compiler'
 import { forceCompile, getInjectedPreambleLineCount } from '@/lib/compile-manager'
 import { normalizeExtension } from '@/lib/file-classification'
-import { estimateFallbackLine, findApproxSourceLine, parseSourceSpanToRange } from '@/lib/preview-mapping'
+import { estimateFallbackLine, findApproxSourceLine, parseSourceSpanFilePath, parseSourceSpanToRange } from '@/lib/preview-mapping'
 import { jumpToDiagnostic, formatDisplayRange } from '@/lib/editor-diagnostics'
 import { normalizeDiagnosticPath, waitForEditorPath } from '@/lib/diagnostic-navigation'
 import { perfMark, perfMeasure } from '@/lib/perf'
@@ -938,16 +938,18 @@ function usePreviewClickHandler(ignoreClickRef?: { current: boolean }) {
     if (!pageEl) return
 
     const editorState = useEditorStore.getState()
-    const source = editorState.source
-    const totalLines = editorState.editorView?.state.doc.lines ?? source.split('\n').length
+    let source = editorState.source
+    let totalLines = editorState.editorView?.state.doc.lines ?? source.split('\n').length
     if (totalLines === 0) return
 
     const rect = pageEl.getBoundingClientRect()
     const yRatio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
     const fallbackLine = estimateFallbackLine(yRatio, totalLines)
     let targetLine = fallbackLine
+    let targetPath: string | null = null
 
     const vectorData = useCompileStore.getState().vectorData
+    const compiledMainPath = useCompileStore.getState().compiledMainPath
     const svgRoot = pageEl.querySelector('svg')
     let candidateCount = 0
     let renderNodeCount = 0
@@ -968,14 +970,29 @@ function usePreviewClickHandler(ignoreClickRef?: { current: boolean }) {
       )
       candidateCount = candidates.length
       if (candidates.length > 0) {
-        const injectedPreambleLines = getInjectedPreambleLineCount(source)
         const spans = await resolveSourceLocBatch(vectorData, candidates.map((c) => c.path))
+        const spanPath = spans.map((span) => span ? parseSourceSpanFilePath(span) : null).find(Boolean) ?? null
+        targetPath = spanPath
+        const compiledMain = compiledMainPath ? normalizeDiagnosticPath(compiledMainPath) : 'main.typ'
+        const mainSource = useProjectStore.getState().getCurrentProject()?.files.find((file) => {
+          return normalizeDiagnosticPath(file.path) === compiledMain && !file.isBinary
+        })?.content
+        const preambleSource = (spanPath && spanPath !== compiledMain)
+          ? (mainSource ?? '')
+          : (spanPath === compiledMain ? (mainSource ?? source) : source)
+        const injectedPreambleLines = getInjectedPreambleLineCount(preambleSource || source)
+        const applyPreamble = !spanPath || spanPath === compiledMain
         let best: { line: number; score: number } | null = null
 
         for (let i = 0; i < spans.length; i++) {
           const span = spans[i]
           if (!span) continue
-          const range = parseSourceSpanToRange(span, totalLines, fallbackLine, injectedPreambleLines)
+          const range = parseSourceSpanToRange(
+            span,
+            totalLines,
+            fallbackLine,
+            applyPreamble ? injectedPreambleLines : 0,
+          )
           if (!range) continue
 
           const mid = Math.round((range.fromLine + range.toLine) / 2)
@@ -990,6 +1007,36 @@ function usePreviewClickHandler(ignoreClickRef?: { current: boolean }) {
 
         if (best) {
           targetLine = best.line
+        }
+      }
+    }
+
+    if (targetPath) {
+      const currentPath = useProjectStore.getState().currentFilePath
+      if (normalizeDiagnosticPath(currentPath ?? '') !== targetPath) {
+        useProjectStore.getState().selectFile(targetPath)
+        const ready = await waitForEditorPath(targetPath, {
+          isCurrentPath: () => useProjectStore.getState().currentFilePath,
+          isFileLoaded: (path) => {
+            const project = useProjectStore.getState().getCurrentProject()
+            const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
+            return Boolean(file?.loaded || file?.content)
+          },
+          isEditorReady: (path) => {
+            const bound = useEditorStore.getState().boundPath
+            return Boolean(bound && normalizeDiagnosticPath(bound) === path)
+          },
+          getEditorView: () => useEditorStore.getState().editorView,
+          getEditorDoc: () => useEditorStore.getState().editorView?.state.doc.toString() ?? null,
+          getFileContent: (path) => {
+            const project = useProjectStore.getState().getCurrentProject()
+            const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
+            return file && !file.isBinary && file.loaded ? file.content : null
+          },
+        })
+        if (ready) {
+          source = useEditorStore.getState().source
+          totalLines = ready.state.doc.lines
         }
       }
     }
@@ -1151,7 +1198,17 @@ export function PreviewPanel() {
         const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
         return Boolean(file && (file.kind ?? 'file') === 'file' && file.loaded)
       },
+      isEditorReady: (path) => {
+        const bound = useEditorStore.getState().boundPath
+        return Boolean(bound && normalizeDiagnosticPath(bound) === path)
+      },
       getEditorView: () => useEditorStore.getState().editorView,
+      getEditorDoc: () => useEditorStore.getState().editorView?.state.doc.toString() ?? null,
+      getFileContent: (path) => {
+        const project = useProjectStore.getState().getCurrentProject()
+        const file = project?.files.find((entry) => normalizeDiagnosticPath(entry.path) === path)
+        return file && !file.isBinary && file.loaded ? file.content : null
+      },
     }).then((view) => {
       if (!view || token !== jumpToErrorTokenRef.current) return
       const latestPath = useProjectStore.getState().currentFilePath

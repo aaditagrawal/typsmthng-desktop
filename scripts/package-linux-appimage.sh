@@ -91,6 +91,7 @@ cat > "$APPDIR/AppRun" <<APPRUN
 #!/bin/bash
 SELF=\$(readlink -f "\$0")
 HERE=\${SELF%/*}
+cd "\${HERE}/usr/${APP_NAME}"
 export LD_LIBRARY_PATH="\${HERE}/usr/${APP_NAME}/lib:\${LD_LIBRARY_PATH:-}"
 exec "\${HERE}/usr/${APP_NAME}/bin/launcher" "\$@"
 APPRUN

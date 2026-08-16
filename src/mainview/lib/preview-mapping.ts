@@ -86,6 +86,22 @@ export function findApproxSourceLine(
 }
 
 /**
+ * Extract a workspace-relative file path from a typst source span such as
+ * `main.typ:12:3-12:10` or `/chapter.typ:5:1`. Returns null when the span is
+ * only a numeric range.
+ */
+export function parseSourceSpanFilePath(span: string): string | null {
+  const trimmed = span.trim()
+  if (!trimmed) return null
+  const withoutRange = trimmed.replace(/:\d+:\d+(?:-\d+:\d+)?$/, '')
+  if (!withoutRange || withoutRange === trimmed) {
+    if (/^\d+:\d+/.test(trimmed)) return null
+  }
+  if (!withoutRange || /^\d+$/.test(withoutRange)) return null
+  return withoutRange.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
+/**
  * Parse a typst source span into a source line range.
  *
  * Supports both `line:col` and `col:line` interpretations and picks the one

@@ -226,6 +226,26 @@ async function getLocalFontsIndex(): Promise<Map<string, LocalFontDescriptor[]>>
   return localFontsIndexPromise
 }
 
+async function loadSystemFontsFromDesktop(families: string[]): Promise<{
+  key: string
+  data: Uint8Array[]
+  matchedFamilies: string[]
+}> {
+  try {
+    const { desktopRpc } = await import('@/lib/desktop-rpc')
+    const result = await desktopRpc.request.loadSystemFonts({ families })
+    const matched = [...new Set(result.files.map((file) => normalizeFontFamily(file.family)))]
+    return {
+      key: matched.sort().join('\n'),
+      data: result.files.map((file) => file.data),
+      matchedFamilies: matched,
+    }
+  } catch (err) {
+    console.warn('Desktop system font loading failed:', err)
+    return { key: '', data: [], matchedFamilies: [] }
+  }
+}
+
 async function loadSystemFontData(families: string[]): Promise<{
   key: string
   data: Uint8Array[]
@@ -236,6 +256,9 @@ async function loadSystemFontData(families: string[]): Promise<{
   }
 
   const fontIndex = await getLocalFontsIndex()
+  if (fontIndex.size === 0) {
+    return loadSystemFontsFromDesktop(families)
+  }
   const matchedFamilies = families
     .map((family) => normalizeFontFamily(family))
     .filter((family, index, allFamilies) => fontIndex.has(family) && allFamilies.indexOf(family) === index)

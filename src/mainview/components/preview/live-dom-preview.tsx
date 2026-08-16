@@ -48,8 +48,11 @@ export function LiveDomPreview() {
 
   useEffect(() => {
     let cancelled = false
+    let resizeCleanup: (() => void) | null = null
 
     const disposeController = () => {
+      resizeCleanup?.()
+      resizeCleanup = null
       controllerRef.current?.dispose()
       controllerRef.current = null
     }
@@ -71,6 +74,19 @@ export function LiveDomPreview() {
         }
         controllerRef.current = controller
         controller.refresh()
+
+        const host = hostRef.current
+        if (!host) return
+        const refresh = () => controller.refresh()
+        const resizeObserver = new ResizeObserver(() => refresh())
+        resizeObserver.observe(host)
+        host.addEventListener('scroll', refresh, { passive: true })
+        window.addEventListener('resize', refresh)
+        resizeCleanup = () => {
+          resizeObserver.disconnect()
+          host.removeEventListener('scroll', refresh)
+          window.removeEventListener('resize', refresh)
+        }
       })
       .catch((err) => {
         if (cancelled) return
@@ -83,24 +99,6 @@ export function LiveDomPreview() {
       disposeController()
     }
   }, [vectorData])
-
-  useEffect(() => {
-    const host = hostRef.current
-    const controller = controllerRef.current
-    if (!host || !controller) return
-
-    const refresh = () => controller.refresh()
-    const resizeObserver = new ResizeObserver(() => refresh())
-    resizeObserver.observe(host)
-    host.addEventListener('scroll', refresh, { passive: true })
-    window.addEventListener('resize', refresh)
-
-    return () => {
-      resizeObserver.disconnect()
-      host.removeEventListener('scroll', refresh)
-      window.removeEventListener('resize', refresh)
-    }
-  }, [vectorData, mountError])
 
   const errorCount = diagnostics.filter((d) => d.severity === 'error').length
 

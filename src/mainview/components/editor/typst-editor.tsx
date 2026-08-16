@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, keymap } from '@codemirror/view'
-import { EditorState, Compartment } from '@codemirror/state'
+import { EditorState, Compartment, Prec } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
@@ -24,6 +24,8 @@ import { useCompileStore } from '@/stores/compile-store'
 // Compartments for live reconfiguration
 const themeCompartment = new Compartment()
 const vimCompartment = new Compartment()
+const lineNumbersCompartment = new Compartment()
+const lineWrappingCompartment = new Compartment()
 const PROJECT_SYNC_DELAY_MS = 800
 
 export function TypstEditor() {
@@ -46,6 +48,9 @@ export function TypstEditor() {
     return `${file.path}:${file.lastModified}:${file.loaded ? 1 : 0}:${file.content.length}`
   })
   const vimMode = useSettingsStore((s) => s.vimMode)
+  const lineNumbersEnabled = useSettingsStore((s) => s.lineNumbers)
+  const lineWrappingEnabled = useSettingsStore((s) => s.lineWrapping)
+  const fontSize = useSettingsStore((s) => s.fontSize)
 
   const flushPendingProjectSync = useCallback(() => {
     if (projectSyncTimerRef.current) {
@@ -108,11 +113,14 @@ export function TypstEditor() {
     const filePath = useProjectStore.getState().currentFilePath
     const file = project?.files.find((f) => f.path === filePath && (f.kind ?? 'file') === 'file' && !f.isBinary)
     const initialDoc = file?.content || SAMPLE_DOCUMENT
+    if (filePath && file?.loaded) {
+      useEditorStore.getState().setBoundPath(filePath)
+    }
 
     const state = EditorState.create({
       doc: initialDoc,
       extensions: [
-        lineNumbers(),
+        lineNumbersCompartment.of(useSettingsStore.getState().lineNumbers ? lineNumbers() : []),
         highlightActiveLine(),
         highlightActiveLineGutter(),
         history(),
@@ -121,7 +129,7 @@ export function TypstEditor() {
         indentOnInput(),
         highlightSelectionMatches(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-        EditorView.lineWrapping,
+        lineWrappingCompartment.of(useSettingsStore.getState().lineWrapping ? EditorView.lineWrapping : []),
         typst(),
         indentationMarkers({
           hideFirstIndent: false,
@@ -137,9 +145,9 @@ export function TypstEditor() {
         themeCompartment.of(createEditorTheme(useUIStore.getState().resolvedTheme)),
         sourceHighlightField,
         diagnosticField,
+        Prec.highest(keymap.of(typstKeymap)),
         keymap.of([
           indentWithTab,
-          ...typstKeymap,
           ...closeBracketsKeymap,
           ...defaultKeymap,
           ...searchKeymap,
@@ -164,12 +172,13 @@ export function TypstEditor() {
 
             // Update editor store
             useEditorStore.getState().setSource(source)
-            // Sync back to project store
-            const path = useProjectStore.getState().currentFilePath
-            if (path) {
-              scheduleProjectSync(path, source)
+            // Sync back to the document this view is bound to, not whatever
+            // currentFilePath the tree last clicked (images / still-hydrating files).
+            const boundPath = useEditorStore.getState().boundPath
+            if (boundPath) {
+              scheduleProjectSync(boundPath, source)
             }
-            requestCompile(source, path)
+            requestCompile(source, boundPath)
           }
         }),
       ],
@@ -198,6 +207,7 @@ export function TypstEditor() {
       viewRef.current?.destroy()
       viewRef.current = null
       useEditorStore.getState().setEditorView(null)
+      useEditorStore.getState().setBoundPath(null)
     }
   }, [flushPendingProjectSync, scheduleProjectSync, setCursorPosition])
 
@@ -236,6 +246,22 @@ export function TypstEditor() {
     })
   }, [vimMode])
 
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: lineNumbersCompartment.reconfigure(lineNumbersEnabled ? lineNumbers() : []),
+    })
+  }, [lineNumbersEnabled])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: lineWrappingCompartment.reconfigure(lineWrappingEnabled ? EditorView.lineWrapping : []),
+    })
+  }, [lineWrappingEnabled])
+
   // React to file/project changes — swap document content
   useEffect(() => {
     // Persist pending edits from the previous file before changing documents.
@@ -247,6 +273,8 @@ export function TypstEditor() {
     const project = useProjectStore.getState().getCurrentProject()
     const file = project?.files.find((f) => f.path === currentFilePath && (f.kind ?? 'file') === 'file' && !f.isBinary)
     if (!file?.loaded) return
+
+    useEditorStore.getState().setBoundPath(currentFilePath)
 
     const currentContent = view.state.doc.toString()
     if (currentContent === file.content) return
@@ -301,7 +329,10 @@ export function TypstEditor() {
     <div
       ref={editorRef}
       className="h-full w-full overflow-hidden"
-      style={{ background: 'var(--bg-surface)' }}
+      style={{
+        background: 'var(--bg-surface)',
+        ['--editor-font-size' as string]: `${fontSize}px`,
+      }}
       // Suppress native context menu — CodeMirror handles its own interactions
       onContextMenu={(e) => e.preventDefault()}
     />

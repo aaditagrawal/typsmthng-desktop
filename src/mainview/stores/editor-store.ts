@@ -8,10 +8,12 @@ interface EditorState {
   isDirty: boolean
   saveStatus: SaveStatus
   editorView: EditorView | null
+  boundPath: string | null
   lastUserEditAt: number
   setSource: (source: string) => void
   setDirty: (dirty: boolean) => void
   setEditorView: (view: EditorView | null) => void
+  setBoundPath: (path: string | null) => void
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -19,6 +21,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   isDirty: false,
   saveStatus: 'saved',
   editorView: null,
+  boundPath: null,
   lastUserEditAt: 0,
 
   setSource: (source) => {
@@ -27,4 +30,5 @@ export const useEditorStore = create<EditorState>((set) => ({
 
   setDirty: (isDirty) => set({ isDirty }),
   setEditorView: (editorView) => set({ editorView }),
+  setBoundPath: (boundPath) => set({ boundPath }),
 }))

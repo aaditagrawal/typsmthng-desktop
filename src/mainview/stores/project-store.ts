@@ -69,7 +69,7 @@ interface ProjectState {
   createProject: (
     name: string,
     scaffold?: ProjectScaffold,
-    options?: { ifExists?: "open" | "fail"; select?: boolean },
+    options?: { ifExists?: "open" | "fail"; select?: boolean; parentPath?: string },
   ) => Promise<string>;
   deleteProject: (id: string) => Promise<void>;
   renameProject: (id: string, name: string) => Promise<void>;
@@ -248,7 +248,14 @@ function renameEntries(entries: ProjectFile[], oldPath: string, newPath: string)
   const oldPrefix = `${normalizedOld}/`;
   const newPrefix = `${normalizedNew}/`;
 
-  const renamed = entries.map((entry) => {
+  const withoutDest = entries.filter((entry) => {
+    if (entry.path === normalizedNew || entry.path.startsWith(newPrefix)) {
+      return entry.path === normalizedOld || entry.path.startsWith(oldPrefix);
+    }
+    return true;
+  });
+
+  const renamed = withoutDest.map((entry) => {
     if (entry.path !== normalizedOld && !entry.path.startsWith(oldPrefix)) {
       return entry;
     }
@@ -327,6 +334,7 @@ function applyMetadataState(metadata: AppMetadata) {
 }
 
 let applyProjectGeneration = 0;
+let selectFileGeneration = 0;
 
 function bumpApplyProjectGeneration() {
   applyProjectGeneration += 1;
@@ -343,7 +351,7 @@ function clearSelectionState() {
     activeConflict: null,
   }));
 
-  useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved" });
+  useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved", boundPath: null });
   scheduleWindowTitleUpdate()
 }
 
@@ -407,6 +415,7 @@ async function applyProject(project: Project | null): Promise<void> {
     source: mainTextFile?.content ?? "",
     isDirty: false,
     saveStatus: "saved",
+    boundPath: mainTextFile?.path ?? project?.mainFile ?? null,
   });
 
   try {
@@ -450,6 +459,7 @@ function bindSubscriptions() {
     useProjectStore.setState((state) => {
       const project = getActiveProject(state);
       if (!project || project.rootPath !== rootPath) return state;
+      const includeHidden = state.metadata?.recentVaults.find((vault) => vault.rootPath === rootPath)?.hiddenFilesVisible ?? false;
 
       let nextFiles = project.files;
       let nextMainFile = project.mainFile;
@@ -469,6 +479,7 @@ function bindSubscriptions() {
         }
 
         if (event.kind === "addDir") {
+          if (!includeHidden && isHiddenPath(event.path)) continue;
           nextFiles = replaceEntry(nextFiles, {
             path: event.path,
             name: basenameOf(event.path),
@@ -486,6 +497,7 @@ function bindSubscriptions() {
         }
 
         const existing = nextFiles.find((entry) => entry.path === event.path);
+        if (!includeHidden && isHiddenPath(event.path) && !existing) continue;
         nextFiles = replaceEntry(nextFiles, {
           path: event.path,
           name: basenameOf(event.path),
@@ -589,7 +601,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         activeConflict: null,
         loading: false,
       });
-      useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved" });
+      useEditorStore.setState({ source: "", isDirty: false, saveStatus: "saved", boundPath: null });
       updateWindowTitle();
       perfMeasure("store.load_projects", start, { restored: 0, metadataOnly: 1 });
       return;
@@ -619,6 +631,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         source: mainTextFile?.content ?? "",
         isDirty: false,
         saveStatus: "saved",
+        boundPath: mainTextFile?.path ?? activeProject.mainFile,
       });
     }
     updateWindowTitle();
@@ -634,6 +647,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       scaffold: normalizeScaffold(scaffold),
       ifExists: options?.ifExists,
       activate: shouldSelect,
+      parentPath: options?.parentPath,
     });
     if (!project) return "";
 
@@ -792,14 +806,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!project) return;
 
     const entry = project.files.find((candidate) => candidate.path === filePath);
-    set({ currentFilePath: filePath, activeConflict: null });
-    schedulePersistLastFile(project.rootPath, filePath);
-    scheduleWindowTitleUpdate();
+    const token = ++selectFileGeneration;
+    const apply = () => {
+      if (token !== selectFileGeneration) return;
+      set({ currentFilePath: filePath, activeConflict: null });
+      schedulePersistLastFile(project.rootPath, filePath);
+      scheduleWindowTitleUpdate();
+    };
 
-    if (entry && (entry.kind ?? "file") === "file" && !entry.loaded) {
-      void hydrateFile(project.rootPath, filePath);
+    if (entry && (entry.kind ?? "file") === "file" && !entry.isBinary && !entry.loaded) {
+      void hydrateFile(project.rootPath, filePath).then(apply);
       return;
     }
+
+    apply();
   },
 
   createFile: async (filePath, content = "") => {
@@ -1216,11 +1236,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const currentFilePath = get().currentFilePath;
     const source = useEditorStore.getState().source;
-    const currentEntry = currentFilePath
-      ? project.files.find((entry) => entry.path === currentFilePath)
+    const boundPath = useEditorStore.getState().boundPath;
+    const savePath = boundPath ?? currentFilePath;
+    const currentEntry = savePath
+      ? project.files.find((entry) => entry.path === savePath)
       : null;
-    if (currentFilePath && currentEntry && (currentEntry.kind ?? "file") === "file" && !currentEntry.isBinary) {
-      get().updateFileContent(currentFilePath, source);
+    if (savePath && currentEntry && (currentEntry.kind ?? "file") === "file" && !currentEntry.isBinary) {
+      get().updateFileContent(savePath, source);
     }
 
     useEditorStore.setState({ saveStatus: "saving" });

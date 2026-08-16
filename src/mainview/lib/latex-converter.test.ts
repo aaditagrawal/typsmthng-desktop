@@ -15,6 +15,12 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).not.toContain('refs.bib.bib')
     })
 
+    it('does not double-append .bib for uppercase bibliography paths', async () => {
+      const result = await convertLatexToTypst('\\bibliography{refs.BIB}')
+      expect(result.typst).toContain('#bibliography("refs.BIB")')
+      expect(result.typst).not.toContain('refs.BIB.bib')
+    })
+
     it('normalizes each entry in a comma-separated bibliography list', async () => {
       const result = await convertLatexToTypst('\\bibliography{refs, more.bib, extra}')
       expect(result.typst).toContain(
@@ -46,7 +52,8 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('#set document(')
       expect(result.typst).toContain('title: [Hello World],')
       expect(result.typst).toContain('author: "Ada Lovelace",')
-      expect(result.typst).toContain('date: "2024",')
+      expect(result.typst).toContain('date: datetime(year: 2024, month: 1, day: 1),')
+      expect(result.typst).not.toContain('date: "')
       expect(result.typst).toContain('Body text here.')
 
       // Consumed preamble macros should not be re-emitted as body noise
@@ -132,6 +139,11 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('@fig:plot')
     })
 
+    it('splits multi-key cite commands', async () => {
+      const result = await convertLatexToTypst('See \\cite{knuth84,lamport94}.')
+      expect(result.typst).toContain('@knuth84 @lamport94')
+    })
+
     it('converts \\eqref and cite variants', async () => {
       const source = '\\eqref{eq:1} \\citep{a} \\citet{b}'
       const result = await convertLatexToTypst(source)
@@ -153,11 +165,11 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('#include "methods.typ"')
     })
 
-    it('leaves existing .typ paths unchanged', async () => {
-      const result = await convertLatexToTypst('\\input{already.typ}')
-      expect(result.typst).toContain('#include "already.typ"')
-      expect(result.typst).not.toContain('already.typ.typ')
-    })
+  it('rewrites .TEX includes case-insensitively', async () => {
+    const result = await convertLatexToTypst('\\input{chapters/INTRO.TEX}')
+    expect(result.typst).toContain('#include "chapters/INTRO.typ"')
+    expect(result.typst).not.toContain('.TEX.typ')
+  })
   })
 
   describe('table environment with nested tabular', () => {
@@ -215,6 +227,55 @@ describe('convertLatexToTypst', () => {
 
       expect(result.typst).toContain('columns: 3')
       expect(result.typst).toContain('[a], [b], [c]')
+    })
+  })
+
+  describe('math line breaks', () => {
+    it('converts align \\\\ without hanging', async () => {
+      const result = await convertLatexToTypst(
+        '\\begin{align} a &= b \\\\ c &= d \\end{align}',
+      )
+      expect(result.typst).toContain('a')
+      expect(result.typst).toContain('b')
+      expect(result.typst).toContain('c')
+      expect(result.typst).toContain('d')
+    })
+
+    it('converts escaped ampersand in inline math', async () => {
+      const result = await convertLatexToTypst('$ a \\& b $')
+      expect(result.typst).toContain('a')
+      expect(result.typst).toContain('&')
+      expect(result.typst).toContain('b')
+    })
+  })
+
+  describe('typst validity', () => {
+    it('emits date: auto for \\today', async () => {
+      const result = await convertLatexToTypst(
+        '\\title{Hi}\\date{\\today}\\begin{document}x\\end{document}',
+      )
+      expect(result.typst).toContain('date: auto,')
+      expect(result.typst).not.toContain('date: "')
+    })
+
+    it('always gives #figure a positional body', async () => {
+      const result = await convertLatexToTypst(
+        '\\begin{figure}\\caption{A fig}\\label{fig:a}\\end{figure}',
+      )
+      expect(result.typst).toContain('#figure(')
+      expect(result.typst).toMatch(/#figure\(\s*\[\/\* figure content missing \*\/\],/)
+      expect(result.typst).toContain('caption: [A fig]')
+    })
+
+    it('escapes brackets and quotes in interpolated Typst syntax', async () => {
+      const titled = await convertLatexToTypst(
+        '\\title{The ] bracket}\\author{John "Jack" Smith}\\begin{document}x\\end{document}',
+      )
+      expect(titled.typst).toContain('title: [The \\] bracket]')
+      expect(titled.typst).toContain('author: "John \\"Jack\\" Smith"')
+
+      const linked = await convertLatexToTypst('\\href{https://ex.com/a"b}{click}')
+      expect(linked.typst).toContain('#link("https://ex.com/a\\"b")[click]')
     })
   })
 })

@@ -647,7 +647,12 @@ export function ProjectPicker({
     try {
       onPreloadWorkspace?.()
       const scaffold = createBuiltInTemplateScaffold(templateId)
-      await createProject(template.suggestedProjectName, scaffold)
+      const id = await createProject(template.suggestedProjectName, scaffold, { ifExists: 'fail' })
+      if (!id) {
+        throw new Error(
+          'Project creation was cancelled or a project with that name already exists in the chosen folder.',
+        )
+      }
       setInitSuccess(`Created "${template.suggestedProjectName}" from built-in starter`)
       setMarketplaceOpen(false)
     } catch (err) {

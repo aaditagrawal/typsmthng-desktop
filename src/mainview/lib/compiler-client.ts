@@ -43,11 +43,14 @@ interface CompilerWorkerApi {
 let worker: Worker | null = null
 let workerApi: Remote<CompilerWorkerApi> | null = null
 let workerAvailable = typeof Worker !== 'undefined'
+let workerFailedPromise: Promise<never> | null = null
 let compilerReady = false
 let backendInitPromise: Promise<void> | null = null
 let currentCompilerConfigKey = ''
 let currentFontData: Uint8Array[] = []
 let packageRuntimeEpoch = 0
+let lastEnsuredSpecs: string[] = []
+const WORKER_INIT_TIMEOUT_MS = 20_000
 
 function resetWorkerTransport(): void {
   if (worker || workerApi) {
@@ -58,6 +61,7 @@ function resetWorkerTransport(): void {
     worker = null
   }
   workerApi = null
+  workerFailedPromise = null
 }
 
 async function ensureCompilerConfig(
@@ -97,16 +101,21 @@ async function getWorkerApi(): Promise<Remote<CompilerWorkerApi> | null> {
 
   try {
     worker = new Worker(new URL('../workers/typst-worker.ts', import.meta.url), { type: 'module' })
+    workerFailedPromise = new Promise<never>((_, reject) => {
+      worker?.addEventListener('error', () => {
+        reject(new Error('typst worker failed to load'))
+      })
+      worker?.addEventListener('messageerror', () => {
+        reject(new Error('typst worker message error'))
+      })
+    })
+    workerFailedPromise.catch(() => {})
     workerApi = wrap<CompilerWorkerApi>(worker)
     return workerApi
   } catch (err) {
     console.warn('Falling back to main-thread compiler (worker init failed):', err)
     workerAvailable = false
-    if (worker) {
-      worker.terminate()
-      worker = null
-    }
-    workerApi = null
+    resetWorkerTransport()
     return null
   }
 }
@@ -133,12 +142,7 @@ async function callWithFallback<T>(
     return await runWorker(api)
   } catch (err) {
     console.warn('Worker compiler call failed, using fallback path:', err)
-    workerAvailable = false
-    if (worker) {
-      worker.terminate()
-      worker = null
-    }
-    workerApi = null
+    resetWorkerTransport()
     return runFallback()
   }
 }
@@ -149,6 +153,9 @@ async function callWithCompilerFallback<T>(
 ): Promise<T> {
   return callWithFallback(runWorker, async () => {
     await ensureBackendInitialized()
+    if (lastEnsuredSpecs.length > 0) {
+      await ensurePackagesForCompileBackend(lastEnsuredSpecs)
+    }
     return runFallback()
   })
 }
@@ -164,7 +171,14 @@ export async function initCompilerClient(
 
   await callWithFallback(
     async (api) => {
-      await api.initCompiler({ fontData: currentFontData })
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('typst worker timeout')), WORKER_INIT_TIMEOUT_MS)
+      })
+      await Promise.race([
+        api.initCompiler({ fontData: currentFontData }),
+        workerFailedPromise ?? timeout,
+        timeout,
+      ])
       compilerReady = true
     },
     async () => {
@@ -229,6 +243,7 @@ export async function compileToPdfClient(
 }
 
 export async function ensurePackagesForCompileClient(specs: string[]): Promise<void> {
+  lastEnsuredSpecs = specs
   await callWithFallback(
     (api) => api.ensurePackagesForCompile(specs),
     () => ensurePackagesForCompileBackend(specs),

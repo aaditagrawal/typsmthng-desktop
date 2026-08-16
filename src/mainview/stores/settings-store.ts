@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { get as idbGet, set as idbSet, createStore } from 'idb-keyval'
 import { useUIStore } from './ui-store'
+import type { UserSettings } from '../../shared/rpc'
 
 const settingsDb = createStore('typsmthng-settings', 'settings')
 const SETTINGS_KEY = 'user-settings'
@@ -69,16 +70,25 @@ const defaults: Settings = {
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 const PERSIST_DEBOUNCE_MS = 300
 
+async function persistSettingsNow(settings: Settings) {
+  try {
+    const { desktopRpc } = await import('@/lib/desktop-rpc')
+    await desktopRpc.request.setUserSettings({ settings })
+    return
+  } catch {
+    // Fall through to IndexedDB when the desktop RPC is unavailable.
+  }
+  try {
+    await idbSet(SETTINGS_KEY, settings, settingsDb)
+  } catch (err) {
+    console.warn('Failed to persist settings:', err)
+  }
+}
+
 function persistSettings(settings: Settings) {
   if (persistTimer) clearTimeout(persistTimer)
   persistTimer = setTimeout(() => {
-    try {
-      idbSet(SETTINGS_KEY, settings, settingsDb).catch((err) => {
-        console.warn('Failed to persist settings to IDB:', err)
-      })
-    } catch (err) {
-      console.warn('Failed to persist settings to IDB:', err)
-    }
+    void persistSettingsNow(settings)
   }, PERSIST_DEBOUNCE_MS)
 }
 
@@ -164,25 +174,35 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   loadSettings: async () => {
     try {
-      const saved = await idbGet<Settings>(SETTINGS_KEY, settingsDb)
+      let saved: Settings | UserSettings | null | undefined
+      try {
+        const { desktopRpc } = await import('@/lib/desktop-rpc')
+        saved = await desktopRpc.request.getUserSettings()
+      } catch {
+        saved = undefined
+      }
+      if (!saved) {
+        saved = await idbGet<Settings>(SETTINGS_KEY, settingsDb)
+      }
       if (saved) {
+        const theme = (saved.theme ?? defaults.theme) as Theme
         set({
           fontSize: saved.fontSize ?? defaults.fontSize,
           autoCompile: saved.autoCompile ?? defaults.autoCompile,
           compileDelay: saved.compileDelay ?? defaults.compileDelay,
           lineWrapping: saved.lineWrapping ?? defaults.lineWrapping,
           lineNumbers: saved.lineNumbers ?? defaults.lineNumbers,
-          theme: saved.theme ?? defaults.theme,
+          theme,
           vimMode: saved.vimMode ?? defaults.vimMode,
-          pageSize: saved.pageSize ?? defaults.pageSize,
+          pageSize: (saved.pageSize as PageSize | undefined) ?? defaults.pageSize,
           systemFontsEnabled: saved.systemFontsEnabled ?? defaults.systemFontsEnabled,
           googleFontsEnabled: saved.googleFontsEnabled ?? defaults.googleFontsEnabled,
           translucent: saved.translucent ?? defaults.translucent,
         })
-        useUIStore.getState().setTheme(saved.theme ?? defaults.theme)
+        useUIStore.getState().setTheme(theme)
       }
     } catch (err) {
-      console.warn('Failed to load settings from IDB, using defaults:', err)
+      console.warn('Failed to load settings, using defaults:', err)
     }
   },
 }))

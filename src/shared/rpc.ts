@@ -129,6 +129,8 @@ export interface CreateVaultParams {
   ifExists?: CreateVaultIfExistsPolicy;
   /** When false, write/register the vault without activating it in the UI. Default: true. */
   activate?: boolean;
+  /** Skip the folder picker and create under this directory (bulk import). */
+  parentPath?: string;
 }
 
 export interface VaultExportFile {
@@ -141,6 +143,20 @@ export interface VaultExportFile {
 export interface VaultExportBundle {
   name: string;
   files: VaultExportFile[];
+}
+
+export interface UserSettings {
+  fontSize?: number;
+  autoCompile?: boolean;
+  compileDelay?: number;
+  lineWrapping?: boolean;
+  lineNumbers?: boolean;
+  theme?: "light" | "dark" | "system";
+  vimMode?: boolean;
+  pageSize?: string;
+  systemFontsEnabled?: boolean;
+  googleFontsEnabled?: boolean;
+  translucent?: boolean;
 }
 
 export type DesktopRPC = {
@@ -253,6 +269,22 @@ export type DesktopRPC = {
       getVaultExportBundle: {
         params: { rootPath: string };
         response: VaultExportBundle | null;
+      };
+      saveDownload: {
+        params: { filename: string; data: Uint8Array };
+        response: { ok: true; path: string };
+      };
+      getUserSettings: {
+        params: void;
+        response: UserSettings | null;
+      };
+      setUserSettings: {
+        params: { settings: UserSettings };
+        response: { ok: true };
+      };
+      loadSystemFonts: {
+        params: { families: string[] };
+        response: { files: Array<{ family: string; data: Uint8Array }> };
       };
       setWindowTitle: {
         params: { title: string };

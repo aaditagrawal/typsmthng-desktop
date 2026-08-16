@@ -376,3 +376,110 @@ describe('VaultService.getBootstrapState / getVaultExportBundle', () => {
     await fs.rm(tempRoot, { recursive: true, force: true })
   })
 })
+
+describe('VaultService.createVault rollback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    appStateLoadMock.mockResolvedValue(baseMetadata())
+    appStateUpdateMock.mockImplementation(async (recipe: (current: unknown) => unknown) => {
+      const next = recipe(baseMetadata())
+      return next
+    })
+    appStateUpsertMock.mockResolvedValue(baseMetadata())
+    appStatePersistLastFileMock.mockResolvedValue(baseMetadata())
+  })
+
+  it('removes a new folder when a scaffold write fails', async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-create-parent-'))
+    const { Utils } = await import('electrobun/bun')
+    vi.mocked(Utils.openFileDialog).mockResolvedValue([parent] as never)
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+
+    await expect(
+      service.createVault(
+        {
+          name: 'Paper',
+          activate: false,
+          ifExists: 'fail',
+          scaffold: {
+            files: [
+              { path: 'main.typ', content: '= Hi\n', isBinary: false },
+              { path: '../evil.typ', content: 'nope', isBinary: false },
+            ],
+            mainFile: 'main.typ',
+          },
+        },
+        {} as never,
+      ),
+    ).rejects.toThrow(/escapes vault root/)
+
+    await expect(fs.access(path.join(parent, 'Paper'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await fs.rm(parent, { recursive: true, force: true })
+  })
+
+  it('removes a new folder when register fails so retry with ifExists fail can succeed', async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-create-reg-'))
+    const { Utils } = await import('electrobun/bun')
+    vi.mocked(Utils.openFileDialog).mockResolvedValue([parent] as never)
+    getIndexMock.mockRejectedValue(new Error('index failed'))
+
+    const { VaultService } = await loadModule()
+    const service = new VaultService()
+
+    await expect(
+      service.createVault(
+        {
+          name: 'Paper',
+          activate: false,
+          ifExists: 'fail',
+          scaffold: {
+            files: [{ path: 'main.typ', content: '= Hi\n', isBinary: false }],
+            mainFile: 'main.typ',
+          },
+        },
+        {} as never,
+      ),
+    ).rejects.toThrow(/Failed to register the new project|index failed/)
+
+    await expect(fs.access(path.join(parent, 'Paper'))).rejects.toMatchObject({ code: 'ENOENT' })
+
+    getIndexMock.mockResolvedValue({
+      entries: [
+        {
+          path: 'main.typ',
+          name: 'main.typ',
+          kind: 'file',
+          parentPath: null,
+          extension: '.typ',
+          isHidden: false,
+          isBinary: false,
+          lastModified: 1,
+          sizeBytes: 6,
+        },
+      ],
+      truncated: false,
+      scannedAt: Date.now(),
+      includeHidden: false,
+    })
+
+    const created = await service.createVault(
+      {
+        name: 'Paper',
+        activate: false,
+        ifExists: 'fail',
+        parentPath: parent,
+        scaffold: {
+          files: [{ path: 'main.typ', content: '= Hi\n', isBinary: false }],
+          mainFile: 'main.typ',
+        },
+      },
+      {} as never,
+    )
+    expect(created?.rootPath).toBe(path.join(parent, 'Paper'))
+    expect(await fs.readFile(path.join(parent, 'Paper', 'main.typ'), 'utf8')).toBe('= Hi\n')
+
+    await fs.rm(parent, { recursive: true, force: true })
+  })
+})

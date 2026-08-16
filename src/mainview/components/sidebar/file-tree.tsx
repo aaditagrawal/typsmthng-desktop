@@ -19,11 +19,12 @@ import {
 
 import type { LucideIcon } from 'lucide-react'
 import { ContextMenu, type ContextMenuAction } from '@/components/ui/context-menu'
-import { isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
+import { isLatexPath, isPreviewableImagePath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst } from '@/lib/latex-converter'
 import { revealLabel } from '@/lib/platform'
 import { normalizeImportEntryPath } from '@/lib/project-io'
 import { useProjectStore, type ProjectFile } from '@/stores/project-store'
+import { useUIStore } from '@/stores/ui-store'
 
 function fileIcon(name: string): LucideIcon {
   const ext = name.lastIndexOf('.') !== -1 ? name.slice(name.lastIndexOf('.')).toLowerCase() : ''
@@ -187,6 +188,16 @@ function flattenTree(nodes: TreeNode[], expanded: Set<string>, depth = 0): FlatN
   return items
 }
 
+function suggestUntitledTypstPath(existingPaths: Iterable<string>, directory: string): string {
+  const taken = new Set([...existingPaths].map((entry) => entry.replace(/^\/+/, '')))
+  const folder = directory.replace(/^\/+/, '').replace(/\/+$/, '')
+  const prefix = folder ? `${folder}/untitled` : 'untitled'
+  if (!taken.has(`${prefix}.typ`)) return `${prefix}.typ`
+  let n = 2
+  while (taken.has(`${prefix}-${n}.typ`)) n += 1
+  return `${prefix}-${n}.typ`
+}
+
 function buildDuplicatePath(existingPaths: Iterable<string>, path: string): string {
   const taken = new Set(existingPaths)
   const directory = parentPath(path)
@@ -248,10 +259,10 @@ async function processImportedFiles(files: FileList | File[], basePath: string):
         try {
           const result = await convertLatexToTypst(content)
           content = result.typst
-          path = targetPath.replace(/\.tex$/i, '.typ')
+          path = targetPath.replace(/\.(tex|ltx)$/i, '.typ')
         } catch (err) {
           console.warn(`LaTeX conversion failed for "${file.name}":`, err)
-          path = targetPath.replace(/\.tex$/i, '.typ')
+          path = targetPath.replace(/\.(tex|ltx)$/i, '.typ')
           content = `// LaTeX conversion failed for this file.\n// Original .tex content preserved below:\n\n/* ${content.replace(/\*\//g, '* /')} */\n`
         }
         if (path !== targetPath && existingPaths.has(targetPath)) {
@@ -315,6 +326,7 @@ export function FileTree() {
   const currentProject = useProjectStore((s) => s.getCurrentProject())
   const currentFilePath = useProjectStore((s) => s.currentFilePath)
   const selectFile = useProjectStore((s) => s.selectFile)
+  const setImagePreviewPath = useUIStore((s) => s.setImagePreviewPath)
   const createFile = useProjectStore((s) => s.createFile)
   const createFolder = useProjectStore((s) => s.createFolder)
   const duplicateFile = useProjectStore((s) => s.duplicateFile)
@@ -333,25 +345,39 @@ export function FileTree() {
   const [viewportHeight, setViewportHeight] = useState(480)
   const [dragActive, setDragActive] = useState(false)
 
+  const includeHidden = useProjectStore((s) => (
+    s.metadata?.recentVaults.find((vault) => vault.rootPath === s.currentProjectId)?.hiddenFilesVisible ?? false
+  ))
   const treeSignature = useMemo(() => structureSignature(currentProject?.files ?? []), [currentProject?.files])
-  const tree = useMemo(() => buildTree(currentProject?.files ?? []), [currentProject?.files, treeSignature])
+  const visibleFiles = useMemo(() => {
+    const files = currentProject?.files ?? []
+    if (includeHidden) return files
+    return files.filter((file) => !file.isHidden && !normalizePath(file.path).split('/').some((segment) => segment.startsWith('.')))
+  }, [currentProject?.files, includeHidden])
+  const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles, treeSignature])
   const rows = useMemo(() => flattenTree(tree, expanded), [expanded, tree])
 
   useEffect(() => {
-    const nextExpanded = new Set<string>()
-    for (const node of tree) {
-      if (node.kind === 'directory') nextExpanded.add(node.path)
-    }
+    setExpanded(() => {
+      const next = new Set<string>()
+      for (const node of tree) {
+        if (node.kind === 'directory') next.add(node.path)
+      }
+      return next
+    })
+  }, [currentProject?.id])
 
-    if (currentFilePath) {
+  useEffect(() => {
+    if (!currentFilePath) return
+    setExpanded((prev) => {
+      const next = new Set(prev)
       const segments = normalizePath(currentFilePath).split('/')
       for (let index = 1; index < segments.length; index += 1) {
-        nextExpanded.add(segments.slice(0, index).join('/'))
+        next.add(segments.slice(0, index).join('/'))
       }
-    }
-
-    setExpanded(nextExpanded)
-  }, [currentProject?.id, currentFilePath, tree])
+      return next
+    })
+  }, [currentFilePath])
 
   useEffect(() => {
     const list = listRef.current
@@ -373,15 +399,30 @@ export function FileTree() {
   }, [currentFilePath, currentProject?.files])
 
   const promptForFile = async (baseDirectory = activeDirectory) => {
-    const suggestion = baseDirectory ? `${baseDirectory}/main.typ` : 'main.typ'
+    const existing = (currentProject?.files ?? [])
+      .filter((entry) => (entry.kind ?? 'file') === 'file')
+      .map((entry) => entry.path)
+    const suggestion = suggestUntitledTypstPath(existing, baseDirectory)
     const nextPath = window.prompt('New file path', suggestion)?.trim()
-    if (nextPath) await createFile(nextPath)
+    if (nextPath) {
+      try {
+        await createFile(nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to create file.')
+      }
+    }
   }
 
   const promptForFolder = async (baseDirectory = activeDirectory) => {
     const suggestion = baseDirectory ? `${baseDirectory}/notes` : 'notes'
     const nextPath = window.prompt('New folder path', suggestion)?.trim()
-    if (nextPath) await createFolder(nextPath)
+    if (nextPath) {
+      try {
+        await createFolder(nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to create folder.')
+      }
+    }
   }
 
   const renameNode = async (node: TreeNode) => {
@@ -392,9 +433,17 @@ export function FileTree() {
     const parent = parentPath(node.path)
     const nextPath = parent ? `${parent}/${nextName}` : nextName
     if (node.kind === 'directory') {
-      await renameFolder(node.path, nextPath)
+      try {
+        await renameFolder(node.path, nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to rename folder.')
+      }
     } else {
-      await renameFile(node.path, nextPath)
+      try {
+        await renameFile(node.path, nextPath)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : 'Failed to rename file.')
+      }
     }
   }
 
@@ -406,7 +455,11 @@ export function FileTree() {
         .map((entry) => entry.path),
       node.path,
     )
-    await duplicateFile(node.path, nextPath)
+    try {
+      await duplicateFile(node.path, nextPath)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to duplicate file.')
+    }
   }
 
   const actionsForNode = (node: TreeNode): ContextMenuAction[] => [
@@ -459,8 +512,14 @@ export function FileTree() {
       danger: true,
       onClick: () => {
         if (!window.confirm(`Delete ${node.name}?`)) return
-        if (node.kind === 'directory') void deleteFolder(node.path)
-        else void deleteFile(node.path)
+        void (async () => {
+          try {
+            if (node.kind === 'directory') await deleteFolder(node.path)
+            else await deleteFile(node.path)
+          } catch (error) {
+            window.alert(error instanceof Error ? error.message : 'Failed to delete.')
+          }
+        })()
       },
     },
   ]
@@ -605,6 +664,10 @@ export function FileTree() {
                       else next.add(row.node.path)
                       return next
                     })
+                    return
+                  }
+                  if (isPreviewableImagePath(row.node.path)) {
+                    setImagePreviewPath(row.node.path)
                     return
                   }
                   selectFile(row.node.path)

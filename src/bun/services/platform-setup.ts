@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { existsSync, readlinkSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import path from "node:path";
 
 const APP_NAME = "typsmthng";
@@ -194,9 +194,11 @@ async function setupWindows(): Promise<void> {
 	try {
 		execSync(`reg add "HKCU\\Software\\Classes\\.typ" /ve /d "typsmthng.typ" /f`, { stdio: "ignore" });
 		execSync(`reg add "HKCU\\Software\\Classes\\typsmthng.typ" /ve /d "Typst Document" /f`, { stdio: "ignore" });
-		execSync(
-			`reg add "HKCU\\Software\\Classes\\typsmthng.typ\\shell\\open\\command" /ve /d "\\"${exePath}\\" \\"%1\\"" /f`,
-			{ stdio: "ignore" },
+		const openCommand = windowsTypstOpenCommand(exePath);
+		spawnSync(
+			"reg",
+			["add", "HKCU\\Software\\Classes\\typsmthng.typ\\shell\\open\\command", "/ve", "/d", openCommand, "/f"],
+			{ shell: false, stdio: "ignore" },
 		);
 		console.log("Registered .typ file association");
 	} catch (error) {
@@ -267,6 +269,37 @@ async function ensureSymlink(linkPath: string, target: string): Promise<void> {
 async function safeRead(filePath: string): Promise<string | null> {
 	try {
 		return await fs.readFile(filePath, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/** Registry /d value for opening a .typ file. Must keep `%1` literal (cmd expands it). */
+export function windowsTypstOpenCommand(exePath: string): string {
+	return `"${exePath}" "%1"`;
+}
+
+/** Electrobun locates Resources from process.cwd(). File-association launches often start elsewhere. */
+export function resolvePackagedAppRoot(
+	execPath: string,
+	exists: (candidate: string) => boolean = existsSync,
+): string | null {
+	const execDir = path.dirname(execPath);
+	const appRoot = path.join(execDir, "..");
+	if (exists(path.join(appRoot, "Resources", "version.json"))) return appRoot;
+	return null;
+}
+
+export function ensurePackagedWorkingDirectory(
+	execPath: string = process.execPath,
+	exists: (candidate: string) => boolean = existsSync,
+	chdir: (dir: string) => void = (dir) => process.chdir(dir),
+): string | null {
+	const appRoot = resolvePackagedAppRoot(execPath, exists);
+	if (!appRoot) return null;
+	try {
+		chdir(appRoot);
+		return appRoot;
 	} catch {
 		return null;
 	}

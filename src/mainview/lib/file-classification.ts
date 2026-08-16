@@ -12,6 +12,16 @@ export const BIBLIOGRAPHY_TEXT_EXTENSIONS: readonly string[] = [
   '.yml',
 ] as const
 
+export const LATEX_TEXT_EXTENSIONS: readonly string[] = [
+  '.sty',
+  '.cls',
+  '.bst',
+  '.clo',
+  '.def',
+  '.fd',
+  '.ltx',
+] as const
+
 export const GENERAL_TEXT_EXTENSIONS: readonly string[] = [
   '.typ',
   '.txt',
@@ -38,7 +48,7 @@ export const GENERAL_TEXT_EXTENSIONS: readonly string[] = [
 ] as const
 
 export const ALL_TEXT_EXTENSIONS = Array.from(
-  new Set([...GENERAL_TEXT_EXTENSIONS, ...BIBLIOGRAPHY_TEXT_EXTENSIONS])
+  new Set([...GENERAL_TEXT_EXTENSIONS, ...BIBLIOGRAPHY_TEXT_EXTENSIONS, ...LATEX_TEXT_EXTENSIONS])
 )
 
 const ALL_TEXT_EXTENSION_SET = new Set(ALL_TEXT_EXTENSIONS)
@@ -64,7 +74,22 @@ export function isBibliographyPath(pathOrName: string): boolean {
 }
 
 export function isLatexPath(pathOrName: string): boolean {
-  return normalizeExtension(pathOrName) === '.tex'
+  const extension = normalizeExtension(pathOrName)
+  return extension === '.tex' || extension === '.ltx'
+}
+
+const IMAGE_PREVIEW_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.svg',
+  '.webp',
+])
+
+export function isPreviewableImagePath(pathOrName: string): boolean {
+  const extension = normalizeExtension(pathOrName)
+  return extension !== '' && IMAGE_PREVIEW_EXTENSIONS.has(extension)
 }
 
 export function shouldTreatUploadAsText(file: File): boolean {

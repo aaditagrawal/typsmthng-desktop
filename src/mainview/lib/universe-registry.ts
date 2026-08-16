@@ -885,6 +885,7 @@ export async function ensurePackagesForCompile(specs: string[]): Promise<void> {
   let frontier = specs
     .map((spec) => parseSpecSafe(spec))
     .filter((spec): spec is ParsedSpec => spec !== null)
+  const requestedKeys = new Set(frontier.map((parsed) => `${parsed.namespace}/${parsed.name}`))
 
   const visited = new Set<string>()
 
@@ -892,7 +893,10 @@ export async function ensurePackagesForCompile(specs: string[]): Promise<void> {
     const resolvedEntries = await mapLimit(frontier, ENSURE_PACKAGE_CONCURRENCY, async (parsed) => {
       try {
         return await resolveMaybeVersionless(parsed)
-      } catch {
+      } catch (error) {
+        if (requestedKeys.has(`${parsed.namespace}/${parsed.name}`)) {
+          throw error instanceof Error ? error : new Error(`Failed to resolve package ${parsed.name}`)
+        }
         return null
       }
     })

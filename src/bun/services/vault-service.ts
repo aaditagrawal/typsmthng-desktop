@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
@@ -12,6 +13,7 @@ import {
   type ExternalVaultEvent,
   type PathSearchResult,
   type ProjectScaffold,
+  type ProjectTemplateMeta,
   type RecentVaultRecord,
   type TextSearchResult,
   type VaultExportBundle,
@@ -25,7 +27,7 @@ import { AppStateService } from "./app-state";
 import { BackgroundTaskQueue } from "./background-task-queue";
 import { FullTextSearchService } from "./full-text-search";
 import { VaultIndexService } from "./vault-index";
-import { resolveVaultMainFile } from "./vault-main-file";
+import { resolveCompileMainFile, resolveVaultMainFile } from "./vault-main-file";
 import { shouldReopenVault } from "./vault-reopen";
 
 const WRITE_DEBOUNCE_MS = 450;
@@ -56,6 +58,16 @@ const IMAGE_EXTENSION_SET = new Set([
   ".bmp",
   ".avif",
   ".tiff",
+]);
+
+const COMPILE_BINARY_EXTENSION_SET = new Set([
+  ...IMAGE_EXTENSION_SET,
+  ".pdf",
+  ".ttf",
+  ".otf",
+  ".ttc",
+  ".woff",
+  ".woff2",
 ]);
 
 type DesktopBunRPC = ReturnType<typeof BrowserView.defineRPC<DesktopRPC>>;
@@ -112,9 +124,17 @@ function assertSafeVaultRelativePath(input: string): string {
   return normalized;
 }
 
+function isEnoent(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "EEXIST");
+}
+
 /** Single-segment project folder name; strips parents and rejects empty / `.` / `..`. */
 function sanitizeCreateVaultFolderName(input: string): string | null {
-  const name = path.basename(input.trim());
+  const name = path.basename(input.trim()).replace(/[/\\:*?"<>|]/g, "_").trim();
   if (!name || name === "." || name === "..") return null;
   return name;
 }
@@ -129,7 +149,7 @@ function isHiddenPath(relativePath: string): boolean {
 }
 
 function shouldLoadBinary(relativePath: string, sizeBytes: number): boolean {
-  return IMAGE_EXTENSION_SET.has(normalizeExtension(relativePath)) && sizeBytes <= MAX_EAGER_BINARY_BYTES;
+  return COMPILE_BINARY_EXTENSION_SET.has(normalizeExtension(relativePath)) && sizeBytes <= MAX_EAGER_BINARY_BYTES;
 }
 
 function defaultMainFile(
@@ -326,21 +346,25 @@ export class VaultService {
       scaffold?: ProjectScaffold;
       ifExists?: "open" | "fail";
       activate?: boolean;
+      parentPath?: string;
     },
     window: DesktopWindow,
   ): Promise<VaultRecord | null> {
     const name = sanitizeCreateVaultFolderName(params.name);
     if (!name) return null;
 
-    const [selectedParent] = await Utils.openFileDialog({
-      startingFolder: Utils.paths.documents,
-      allowedFileTypes: "*",
-      canChooseFiles: false,
-      canChooseDirectory: true,
-      allowsMultipleSelection: false,
-    });
-
-    if (!selectedParent) return null;
+    let selectedParent = params.parentPath?.trim() || "";
+    if (!selectedParent) {
+      const [picked] = await Utils.openFileDialog({
+        startingFolder: Utils.paths.documents,
+        allowedFileTypes: "*",
+        canChooseFiles: false,
+        canChooseDirectory: true,
+        allowsMultipleSelection: false,
+      });
+      if (!picked) return null;
+      selectedParent = picked;
+    }
 
     const rootPath = path.join(selectedParent, name);
     const ifExists = params.ifExists ?? "open";
@@ -349,6 +373,7 @@ export class VaultService {
     // Check if directory exists and already has content — open as existing vault
     // instead of overwriting to prevent data loss (GitHub issue #8).
     // Imports pass ifExists: "fail" so a collision is not reported as a successful import.
+    let rollbackOnFailure = false;
     try {
       const entries = await fs.readdir(rootPath);
       if (entries.length > 0) {
@@ -358,30 +383,51 @@ export class VaultService {
         }
         return this.openVault(rootPath, window);
       }
-    } catch {
-      // Directory doesn't exist yet — proceed with creation
+      rollbackOnFailure = true;
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+      rollbackOnFailure = true;
     }
 
-    await fs.mkdir(rootPath, { recursive: true });
+    try {
+      await fs.mkdir(rootPath, { recursive: true });
 
-    const scaffold = params.scaffold ?? this.createBlankScaffold(name);
-    for (const file of scaffold.files) {
-      const relativePath = assertSafeVaultRelativePath(file.path);
-      const absolutePath = path.join(rootPath, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      if (file.isBinary && file.binaryData) {
-        await fs.writeFile(absolutePath, file.binaryData);
-      } else if (file.isBinary) {
-        throw new Error(`Scaffold binary "${file.path}" is missing file data.`);
-      } else {
-        await fs.writeFile(absolutePath, file.content, "utf8");
+      const scaffold = params.scaffold ?? this.createBlankScaffold(name);
+      for (const file of scaffold.files) {
+        const relativePath = assertSafeVaultRelativePath(file.path);
+        const absolutePath = path.join(rootPath, relativePath);
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        if (file.isBinary && file.binaryData) {
+          await fs.writeFile(absolutePath, file.binaryData);
+        } else if (file.isBinary) {
+          throw new Error(`Scaffold binary "${file.path}" is missing file data.`);
+        } else {
+          await fs.writeFile(absolutePath, file.content, "utf8");
+        }
       }
-    }
 
-    if (!activate) {
-      return this.registerVaultWithoutActivating(rootPath, scaffold.mainFile);
+      if (!activate) {
+        const record = await this.registerVaultWithoutActivating(rootPath, scaffold.mainFile);
+        if (!record) {
+          throw new Error("Failed to register the new project.");
+        }
+        return record;
+      }
+      const opened = await this.openVault(rootPath, window, scaffold.mainFile);
+      if (!opened) {
+        throw new Error("Failed to open the new project.");
+      }
+      return opened;
+    } catch (error) {
+      if (rollbackOnFailure) {
+        try {
+          await fs.rm(rootPath, { recursive: true, force: true });
+        } catch (cleanupError) {
+          console.error("Failed to roll back createVault directory", cleanupError);
+        }
+      }
+      throw error;
     }
-    return this.openVault(rootPath, window, scaffold.mainFile);
   }
 
   /** Upsert recents + return a snapshot without watcher/activeVaultOpened (import/bulk). */
@@ -522,14 +568,22 @@ export class VaultService {
     return { ok: true };
   }
 
+  /** Best-effort disk write for pending buffers when the process is about to die. */
+  flushWritesSync(): void {
+    for (const pending of this.pendingWrites.values()) {
+      try {
+        if (pending.timer) clearTimeout(pending.timer);
+        const safePath = assertSafeVaultRelativePath(pending.filePath);
+        writeFileSync(path.join(pending.rootPath, safePath), pending.content, "utf8");
+      } catch (error) {
+        console.error("Failed to flush write on exit", error);
+      }
+    }
+    this.pendingWrites.clear();
+  }
+
   async createFile(rootPath: string, filePath: string, content = ""): Promise<VaultFileEntry | null> {
-    const safePath = assertSafeVaultRelativePath(filePath);
-    const absolutePath = path.join(rootPath, safePath);
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, content, "utf8");
-    this.indexService.invalidate(rootPath);
-    this.contentCache.get(rootPath)?.delete(safePath);
-    return this.readFileEntry(rootPath, safePath, true);
+    return this.writeTextFile(rootPath, filePath, content, { exclusive: true });
   }
 
   async createFilesBatch(
@@ -537,9 +591,35 @@ export class VaultService {
     entries: Array<{ path: string; content: string }>,
   ): Promise<{ ok: true }> {
     for (const entry of entries) {
-      await this.createFile(rootPath, entry.path, entry.content);
+      await this.writeTextFile(rootPath, entry.path, entry.content, { exclusive: false });
     }
     return { ok: true };
+  }
+
+  private async writeTextFile(
+    rootPath: string,
+    filePath: string,
+    content: string,
+    options: { exclusive: boolean },
+  ): Promise<VaultFileEntry | null> {
+    const safePath = assertSafeVaultRelativePath(filePath);
+    const absolutePath = path.join(rootPath, safePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    try {
+      await fs.writeFile(
+        absolutePath,
+        content,
+        options.exclusive ? { encoding: "utf8", flag: "wx" } : "utf8",
+      );
+    } catch (error) {
+      if (options.exclusive && isAlreadyExists(error)) {
+        throw new Error(`A file already exists at "${safePath}".`);
+      }
+      throw error;
+    }
+    this.indexService.invalidate(rootPath);
+    this.contentCache.get(rootPath)?.delete(safePath);
+    return this.readFileEntry(rootPath, safePath, true);
   }
 
   async addBinaryFilesBatch(
@@ -581,8 +661,18 @@ export class VaultService {
   async renamePath(rootPath: string, oldPath: string, newPath: string): Promise<{ ok: true }> {
     const safeOld = assertSafeVaultRelativePath(oldPath);
     const safeNew = assertSafeVaultRelativePath(newPath);
-    await fs.mkdir(path.dirname(path.join(rootPath, safeNew)), { recursive: true });
-    await fs.rename(path.join(rootPath, safeOld), path.join(rootPath, safeNew));
+    if (safeOld === safeNew) return { ok: true };
+
+    const dest = path.join(rootPath, safeNew);
+    try {
+      await fs.lstat(dest);
+      throw new Error(`A file or folder already exists at "${safeNew}".`);
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+    }
+
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.rename(path.join(rootPath, safeOld), dest);
     this.indexService.invalidate(rootPath);
     this.migratePendingWrites(rootPath, safeOld, safeNew);
     const cache = this.contentCache.get(rootPath);
@@ -687,16 +777,9 @@ export class VaultService {
     const index = await this.indexService.getIndex(rootPath, includeHidden);
 
     const fileEntries = index.entries.filter((entry) => entry.kind === "file");
-    const mainPath = currentFilePath
-      ?? defaultMainFile(
-        fileEntries.map((entry) => ({
-          ...entry,
-          loaded: false,
-          content: "",
-        })),
-        recent,
-      );
-    const normalizedMainPath = toWorkspacePath(mainPath);
+    const compileMain = resolveCompileMainFile(fileEntries, currentFilePath);
+    const normalizedMainPath = toWorkspacePath(compileMain);
+    const currentRel = currentFilePath ? sanitizeRelativePath(currentFilePath) : null;
 
     const textFiles = await Promise.all(
       fileEntries
@@ -715,20 +798,24 @@ export class VaultService {
     const extraFiles = resolvedTextFiles
       .map((file) => {
         const pending = this.pendingWrites.get(`${rootPath}::${file.path}`);
+        const isCurrent = currentRel !== null && file.path === currentRel;
         return {
           path: toWorkspacePath(file.path),
-          content: file.path === mainPath ? liveSource : (pending?.content ?? file.content),
+          content: isCurrent ? liveSource : (pending?.content ?? file.content),
         };
       })
       .filter((file) => file.path !== normalizedMainPath);
 
-    const mainEntry = resolvedTextFiles.find((file) => file.path === mainPath);
-    const mainSource = currentFilePath === mainPath ? liveSource : mainEntry?.content ?? liveSource;
+    const mainEntry = resolvedTextFiles.find((file) => file.path === compileMain);
+    const mainPending = this.pendingWrites.get(`${rootPath}::${compileMain}`);
+    const mainSource = currentRel === compileMain
+      ? liveSource
+      : (mainPending?.content ?? mainEntry?.content ?? liveSource);
     const resolvedBinaryFiles = binaryFiles.filter(
       (file): file is VaultFileEntry & { binaryData: Uint8Array } => Boolean(file?.binaryData),
     );
     const extraBinaryFiles = resolvedBinaryFiles
-      .filter((file) => file.path !== mainPath)
+      .filter((file) => file.path !== compileMain)
       .map((file) => ({
         path: toWorkspacePath(file.path),
         data: file.binaryData,
@@ -770,7 +857,7 @@ export class VaultService {
           entry.kind === "file"
           && entry.path !== ".folder"
           && !entry.path.endsWith("/.folder")
-          && !entry.path.startsWith(".typsmthng/"),
+          && (entry.path === ".typsmthng/template.json" || !entry.path.startsWith(".typsmthng/")),
       );
 
       const files = await Promise.all(
@@ -802,9 +889,24 @@ export class VaultService {
         }),
       );
 
+      const exportFiles = [...files];
+      const hasTemplateMeta = exportFiles.some((file) => file.path === ".typsmthng/template.json");
+      if (!hasTemplateMeta) {
+        try {
+          const content = await fs.readFile(path.join(rootPath, ".typsmthng", "template.json"), "utf8");
+          exportFiles.push({
+            path: ".typsmthng/template.json",
+            isBinary: false,
+            content,
+          });
+        } catch {
+          // Optional template metadata.
+        }
+      }
+
       return {
         name: path.basename(rootPath),
-        files,
+        files: exportFiles,
       };
     } catch (error) {
       console.error("Failed to build vault export bundle", error);
@@ -937,7 +1039,19 @@ export class VaultService {
       mainFile,
       createdAt: now,
       updatedAt: now,
+      templateMeta: await this.readTemplateMeta(rootPath),
     };
+  }
+
+  private async readTemplateMeta(rootPath: string): Promise<ProjectTemplateMeta | undefined> {
+    try {
+      const raw = await fs.readFile(path.join(rootPath, ".typsmthng", "template.json"), "utf8");
+      const parsed = JSON.parse(raw) as ProjectTemplateMeta;
+      if (!parsed || typeof parsed !== "object") return undefined;
+      return parsed;
+    } catch {
+      return undefined;
+    }
   }
 
   private async hydrateRecentVaultMetadata(metadata: AppMetadata): Promise<AppMetadata> {
