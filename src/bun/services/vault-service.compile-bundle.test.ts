@@ -5,7 +5,7 @@ import path from 'node:path'
 
 const appStateLoadMock = vi.fn()
 const getIndexMock = vi.fn()
-const moveToTrashMock = vi.fn()
+const moveToTrashMock = vi.fn((..._args: unknown[]) => true)
 
 class MockAppStateService {
   load = appStateLoadMock
@@ -327,6 +327,12 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
     await fs.rm(tempRoot, { recursive: true, force: true })
   })
 
+  // RPC methods validate rootPath against known vaults; tests exercise bare
+  // temp dirs, so mark them active the way openVault would.
+  function activateRoot(service: object, rootPath: string): void {
+    (service as unknown as { activeVaultRoot: string | null }).activeVaultRoot = rootPath
+  }
+
   it('clears pendingWrites on deletePath and migrates them on renamePath', async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'typsmthng-pending-'))
     await fs.mkdir(path.join(tempRoot, 'notes'), { recursive: true })
@@ -340,6 +346,7 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
       renamePath: (rootPath: string, oldPath: string, newPath: string) => Promise<{ ok: true }>
       pendingWrites: PendingWriteMap
     }
+    activateRoot(service, tempRoot)
 
     await service.stageFileWrite(tempRoot, 'notes/a.typ', 'pending-a')
     await service.stageFileWrite(tempRoot, 'notes/b.typ', 'pending-b')
@@ -375,6 +382,7 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
       flushWrites: (input: { rootPath?: string; path?: string }) => Promise<{ ok: true }>
       pendingWrites: PendingWriteMap
     }
+    activateRoot(service, tempRoot)
 
     await service.stageFileWrite(tempRoot, filePath, 'first body')
     const key = `${tempRoot}::${filePath}`
@@ -405,6 +413,7 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
 
     const { VaultService } = await loadModule()
     const service = new VaultService()
+    activateRoot(service, tempRoot)
 
     await expect(service.createFile(tempRoot, 'main.typ', '= New\n')).rejects.toThrow(/already exists/)
     expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('= Main\n')
@@ -423,12 +432,20 @@ describe('VaultService.readFileEntry / pendingWrites path ops', () => {
     const { VaultService } = await loadModule()
     const service = new VaultService() as unknown as {
       stageFileWrite: (rootPath: string, filePath: string, content: string) => Promise<{ queuedAt: number }>
+      flushWrites: (input: { rootPath?: string; path?: string }) => Promise<{ ok: true }>
       flushWritesSync: () => void
       pendingWrites: PendingWriteMap
     }
+    activateRoot(service, tempRoot)
 
     await service.stageFileWrite(tempRoot, 'main.typ', 'new')
     service.flushWritesSync()
+    // Entries survive the sync pass (an in-flight async write must not be able
+    // to roll the file back); the paired async flush clears them.
+    expect(service.pendingWrites.size).toBe(1)
+    expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('new')
+
+    await service.flushWrites({})
     expect(service.pendingWrites.size).toBe(0)
     expect(await fs.readFile(path.join(tempRoot, 'main.typ'), 'utf8')).toBe('new')
 

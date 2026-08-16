@@ -122,11 +122,14 @@ export async function runProcess(
   const outputMode = options.outputMode ?? "error";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
+    // Never use a shell: cmd.exe joins args with no quoting, so paths with
+    // spaces split and query metacharacters (& | ^ %) get interpreted.
+    // PATH lookup appends .exe on Windows, so bare "rg"/"git" still resolve.
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: process.platform === "win32",
+      shell: false,
     });
 
     let stdout = "";

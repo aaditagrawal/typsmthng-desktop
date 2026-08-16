@@ -64,7 +64,7 @@ Icon=$APP_NAME
 Type=Application
 Categories=Office;TextEditor;
 Comment=Folder-backed Typst editor
-MimeType=text/x-typst;
+MimeType=text/x-typst;inode/directory;
 DESKTOP
 
 # Install MIME type definition for .typ files

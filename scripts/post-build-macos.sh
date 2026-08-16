@@ -30,6 +30,11 @@ if [[ ! -f "$PLIST" ]]; then
   fi
 fi
 
+# NOTE: these associations make typsmthng appear in "Open With", but macOS
+# delivers opened documents via the `odoc` Apple Event, which Electrobun
+# (as of 1.15.1) does not surface to the bun process — argv stays empty, so
+# double-clicked files/folders currently launch the app without a document.
+# Wire this up once Electrobun exposes an open-file event.
 echo "==> Patching Info.plist for .typ file association"
 
 # Add CFBundleDocumentTypes using PlistBuddy
@@ -40,5 +45,13 @@ echo "==> Patching Info.plist for .typ file association"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions array" "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0 string typ" "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:0:LSHandlerRank string Default" "$PLIST" 2>/dev/null || true
+
+# Register as a handler for folders (Open Folder)
+/usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:1 dict" "$PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:1:CFBundleTypeName string 'Folder'" "$PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:1:CFBundleTypeRole string Viewer" "$PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:1:LSHandlerRank string Alternate" "$PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:1:LSItemContentTypes array" "$PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleDocumentTypes:1:LSItemContentTypes:0 string public.folder" "$PLIST" 2>/dev/null || true
 
 echo "==> Info.plist patched successfully"

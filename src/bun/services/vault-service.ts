@@ -178,6 +178,10 @@ export class VaultService {
   private readonly pendingWrites = new Map<string, PendingWrite>();
   private readonly contentCache = new Map<string, Map<string, CachedFile>>();
   private readonly suppressedWatchPaths = new Map<string, number>();
+  /** Content of the last successful flush per `${rootPath}::${path}`, to drop own-write watcher echoes. */
+  private readonly lastFlushedContent = new Map<string, string>();
+  /** Serializes openVault calls: overlapping opens leaked chokidar watchers. */
+  private openVaultChain: Promise<unknown> = Promise.resolve();
 
   private watcher: FSWatcher | null = null;
   private activeVaultRoot: string | null = null;
@@ -192,6 +196,45 @@ export class VaultService {
   async waitUntilReady(): Promise<{ ready: true }> {
     await this.appState.load();
     return { ready: true as const };
+  }
+
+  /**
+   * RPC handlers take `rootPath` verbatim from the renderer. Relative paths are
+   * strictly validated elsewhere; this closes the remaining hole by refusing
+   * roots the app has never registered (defense-in-depth against a compromised
+   * renderer turning vault RPCs into arbitrary filesystem access).
+   */
+  private async assertKnownVaultRoot(rootPath: string): Promise<void> {
+    if (rootPath === this.activeVaultRoot) return;
+    const metadata = await this.appState.load();
+    if (metadata.recentVaults.some((vault) => vault.rootPath === rootPath)) return;
+    throw new Error(`Unknown vault root: "${rootPath}"`);
+  }
+
+  /** True when the absolute path lives inside a registered vault root. */
+  private async isPathInKnownVault(absolutePath: string): Promise<boolean> {
+    const roots = new Set<string>();
+    if (this.activeVaultRoot) roots.add(this.activeVaultRoot);
+    const metadata = await this.appState.load();
+    for (const vault of metadata.recentVaults) roots.add(vault.rootPath);
+    const resolved = path.resolve(absolutePath);
+    for (const root of roots) {
+      const resolvedRoot = path.resolve(root);
+      if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) return true;
+    }
+    return false;
+  }
+
+  /** Drop per-vault caches when a vault leaves scope (close or switch). */
+  private evictVaultCaches(rootPath: string): void {
+    this.contentCache.delete(rootPath);
+    const prefix = `${rootPath}::`;
+    for (const key of this.lastFlushedContent.keys()) {
+      if (key.startsWith(prefix)) this.lastFlushedContent.delete(key);
+    }
+    for (const key of this.suppressedWatchPaths.keys()) {
+      if (key.startsWith(prefix)) this.suppressedWatchPaths.delete(key);
+    }
   }
 
   setStartupVaultOverride(rootPath: string | null, selectFile: string | null = null): void {
@@ -373,6 +416,8 @@ export class VaultService {
     // Check if directory exists and already has content — open as existing vault
     // instead of overwriting to prevent data loss (GitHub issue #8).
     // Imports pass ifExists: "fail" so a collision is not reported as a successful import.
+    // Only roll back by deleting the directory when WE created it — a
+    // pre-existing (empty) directory belongs to the user.
     let rollbackOnFailure = false;
     try {
       const entries = await fs.readdir(rootPath);
@@ -383,7 +428,6 @@ export class VaultService {
         }
         return this.openVault(rootPath, window);
       }
-      rollbackOnFailure = true;
     } catch (error) {
       if (!isEnoent(error)) throw error;
       rollbackOnFailure = true;
@@ -470,6 +514,7 @@ export class VaultService {
             ? null
             : current.reopenLastVaultPath,
       }));
+      this.evictVaultCaches(input.rootPath);
       return { ok: true };
     }
 
@@ -498,6 +543,7 @@ export class VaultService {
       } catch (error) {
         console.error("Failed to flush pending writes during closeVault", error);
       }
+      this.evictVaultCaches(rootPath);
     }
 
     // Only clear reopen when it still points at the vault we closed — a concurrent
@@ -513,10 +559,12 @@ export class VaultService {
   }
 
   async readFile(rootPath: string, filePath: string): Promise<VaultFileEntry | null> {
+    await this.assertKnownVaultRoot(rootPath);
     return this.readFileEntry(rootPath, assertSafeVaultRelativePath(filePath), true);
   }
 
   async stageFileWrite(rootPath: string, filePath: string, content: string): Promise<{ queuedAt: number }> {
+    await this.assertKnownVaultRoot(rootPath);
     const safePath = assertSafeVaultRelativePath(filePath);
     const key = `${rootPath}::${safePath}`;
     const queuedAt = Date.now();
@@ -579,7 +627,11 @@ export class VaultService {
         console.error("Failed to flush write on exit", error);
       }
     }
-    this.pendingWrites.clear();
+    // Keep the entries: an async write already in flight on the serial queue
+    // would otherwise land AFTER these sync writes and roll files back to
+    // stale content. Callers pair this with an async flushWrites(), whose
+    // queued re-write of the latest content is ordered after any in-flight
+    // task; the sync writes above only cover an immediate process death.
   }
 
   async createFile(rootPath: string, filePath: string, content = ""): Promise<VaultFileEntry | null> {
@@ -602,6 +654,7 @@ export class VaultService {
     content: string,
     options: { exclusive: boolean },
   ): Promise<VaultFileEntry | null> {
+    await this.assertKnownVaultRoot(rootPath);
     const safePath = assertSafeVaultRelativePath(filePath);
     const absolutePath = path.join(rootPath, safePath);
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -626,6 +679,7 @@ export class VaultService {
     rootPath: string,
     entries: Array<{ path: string; data: Uint8Array }>,
   ): Promise<{ ok: true }> {
+    await this.assertKnownVaultRoot(rootPath);
     for (const entry of entries) {
       const safePath = assertSafeVaultRelativePath(entry.path);
       const absolutePath = path.join(rootPath, safePath);
@@ -638,6 +692,7 @@ export class VaultService {
   }
 
   async createFolder(rootPath: string, folderPath: string): Promise<{ ok: true }> {
+    await this.assertKnownVaultRoot(rootPath);
     const safePath = assertSafeVaultRelativePath(folderPath);
     await fs.mkdir(path.join(rootPath, safePath), { recursive: true });
     this.indexService.invalidate(rootPath);
@@ -649,6 +704,7 @@ export class VaultService {
     sourcePath: string,
     targetPath: string,
   ): Promise<VaultFileEntry | null> {
+    await this.assertKnownVaultRoot(rootPath);
     const safeSource = assertSafeVaultRelativePath(sourcePath);
     const safeTarget = assertSafeVaultRelativePath(targetPath);
     await fs.mkdir(path.dirname(path.join(rootPath, safeTarget)), { recursive: true });
@@ -659,14 +715,24 @@ export class VaultService {
   }
 
   async renamePath(rootPath: string, oldPath: string, newPath: string): Promise<{ ok: true }> {
+    await this.assertKnownVaultRoot(rootPath);
     const safeOld = assertSafeVaultRelativePath(oldPath);
     const safeNew = assertSafeVaultRelativePath(newPath);
     if (safeOld === safeNew) return { ok: true };
 
     const dest = path.join(rootPath, safeNew);
     try {
-      await fs.lstat(dest);
-      throw new Error(`A file or folder already exists at "${safeNew}".`);
+      const destStat = await fs.lstat(dest);
+      // On case-insensitive filesystems (macOS/Windows defaults) a case-only
+      // rename resolves dest to the source itself — that's not a collision.
+      let sameNode = false;
+      try {
+        const srcStat = await fs.lstat(path.join(rootPath, safeOld));
+        sameNode = srcStat.ino === destStat.ino && srcStat.dev === destStat.dev;
+      } catch {}
+      if (!sameNode) {
+        throw new Error(`A file or folder already exists at "${safeNew}".`);
+      }
     } catch (error) {
       if (!isEnoent(error)) throw error;
     }
@@ -675,6 +741,7 @@ export class VaultService {
     await fs.rename(path.join(rootPath, safeOld), dest);
     this.indexService.invalidate(rootPath);
     this.migratePendingWrites(rootPath, safeOld, safeNew);
+    this.lastFlushedContent.delete(`${rootPath}::${safeOld}`);
     const cache = this.contentCache.get(rootPath);
     if (cache) {
       const cached = cache.get(safeOld);
@@ -690,20 +757,31 @@ export class VaultService {
   }
 
   async deletePath(rootPath: string, filePath: string): Promise<{ ok: true }> {
+    await this.assertKnownVaultRoot(rootPath);
     const safePath = assertSafeVaultRelativePath(filePath);
-    Utils.moveToTrash(path.join(rootPath, safePath));
+    if (!Utils.moveToTrash(path.join(rootPath, safePath))) {
+      // Surface the failure instead of letting the file tree and disk diverge.
+      throw new Error(`Could not move "${safePath}" to the trash.`);
+    }
     this.indexService.invalidate(rootPath);
     this.clearPendingWrites(rootPath, safePath);
     this.contentCache.get(rootPath)?.delete(safePath);
+    this.lastFlushedContent.delete(`${rootPath}::${safePath}`);
     return { ok: true };
   }
 
   async revealInFinder(absolutePath: string): Promise<{ ok: boolean }> {
+    if (!(await this.isPathInKnownVault(absolutePath))) {
+      return { ok: false };
+    }
     Utils.showItemInFolder(absolutePath);
     return { ok: true };
   }
 
   async openPath(absolutePath: string): Promise<{ ok: boolean }> {
+    if (!(await this.isPathInKnownVault(absolutePath))) {
+      return { ok: false };
+    }
     return { ok: Utils.openPath(absolutePath) };
   }
 
@@ -713,6 +791,7 @@ export class VaultService {
     limit: number,
     includeHidden: boolean,
   ): Promise<{ results: PathSearchResult[]; truncated: boolean }> {
+    await this.assertKnownVaultRoot(rootPath);
     return this.indexService.search(rootPath, query, limit, includeHidden);
   }
 
@@ -722,6 +801,7 @@ export class VaultService {
     limit: number,
     includeHidden: boolean,
   ): Promise<{ results: TextSearchResult[]; truncated: boolean }> {
+    await this.assertKnownVaultRoot(rootPath);
     return this.searchService.search(rootPath, query, limit, includeHidden);
   }
 
@@ -771,6 +851,7 @@ export class VaultService {
     currentFilePath: string | null,
     liveSource: string,
   ): Promise<CompileBundle> {
+    await this.assertKnownVaultRoot(rootPath);
     const metadata = await this.appState.load();
     const recent = metadata.recentVaults.find((vault) => vault.rootPath === rootPath);
     const includeHidden = recent?.hiddenFilesVisible ?? false;
@@ -833,6 +914,7 @@ export class VaultService {
     rootPath: string,
     includeHidden: boolean,
   ): Promise<{ fileCount: number }> {
+    await this.assertKnownVaultRoot(rootPath);
     const index = await this.indexService.getIndex(rootPath, includeHidden);
     return { fileCount: countVisibleFiles(index.entries) };
   }
@@ -840,6 +922,7 @@ export class VaultService {
   /** Read all vault files from disk for zip export (works for unloaded recent projects). */
   async getVaultExportBundle(rootPath: string): Promise<VaultExportBundle | null> {
     try {
+      await this.assertKnownVaultRoot(rootPath);
       // Defense in depth: exporters also flush, but direct RPC callers must not zip stale disk.
       await this.flushWrites({ rootPath });
 
@@ -968,12 +1051,32 @@ export class VaultService {
     preferredMainFile?: string | null,
     options?: { removeRecentOnFailure?: boolean },
   ): Promise<VaultRecord | null> {
+    // Serialize opens: overlapping openVault calls interleave at the awaits
+    // and can leak a chokidar watcher (startWatcher overwrites this.watcher
+    // without closing the previous one).
+    const run = this.openVaultChain.then(() =>
+      this.openVaultSerialized(rootPath, window, preferredMainFile, options),
+    );
+    this.openVaultChain = run.catch(() => {});
+    return run;
+  }
+
+  private async openVaultSerialized(
+    rootPath: string,
+    window: DesktopWindow,
+    preferredMainFile?: string | null,
+    options?: { removeRecentOnFailure?: boolean },
+  ): Promise<VaultRecord | null> {
     const removeRecentOnFailure = options?.removeRecentOnFailure ?? true;
     try {
       const metadata = await this.appState.load();
       const snapshot = await this.loadVaultSnapshot(rootPath, metadata, preferredMainFile);
       await this.stopWatcher();
 
+      const previousRoot = this.activeVaultRoot;
+      if (previousRoot && previousRoot !== rootPath) {
+        this.evictVaultCaches(previousRoot);
+      }
       this.activeVaultRoot = rootPath;
       this.activeWindow = window;
 
@@ -1218,10 +1321,17 @@ export class VaultService {
           },
         });
 
+        // Sweep expired entries so the map doesn't grow one entry per
+        // file ever saved for the whole process lifetime.
+        const now = Date.now();
+        for (const [suppressedKey, until] of this.suppressedWatchPaths) {
+          if (until <= now) this.suppressedWatchPaths.delete(suppressedKey);
+        }
         this.suppressedWatchPaths.set(
           `${latest.rootPath}::${latest.filePath}`,
-          Date.now() + SUPPRESSED_WATCH_EVENT_MS,
+          now + SUPPRESSED_WATCH_EVENT_MS,
         );
+        this.lastFlushedContent.set(`${latest.rootPath}::${latest.filePath}`, latest.content);
         this.indexService.invalidate(latest.rootPath);
 
         const current = this.pendingWrites.get(key);
@@ -1285,11 +1395,32 @@ export class VaultService {
 
       const suppressKey = `${rootPath}::${relativePath}`;
       const suppressedUntil = this.suppressedWatchPaths.get(suppressKey);
-      if (suppressedUntil && suppressedUntil > Date.now()) {
-        return;
-      }
-      if (suppressedUntil && suppressedUntil <= Date.now()) {
+      if (suppressedUntil !== undefined && suppressedUntil <= Date.now()) {
         this.suppressedWatchPaths.delete(suppressKey);
+      }
+
+      // For file writes, decide by content instead of timing alone: our own
+      // flush echoing back late must not raise a conflict (the banner would
+      // invite the user to discard their newer buffer), and a genuinely
+      // different external write must not be swallowed just because it landed
+      // inside the suppression window.
+      if (kind === "change" || kind === "add") {
+        const lastWritten = this.lastFlushedContent.get(suppressKey);
+        if (lastWritten !== undefined) {
+          try {
+            const currentContent = await fs.readFile(absolutePath, "utf8");
+            if (currentContent === lastWritten) return;
+          } catch {
+            // Unreadable/gone — fall through to normal handling.
+          }
+          // Content diverged: a real external edit; stop echo-matching until
+          // the next app-side flush refreshes the record.
+          this.lastFlushedContent.delete(suppressKey);
+        } else if (suppressedUntil !== undefined && suppressedUntil > Date.now()) {
+          return;
+        }
+      } else if (suppressedUntil !== undefined && suppressedUntil > Date.now()) {
+        return;
       }
 
       this.indexService.invalidate(rootPath);

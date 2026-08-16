@@ -9,11 +9,14 @@ import type { UpdateState } from "../shared/update-types";
 import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
-import { ensurePackagedWorkingDirectory, runPlatformSetup } from "./services/platform-setup";
+import { ensurePackagedWorkingDirectory, resolvePackagedAppRoot, runPlatformSetup } from "./services/platform-setup";
 import { saveDownloadFile } from "./services/save-download";
 import { loadUserSettings, saveUserSettings } from "./services/user-settings";
 import { loadSystemFontFiles } from "./services/system-fonts";
 
+// $OWD is set by the AppImage runtime; the AppRun script cds into the AppDir,
+// so process.cwd() there is not where the user invoked us from.
+const LAUNCH_CWD = process.env.OWD ?? process.cwd();
 ensurePackagedWorkingDirectory();
 
 const DEV_SERVER_PORT = 5173;
@@ -49,10 +52,19 @@ const vaultService = new VaultService();
 // --- Update state machine ---
 let updateState: UpdateState = {
 	status: "idle",
-	currentVersion: "0.1.0",
+	currentVersion: "0.0.0",
 	availableVersion: null,
 	error: null,
 };
+
+// Resolve the real packaged version instead of hardcoding it (it would
+// silently drift on the next release).
+void Updater.localInfo
+	.version()
+	.then((version) => {
+		if (version) setUpdateState({ currentVersion: version });
+	})
+	.catch(() => {});
 
 function broadcastUpdateState() {
 	try {
@@ -129,10 +141,11 @@ function parseStartupArgs(): { vaultPath: string | null; selectFile: string | nu
 		const arg = args[i];
 		if (arg === "--select" && i + 1 < args.length) {
 			selectFile = args[++i];
-		} else if (!arg.startsWith("-") && !arg.endsWith(".ts") && !arg.endsWith(".js")) {
-			// Skip the bun script path itself
+		} else if (!arg.startsWith("-")) {
 			try {
-				const resolved = resolve(arg);
+				// Resolve against the directory the user launched from, not the
+				// app root that ensurePackagedWorkingDirectory chdir'd into.
+				const resolved = resolve(LAUNCH_CWD, arg);
 				if (existsSync(resolved)) {
 					const stat = statSync(resolved);
 					if (stat.isDirectory()) {
@@ -142,6 +155,7 @@ function parseStartupArgs(): { vaultPath: string | null; selectFile: string | nu
 						vaultPath = fromTyp.vaultPath;
 						selectFile = fromTyp.selectFile;
 					}
+					// Other files (including the bun script path itself) are ignored.
 				}
 			} catch {}
 		}
@@ -247,11 +261,18 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 });
 
 function applyMacOSWindowEffects(window: BrowserWindow<DesktopBunRPC>) {
-	const dylibPath = join(import.meta.dir, "libMacWindowEffects.dylib");
+	// With ASAR packaging the bun entrypoint runs from a temp dir, so also
+	// resolve the dylib through the real bundle (Resources/app/bun/).
+	const appRoot = resolvePackagedAppRoot(process.execPath);
+	const dylibCandidates = [
+		join(import.meta.dir, "libMacWindowEffects.dylib"),
+		...(appRoot ? [join(appRoot, "Resources", "app", "bun", "libMacWindowEffects.dylib")] : []),
+	];
+	const dylibPath = dylibCandidates.find((candidate) => existsSync(candidate));
 
-	if (!existsSync(dylibPath)) {
+	if (!dylibPath) {
 		console.warn(
-			`Native macOS effects lib not found at ${dylibPath}. Falling back to transparent-only mode.`,
+			`Native macOS effects lib not found (checked ${dylibCandidates.join(", ")}). Falling back to transparent-only mode.`,
 		);
 		return;
 	}
@@ -349,22 +370,33 @@ function setupMacOSMenu(window: BrowserWindow<DesktopBunRPC>) {
 }
 
 const isWindows = process.platform === "win32";
-const SOCKET_DIR = isWindows
-	? ""
-	: join(process.env.HOME ?? process.env.USERPROFILE ?? "/tmp", ".typsmthng");
+// Per-user pipe name: a machine-global pipe would route a second logged-in
+// user's opens into the first user's session.
+const windowsPipeUser = (process.env.USERNAME ?? "default").replace(/[^\w.-]/g, "_");
+const socketHome = process.env.HOME ?? process.env.USERPROFILE ?? null;
+const SOCKET_DIR = isWindows || !socketHome ? "" : join(socketHome, ".typsmthng");
 const SOCKET_PATH = isWindows
-	? "\\\\.\\pipe\\typsmthng-cli"
-	: join(SOCKET_DIR, "cli.sock");
+	? `\\\\.\\pipe\\typsmthng-cli-${windowsPipeUser}`
+	: SOCKET_DIR
+		? join(SOCKET_DIR, "cli.sock")
+		: null;
 
 let cliServer: ReturnType<typeof createServer> | null = null;
 
 function tryForwardToRunningInstance(): Promise<boolean> {
 	return new Promise((resolve) => {
+		if (!SOCKET_PATH) {
+			resolve(false);
+			return;
+		}
 		const client = connect(SOCKET_PATH);
+		// A stale socket file fails fast with ECONNREFUSED; the timeout only
+		// covers a live-but-busy instance, so keep it generous to avoid a
+		// second instance stealing (and unlinking) the live server's socket.
 		const timer = setTimeout(() => {
 			client.destroy();
 			resolve(false);
-		}, 400);
+		}, 1500);
 		client.on("connect", () => {
 			clearTimeout(timer);
 			const args = parseStartupArgs();
@@ -444,6 +476,7 @@ async function handleOpenFromCli(vaultPath: string | null, selectFile: string | 
 }
 
 function startCliServer() {
+	if (!SOCKET_PATH) return;
 	if (!isWindows) {
 		mkdirSync(SOCKET_DIR, { recursive: true });
 		try {
@@ -487,7 +520,7 @@ mainWindow.on("close", () => {
 		void persistWindowFrame();
 		if (cliServer) {
 			cliServer.close();
-			if (!isWindows) {
+			if (!isWindows && SOCKET_PATH) {
 				try {
 					rmSync(SOCKET_PATH);
 				} catch {}

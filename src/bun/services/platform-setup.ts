@@ -42,16 +42,25 @@ async function setupMacOS(): Promise<void> {
 	await ensureSymlink("/usr/local/bin/typsmthng", cliTarget);
 }
 
-function findMacOSAppBundle(): string | null {
-	// Walk up from import.meta.dir to find the .app bundle
-	let dir = import.meta.dir;
+function walkUpToAppBundle(startDir: string): string | null {
+	let dir = startDir;
 	for (let i = 0; i < 10; i++) {
 		if (dir.endsWith(".app")) return dir;
-		// Check if parent contains .app
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
 		dir = parent;
 	}
+	return null;
+}
+
+function findMacOSAppBundle(): string | null {
+	// Prefer the real binary location: with ASAR packaging the bun entrypoint
+	// is extracted to a temp dir, so import.meta.dir escapes the bundle.
+	const fromExecPath = walkUpToAppBundle(path.dirname(process.execPath));
+	if (fromExecPath) return fromExecPath;
+
+	const fromModuleDir = walkUpToAppBundle(import.meta.dir);
+	if (fromModuleDir) return fromModuleDir;
 
 	// Fallback: common install location
 	const defaultPath = `/Applications/${APP_NAME}.app`;
@@ -76,21 +85,33 @@ async function setupLinux(): Promise<void> {
 	const applicationsDir = path.join(HOME, ".local", "share", "applications");
 	await fs.mkdir(applicationsDir, { recursive: true });
 
+	// Desktop-entry spec: quote the exec path (AppImages can live under
+	// paths with spaces) and escape the reserved characters inside quotes.
+	const quotedExec = `"${execPath.replace(/[\\"`$]/g, "\\$&")}"`;
 	const desktopContent = [
 		"[Desktop Entry]",
 		`Name=${APP_NAME}`,
-		`Exec=${execPath} %f`,
+		`Exec=${quotedExec} %f`,
 		`Icon=${APP_NAME}`,
 		"Type=Application",
 		"Categories=Office;TextEditor;",
 		"Comment=Folder-backed Typst editor",
-		"MimeType=text/x-typst;",
+		"MimeType=text/x-typst;inode/directory;",
 	].join("\n");
 
 	const desktopPath = path.join(applicationsDir, `${APP_NAME}.desktop`);
 	const existing = await safeRead(desktopPath);
 	if (existing !== desktopContent) {
 		await fs.writeFile(desktopPath, desktopContent, "utf8");
+
+		// Folder "Open With" entries resolve through mimeinfo.cache, which many
+		// environments only rebuild via update-desktop-database.
+		try {
+			spawnSync("update-desktop-database", [applicationsDir], {
+				stdio: "ignore",
+				timeout: 5000,
+			});
+		} catch {}
 	}
 
 	// 3. MIME type for .typ files
@@ -114,7 +135,7 @@ async function setupLinux(): Promise<void> {
 
 		// Update MIME database
 		try {
-			execSync("update-mime-database " + path.join(HOME, ".local", "share", "mime"), {
+			spawnSync("update-mime-database", [path.join(HOME, ".local", "share", "mime")], {
 				stdio: "ignore",
 				timeout: 5000,
 			});
@@ -190,22 +211,40 @@ async function setupWindows(): Promise<void> {
 	}
 	const binDir = path.dirname(exePath);
 
-	// 1. File association: always refresh open command to current launcher
+	// 1. File association. Claim `.typ` only when nothing else owns it (don't
+	// steal the extension back from an editor the user chose), but always
+	// refresh our own ProgID's open command to the current launcher path.
 	try {
-		execSync(`reg add "HKCU\\Software\\Classes\\.typ" /ve /d "typsmthng.typ" /f`, { stdio: "ignore" });
-		execSync(`reg add "HKCU\\Software\\Classes\\typsmthng.typ" /ve /d "Typst Document" /f`, { stdio: "ignore" });
+		const typDefault = readRegDefaultValue("HKCU\\Software\\Classes\\.typ");
+		if (!typDefault || typDefault === "typsmthng.typ") {
+			regAdd(["HKCU\\Software\\Classes\\.typ", "/ve", "/d", "typsmthng.typ", "/f"]);
+		}
+		regAdd(["HKCU\\Software\\Classes\\typsmthng.typ", "/ve", "/d", "Typst Document", "/f"]);
 		const openCommand = windowsTypstOpenCommand(exePath);
-		spawnSync(
-			"reg",
-			["add", "HKCU\\Software\\Classes\\typsmthng.typ\\shell\\open\\command", "/ve", "/d", openCommand, "/f"],
-			{ shell: false, stdio: "ignore" },
-		);
-		console.log("Registered .typ file association");
+		if (
+			regAdd(["HKCU\\Software\\Classes\\typsmthng.typ\\shell\\open\\command", "/ve", "/d", openCommand, "/f"])
+		) {
+			console.log("Registered .typ file association");
+		}
 	} catch (error) {
 		console.warn("Could not register .typ file association:", error);
 	}
 
-	// 2. Ensure the launcher bin dir is on user PATH (idempotent)
+	// 2. Folder context menu: "Open with typsmthng". Refresh the command on
+	// every launch so a reinstall to a different directory doesn't leave a
+	// dead exe behind the menu entry.
+	try {
+		regAdd(["HKCU\\Software\\Classes\\Directory\\shell\\typsmthng", "/ve", "/d", "Open with typsmthng", "/f"]);
+		if (
+			regAdd(["HKCU\\Software\\Classes\\Directory\\shell\\typsmthng\\command", "/ve", "/d", `"${exePath}" "%V"`, "/f"])
+		) {
+			console.log("Registered folder context menu entry");
+		}
+	} catch (error) {
+		console.warn("Could not register folder context menu:", error);
+	}
+
+	// 3. Ensure the launcher bin dir is on user PATH (idempotent)
 	try {
 		const pathResult = safeRegQuery("HKCU\\Environment", "Path");
 		const match = pathResult?.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
@@ -221,14 +260,49 @@ async function setupWindows(): Promise<void> {
 				return;
 			}
 			const newPath = currentPath ? `${binDir};${currentPath}` : binDir;
-			execSync(`reg add "HKCU\\Environment" /v Path /t REG_EXPAND_SZ /d "${newPath}" /f`, { stdio: "ignore" });
-			// Broadcast environment change
-			execSync("rundll32 user32.dll,UpdatePerUserSystemParameters", { stdio: "ignore", timeout: 3000 });
+			// shell:false is load-bearing: through cmd.exe, %VAR% inside the
+			// user's REG_EXPAND_SZ entries would be expanded and hardcoded.
+			if (!regAdd(["HKCU\\Environment", "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", newPath, "/f"])) {
+				console.warn("reg add failed; PATH not updated");
+				return;
+			}
+			broadcastEnvironmentChange();
 			console.log("Added to user PATH");
 		}
 	} catch (error) {
 		console.warn("Could not update PATH:", error);
 	}
+}
+
+/** Run `reg add` without a shell; returns true only if reg reported success. */
+function regAdd(args: string[]): boolean {
+	const result = spawnSync("reg", ["add", ...args], { shell: false, stdio: "ignore" });
+	return result.status === 0;
+}
+
+function readRegDefaultValue(key: string): string | null {
+	const output = safeRegQuery(key);
+	// reg query /ve prints: `    (Default)    REG_SZ    value`
+	const match = output?.match(/\(Default\)\s+REG_\w+\s+(.+)/i);
+	return match?.[1]?.trim() ?? null;
+}
+
+/** Broadcast WM_SETTINGCHANGE "Environment" so new Explorer-spawned shells see PATH edits. */
+function broadcastEnvironmentChange(): void {
+	const script = [
+		"$sig = '[DllImport(\"user32.dll\", SetLastError = true, CharSet = CharSet.Auto)]",
+		"public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);';",
+		"$type = Add-Type -MemberDefinition $sig -Name NativeBroadcast -Namespace Win32 -PassThru;",
+		"[UIntPtr]$result = [UIntPtr]::Zero;",
+		"$type::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result) | Out-Null;",
+	].join(" ");
+	try {
+		spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+			shell: false,
+			stdio: "ignore",
+			timeout: 10_000,
+		});
+	} catch {}
 }
 
 function safeRegQuery(key: string, valueName?: string): string | null {

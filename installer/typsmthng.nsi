@@ -92,6 +92,9 @@ Section "Uninstall"
   ${EndIf}
   DeleteRegKey HKCU "Software\Classes\typsmthng.typ"
 
+  ; Remove folder context-menu entry registered at runtime by platform-setup
+  DeleteRegKey HKCU "Software\Classes\Directory\shell\typsmthng"
+
   ; Remove registry entries
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng"
   DeleteRegKey HKCU "Software\typsmthng"

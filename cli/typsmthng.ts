@@ -7,8 +7,10 @@ import { execSync, spawn } from "node:child_process";
 import { resolveVaultRootFromTypFile } from "../src/shared/vault-root.ts";
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
+// Keep the per-user pipe suffix in sync with src/bun/index.ts.
+const windowsPipeUser = (process.env.USERNAME ?? "default").replace(/[^\w.-]/g, "_");
 const SOCKET_PATH = process.platform === "win32"
-	? "\\\\.\\pipe\\typsmthng-cli"
+	? `\\\\.\\pipe\\typsmthng-cli-${windowsPipeUser}`
 	: HOME ? `${HOME}/.typsmthng/cli.sock` : "";
 const arg = process.argv[2];
 
@@ -130,7 +132,7 @@ client.on("error", () => {
 	} else if (platform === "linux") {
 		// Linux: try to find the binary
 		const candidates = [
-			`${process.env.HOME}/.local/bin/typsmthng`,
+			...(HOME ? [`${HOME}/.local/bin/typsmthng`] : []),
 			"/usr/local/bin/typsmthng",
 			"/usr/bin/typsmthng",
 		];
