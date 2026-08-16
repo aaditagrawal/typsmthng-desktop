@@ -44,6 +44,9 @@ let worker: Worker | null = null
 let workerApi: Remote<CompilerWorkerApi> | null = null
 let workerAvailable = typeof Worker !== 'undefined'
 let workerFailedPromise: Promise<never> | null = null
+let workerFailedReject: ((err: Error) => void) | null = null
+let workerInitPromise: Promise<void> | null = null
+let consecutiveWorkerFailures = 0
 let compilerReady = false
 let backendInitPromise: Promise<void> | null = null
 let currentCompilerConfigKey = ''
@@ -51,17 +54,25 @@ let currentFontData: Uint8Array[] = []
 let packageRuntimeEpoch = 0
 let lastEnsuredSpecs: string[] = []
 const WORKER_INIT_TIMEOUT_MS = 20_000
+const WORKER_CALL_TIMEOUT_MS = 300_000
+const MAX_CONSECUTIVE_WORKER_FAILURES = 3
 
 function resetWorkerTransport(): void {
   if (worker || workerApi) {
     packageRuntimeEpoch += 1
   }
+  // Settle any in-flight comlink promises: a terminated worker never
+  // responds, so without this the callers racing workerFailedPromise
+  // would await forever.
+  workerFailedReject?.(new Error('typst worker terminated'))
   if (worker) {
     worker.terminate()
     worker = null
   }
   workerApi = null
   workerFailedPromise = null
+  workerFailedReject = null
+  workerInitPromise = null
 }
 
 async function ensureCompilerConfig(
@@ -102,6 +113,7 @@ async function getWorkerApi(): Promise<Remote<CompilerWorkerApi> | null> {
   try {
     worker = new Worker(new URL('../workers/typst-worker.ts', import.meta.url), { type: 'module' })
     workerFailedPromise = new Promise<never>((_, reject) => {
+      workerFailedReject = reject
       worker?.addEventListener('error', () => {
         reject(new Error('typst worker failed to load'))
       })
@@ -118,6 +130,39 @@ async function getWorkerApi(): Promise<Remote<CompilerWorkerApi> | null> {
     resetWorkerTransport()
     return null
   }
+}
+
+/**
+ * Race a worker call against worker death and a safety timeout. A worker
+ * killed mid-call (WASM OOM/abort) fires the `error` event instead of
+ * rejecting the comlink promise, which would otherwise hang the compile
+ * pipeline (and its lock) forever.
+ */
+async function raceWorkerCall<T>(call: Promise<T>, timeoutMs: number): Promise<T> {
+  const failed = workerFailedPromise
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('typst worker call timed out')), timeoutMs)
+  })
+  try {
+    return await Promise.race(failed ? [call, failed, timeout] : [call, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Per-worker init: a fresh worker (after a transport reset) must re-init before use. */
+async function ensureWorkerInitialized(api: Remote<CompilerWorkerApi>): Promise<void> {
+  if (!workerInitPromise) {
+    workerInitPromise = raceWorkerCall(
+      Promise.resolve(api.initCompiler({ fontData: currentFontData })),
+      WORKER_INIT_TIMEOUT_MS,
+    ).catch((err: unknown) => {
+      workerInitPromise = null
+      throw err
+    })
+  }
+  await workerInitPromise
 }
 
 async function ensureBackendInitialized(): Promise<void> {
@@ -139,9 +184,19 @@ async function callWithFallback<T>(
   if (!api) return runFallback()
 
   try {
-    return await runWorker(api)
+    await ensureWorkerInitialized(api)
+    const result = await raceWorkerCall(runWorker(api), WORKER_CALL_TIMEOUT_MS)
+    consecutiveWorkerFailures = 0
+    return result
   } catch (err) {
     console.warn('Worker compiler call failed, using fallback path:', err)
+    consecutiveWorkerFailures += 1
+    if (consecutiveWorkerFailures >= MAX_CONSECUTIVE_WORKER_FAILURES) {
+      console.warn(
+        `Disabling compiler worker after ${consecutiveWorkerFailures} consecutive failures; compiles stay on the main thread this session.`,
+      )
+      workerAvailable = false
+    }
     resetWorkerTransport()
     return runFallback()
   }
@@ -170,15 +225,8 @@ export async function initCompilerClient(
   if (compilerReady) return
 
   await callWithFallback(
-    async (api) => {
-      const timeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('typst worker timeout')), WORKER_INIT_TIMEOUT_MS)
-      })
-      await Promise.race([
-        api.initCompiler({ fontData: currentFontData }),
-        workerFailedPromise ?? timeout,
-        timeout,
-      ])
+    async () => {
+      // ensureWorkerInitialized already ran inside callWithFallback.
       compilerReady = true
     },
     async () => {

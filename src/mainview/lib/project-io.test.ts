@@ -15,6 +15,7 @@ let mockProjects: Array<{
 }> = []
 
 vi.mock('@/stores/project-store', () => ({
+  clearSelectionState: vi.fn(),
   useProjectStore: Object.assign(
     vi.fn(),
     {

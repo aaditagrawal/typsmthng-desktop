@@ -61,6 +61,9 @@ export default function App() {
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
+        // CommandSearch is only mounted inside the workspace shell; toggling on
+        // the home screen would silently flip state with no visible UI.
+        if (!useProjectStore.getState().hasSelectedProject) return
         const { commandSearchOpen, setCommandSearchOpen } = useUIStore.getState()
         setCommandSearchOpen(!commandSearchOpen)
       }

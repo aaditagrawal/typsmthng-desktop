@@ -121,13 +121,37 @@ function normalizeSimplePath(input: string): string {
   return parts.join('/')
 }
 
-function escapeTomlString(input: string): string {
-  return input
-    .replace(/\\"/g, '"')
-    .replace(/\\n/g, '\n')
-    .replace(/\\r/g, '\r')
-    .replace(/\\t/g, '\t')
-    .replace(/\\\\/g, '\\')
+const TOML_ESCAPE_MAP: Record<string, string> = {
+  '\\': '\\',
+  '"': '"',
+  n: '\n',
+  t: '\t',
+  r: '\r',
+  b: '\b',
+  f: '\f',
+}
+
+/**
+ * Decode escape sequences in a TOML basic-string body in a single pass, so
+ * `\\n` (escaped backslash followed by `n`) decodes to `\n` literally rather
+ * than a newline. Unknown sequences are kept verbatim.
+ */
+export function unescapeTomlString(input: string): string {
+  let result = ''
+  let i = 0
+  while (i < input.length) {
+    const ch = input[i]
+    if (ch === '\\' && i + 1 < input.length) {
+      const next = input[i + 1]
+      const decoded = TOML_ESCAPE_MAP[next]
+      result += decoded ?? ch + next
+      i += 2
+      continue
+    }
+    result += ch
+    i++
+  }
+  return result
 }
 
 function parseManifestToml(content: string): ParsedManifest {
@@ -151,7 +175,7 @@ function parseManifestToml(content: string): ParsedManifest {
     if (!keyValue) continue
 
     const key = keyValue[1]
-    const value = escapeTomlString(keyValue[2])
+    const value = unescapeTomlString(keyValue[2])
 
     if (section === 'package') {
       if (key === 'name') manifest.packageName = value

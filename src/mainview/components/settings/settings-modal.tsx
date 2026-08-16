@@ -4,6 +4,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { useSettingsStore, PAGE_SIZE_OPTIONS } from '@/stores/settings-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
+import { useUpdateStore } from '@/stores/update-store'
+import type { UpdateStatus } from '../../../shared/update-types'
 import type { PageSize } from '@/stores/settings-store'
 import { forceCompile } from '@/lib/compile-manager'
 import { isLinux } from '@/lib/platform'
@@ -158,6 +160,88 @@ function ThemeSegment({ value, onChange }: { value: Theme; onChange: (v: Theme) 
         </button>
       ))}
     </div>
+  )
+}
+
+function updateStatusLabel(
+  status: UpdateStatus,
+  availableVersion: string | null,
+  error: string | null,
+): string {
+  switch (status) {
+    case 'idle': return 'Not checked yet'
+    case 'disabled': return 'Updates disabled in this build'
+    case 'checking': return 'Checking for updates…'
+    case 'available': return availableVersion ? `Update ${availableVersion} available` : 'Update available'
+    case 'downloading': return 'Downloading update…'
+    case 'ready': return 'Update ready — restart to apply'
+    case 'up-to-date': return 'Up to date'
+    case 'error': return error ? `Error: ${error}` : 'Update check failed'
+  }
+}
+
+function UpdatesSection() {
+  const { status, currentVersion, availableVersion, error, checkForUpdate } = useUpdateStore(
+    useShallow((s) => ({
+      status: s.status,
+      currentVersion: s.currentVersion,
+      availableVersion: s.availableVersion,
+      error: s.error,
+      checkForUpdate: s.checkForUpdate,
+    })),
+  )
+
+  const busy = status === 'checking' || status === 'downloading'
+
+  return (
+    <>
+      <SectionLabel>Updates</SectionLabel>
+
+      <SettingRow label="Version" description="Currently installed version">
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '12px',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          {currentVersion}
+        </span>
+      </SettingRow>
+
+      <SettingRow label="Updates" description={updateStatusLabel(status, availableVersion, error)}>
+        <button
+          type="button"
+          disabled={busy || status === 'disabled'}
+          onClick={() => { void checkForUpdate() }}
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '11px',
+            letterSpacing: '0.02em',
+            padding: '4px 12px',
+            border: '1px solid var(--border-default)',
+            borderRadius: '2px',
+            background: 'var(--bg-inset)',
+            color: busy || status === 'disabled' ? 'var(--text-tertiary)' : 'var(--text-secondary)',
+            cursor: busy || status === 'disabled' ? 'default' : 'pointer',
+            transition: 'background 100ms ease, color 100ms ease',
+          }}
+          onMouseEnter={(e) => {
+            if (e.currentTarget.disabled) return
+            e.currentTarget.style.background = 'var(--bg-hover)'
+            e.currentTarget.style.color = 'var(--text-primary)'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'var(--bg-inset)'
+            e.currentTarget.style.color = e.currentTarget.disabled
+              ? 'var(--text-tertiary)'
+              : 'var(--text-secondary)'
+          }}
+        >
+          {status === 'checking' ? 'Checking…' : 'Check for updates'}
+        </button>
+      </SettingRow>
+    </>
   )
 }
 
@@ -433,6 +517,8 @@ export function SettingsModal() {
               </span>
             </div>
           </SettingRow>
+
+          <UpdatesSection />
         </div>
 
         {/* Footer */}

@@ -60,7 +60,6 @@ async function loadHarness() {
     errorCount: 0,
     warningCount: 0,
     compileTime: 0,
-    autoCompile: true,
   })
   useSettingsStore.setState({
     autoCompile: true,
@@ -137,7 +136,6 @@ describe('compile-manager', () => {
       errorCount: 0,
       warningCount: 1,
       compileTime: 12,
-      autoCompile: true,
     })
 
     await compileManager.forceCompile('plain text', 'notes.md')

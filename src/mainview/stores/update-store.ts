@@ -11,7 +11,7 @@ interface UpdateStore extends UpdateState {
 
 export const useUpdateStore = create<UpdateStore>((set) => ({
 	status: "idle" as UpdateStatus,
-	currentVersion: "0.1.0",
+	currentVersion: typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0",
 	availableVersion: null,
 	error: null,
 

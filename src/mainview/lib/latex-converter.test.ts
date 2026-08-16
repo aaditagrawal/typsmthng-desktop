@@ -220,6 +220,15 @@ describe('convertLatexToTypst', () => {
       expect(result.typst).toContain('[a], [b], [c]')
     })
 
+    it('clamps huge *{n}{inner} repeat counts instead of allocating them', async () => {
+      const source =
+        '\\begin{tabular}{*{2000000000}{c}} a & b \\\\ \\end{tabular}'
+      const result = await convertLatexToTypst(source)
+
+      expect(result.typst).toContain('columns: 100')
+      expect(result.typst).toContain('[a], [b]')
+    })
+
     it('ignores >{...} decorators when counting columns', async () => {
       const source =
         '\\begin{tabular}{>{\\bfseries}lcr} a & b & c \\\\ \\end{tabular}'
@@ -276,6 +285,20 @@ describe('convertLatexToTypst', () => {
 
       const linked = await convertLatexToTypst('\\href{https://ex.com/a"b}{click}')
       expect(linked.typst).toContain('#link("https://ex.com/a\\"b")[click]')
+    })
+  })
+
+  describe('adversarial input', () => {
+    it('drops content nested beyond the emit depth limit instead of overflowing the stack', async () => {
+      const depth = 2000
+      const source = '{'.repeat(depth) + 'deep' + '}'.repeat(depth)
+      const result = await convertLatexToTypst(source)
+      expect(result.warnings.some((warning) => warning.construct === 'deep-nesting')).toBe(true)
+
+      // Shallow nesting is unaffected.
+      const shallow = await convertLatexToTypst('{{{ok}}}')
+      expect(shallow.typst).toContain('ok')
+      expect(shallow.warnings.some((warning) => warning.construct === 'deep-nesting')).toBe(false)
     })
   })
 })

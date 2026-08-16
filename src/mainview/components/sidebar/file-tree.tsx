@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  ExternalLink,
   FileCode2,
   FileImage,
   FilePlus2,
@@ -52,6 +53,8 @@ interface FlatNode {
 const ROW_HEIGHT = 34
 const OVERSCAN = 10
 const VIRTUALIZE_THRESHOLD = 220
+
+const INTERNAL_DND_TYPE = 'application/x-typsmthng-node'
 
 const INDENT_BASE = 10
 const INDENT_STEP = 16
@@ -334,7 +337,9 @@ export function FileTree() {
   const deleteFolder = useProjectStore((s) => s.deleteFolder)
   const renameFile = useProjectStore((s) => s.renameFile)
   const renameFolder = useProjectStore((s) => s.renameFolder)
+  const moveFile = useProjectStore((s) => s.moveFile)
   const revealPathInFinder = useProjectStore((s) => s.revealPathInFinder)
+  const openPathInDefaultApp = useProjectStore((s) => s.openPathInDefaultApp)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -344,6 +349,7 @@ export function FileTree() {
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(480)
   const [dragActive, setDragActive] = useState(false)
+  const [dropTargetDir, setDropTargetDir] = useState<string | null>(null)
 
   const includeHidden = useProjectStore((s) => (
     s.metadata?.recentVaults.find((vault) => vault.rootPath === s.currentProjectId)?.hiddenFilesVisible ?? false
@@ -462,6 +468,44 @@ export function FileTree() {
     }
   }
 
+  const moveNodeTo = async (sourcePath: string, sourceKind: 'file' | 'directory', targetDir: string) => {
+    const source = normalizePath(sourcePath)
+    const destinationDir = normalizePath(targetDir)
+    if (!source) return
+    if (destinationDir === (parentPath(source) ?? '')) return
+    if (sourceKind === 'directory' && (destinationDir === source || destinationDir.startsWith(`${source}/`))) {
+      return
+    }
+
+    const nextPath = destinationDir ? `${destinationDir}/${basename(source)}` : basename(source)
+    const existingPaths = new Set(
+      (currentProject?.files ?? []).map((entry) => normalizePath(entry.path)),
+    )
+    if (existingPaths.has(nextPath)) {
+      window.alert(`"${nextPath}" already exists.`)
+      return
+    }
+
+    try {
+      if (sourceKind === 'directory') await renameFolder(source, nextPath)
+      else await moveFile(source, nextPath)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to move.')
+    }
+  }
+
+  const readInternalDrag = (dataTransfer: DataTransfer): { path: string; kind: 'file' | 'directory' } | null => {
+    const raw = dataTransfer.getData(INTERNAL_DND_TYPE)
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw) as { path?: unknown; kind?: unknown }
+      if (typeof parsed.path !== 'string') return null
+      return { path: parsed.path, kind: parsed.kind === 'directory' ? 'directory' : 'file' }
+    } catch {
+      return null
+    }
+  }
+
   const actionsForNode = (node: TreeNode): ContextMenuAction[] => [
     {
       label: revealLabel,
@@ -470,6 +514,17 @@ export function FileTree() {
         void revealPathInFinder(node.path)
       },
     },
+    ...(node.kind === 'file'
+      ? [
+          {
+            label: 'Open in default app',
+            icon: <ExternalLink size={12} />,
+            onClick: () => {
+              void openPathInDefaultApp(node.path)
+            },
+          },
+        ]
+      : []),
     {
       label: 'Rename',
       icon: <Pencil size={12} />,
@@ -545,15 +600,28 @@ export function FileTree() {
       className="relative flex h-full flex-col"
       onDragOver={(event) => {
         event.preventDefault()
+        if (event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) {
+          // Rows stop propagation, so reaching here means the drag is over empty space → vault root.
+          setDropTargetDir('')
+          return
+        }
         setDragActive(true)
       }}
       onDragLeave={(event) => {
         if (event.currentTarget.contains(event.relatedTarget as Node)) return
         setDragActive(false)
+        setDropTargetDir(null)
       }}
       onDrop={(event) => {
         event.preventDefault()
         setDragActive(false)
+        const internal = readInternalDrag(event.dataTransfer)
+        const targetDir = dropTargetDir ?? ''
+        setDropTargetDir(null)
+        if (internal) {
+          void moveNodeTo(internal.path, internal.kind, targetDir)
+          return
+        }
         if (event.dataTransfer.files.length === 0) return
         void processImportedFiles(event.dataTransfer.files, activeDirectory)
       }}
@@ -616,7 +684,7 @@ export function FileTree() {
       />
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-3" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
-        {dragActive && (
+        {(dragActive || dropTargetDir === '') && (
           <div
             className="pointer-events-none absolute inset-3 z-20 rounded-[20px] border-2 border-dashed"
             style={{
@@ -632,6 +700,8 @@ export function FileTree() {
             const isDirectory = row.node.kind === 'directory'
             const isExpanded = expanded.has(row.node.path)
             const isActive = currentFilePath === row.node.path
+            const rowDropDir = isDirectory ? row.node.path : (parentPath(row.node.path) ?? '')
+            const isDropTarget = dropTargetDir !== null && dropTargetDir !== '' && dropTargetDir === rowDropDir && isDirectory
             const Icon = isDirectory ? (isExpanded ? FolderOpen : Folder) : fileIcon(row.node.name)
 
             return (
@@ -640,6 +710,25 @@ export function FileTree() {
                 type="button"
                 className="file-tree-row flex w-full items-center gap-2 px-3 text-left transition"
                 data-active={isActive || undefined}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData(
+                    INTERNAL_DND_TYPE,
+                    JSON.stringify({ path: row.node.path, kind: row.node.kind }),
+                  )
+                }}
+                onDragEnd={() => {
+                  setDragActive(false)
+                  setDropTargetDir(null)
+                }}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(INTERNAL_DND_TYPE)) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  event.dataTransfer.dropEffect = 'move'
+                  setDropTargetDir(rowDropDir)
+                }}
                 style={{
                   position: shouldVirtualize ? 'absolute' : 'relative',
                   left: 0,
@@ -648,7 +737,11 @@ export function FileTree() {
                   height: `${ROW_HEIGHT}px`,
                   paddingLeft: `${INDENT_BASE + row.depth * INDENT_STEP}px`,
                   paddingRight: '10px',
-                  background: isActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                  background: isActive
+                    ? 'color-mix(in srgb, var(--accent) 12%, transparent)'
+                    : isDropTarget
+                      ? 'color-mix(in srgb, var(--accent) 18%, transparent)'
+                      : 'transparent',
                   borderLeft: `${BORDER_LEFT}px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
                   color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
                 }}

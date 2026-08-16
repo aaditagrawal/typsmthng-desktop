@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ProjectPicker } from '@/components/home/project-picker'
 import { GuidePage } from '@/components/home/guide-page'
+import { UpdateBanner } from '@/components/layout/update-banner'
 import { isMacOS } from '@/lib/platform'
 
 interface HomeShellProps {
@@ -24,28 +25,24 @@ function TitleDragRegion() {
 export default function HomeShell({ onPreloadWorkspace }: HomeShellProps) {
   const [showGuide, setShowGuide] = useState(false)
 
-  if (showGuide) {
-    return (
-      <div
-        className="h-full w-full relative"
-        style={{ background: 'var(--bg-app)' }}
-      >
-        <TitleDragRegion />
-        <GuidePage onBack={() => setShowGuide(false)} />
-      </div>
-    )
-  }
-
   return (
     <div
       className="h-full w-full relative"
       style={{ background: 'var(--bg-app)' }}
     >
       <TitleDragRegion />
-      <ProjectPicker
-        onShowGuide={() => setShowGuide(true)}
-        onPreloadWorkspace={onPreloadWorkspace}
-      />
+      {/* Below the titleband so update actions stay clickable despite the drag strip. */}
+      <div className="absolute left-0 right-0 z-20" style={{ top: '40px' }}>
+        <UpdateBanner />
+      </div>
+      {showGuide ? (
+        <GuidePage onBack={() => setShowGuide(false)} />
+      ) : (
+        <ProjectPicker
+          onShowGuide={() => setShowGuide(true)}
+          onPreloadWorkspace={onPreloadWorkspace}
+        />
+      )}
     </div>
   )
 }

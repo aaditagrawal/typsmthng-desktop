@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "path";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
@@ -97,7 +98,14 @@ function electrobunWasmHelper(): Plugin {
 
 const wasmPlugins = () => [wasm(), topLevelAwait()];
 
+const pkg = JSON.parse(
+  readFileSync(path.resolve(__dirname, "package.json"), "utf-8"),
+) as { version: string };
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   plugins: [
     electrobunWasmHelper(),
     react(),
@@ -123,7 +131,9 @@ export default defineConfig({
   },
   worker: {
     format: "es",
-    plugins: wasmPlugins,
+    // Include the same views://-safe WASM fetch helper as the main bundle so
+    // a .wasm ESM import inside a worker doesn't hang in production.
+    plugins: () => [electrobunWasmHelper(), ...wasmPlugins()],
   },
   build: {
     outDir: "../../dist",

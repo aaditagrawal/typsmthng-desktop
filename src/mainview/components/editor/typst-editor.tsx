@@ -69,10 +69,13 @@ export function TypstEditor() {
     }
 
     // Project switched (or closed) before flush — stage against the vault that owned the edit.
-    void desktopRpc.request.stageFileWrite({
+    desktopRpc.request.stageFileWrite({
       rootPath: pending.rootPath,
       path: pending.path,
       content: pending.source,
+    }).catch((error) => {
+      console.error(`Failed to stage write for "${pending.path}":`, error)
+      useEditorStore.setState({ saveStatus: 'unsaved' })
     })
   }, [])
 
@@ -94,10 +97,13 @@ export function TypstEditor() {
         useProjectStore.getState().stageFileContent(pending.path, pending.source)
         return
       }
-      void desktopRpc.request.stageFileWrite({
+      desktopRpc.request.stageFileWrite({
         rootPath: pending.rootPath,
         path: pending.path,
         content: pending.source,
+      }).catch((error) => {
+        console.error(`Failed to stage write for "${pending.path}":`, error)
+        useEditorStore.setState({ saveStatus: 'unsaved' })
       })
     }, PROJECT_SYNC_DELAY_MS)
   }, [])

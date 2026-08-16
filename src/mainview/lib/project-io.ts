@@ -1,5 +1,5 @@
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import { useProjectStore, type Project, type ProjectFile, type ProjectScaffold } from '@/stores/project-store'
+import { clearSelectionState, useProjectStore, type Project, type ProjectFile, type ProjectScaffold } from '@/stores/project-store'
 import { isKnownTextPath, isLatexPath, shouldTreatUploadAsText } from '@/lib/file-classification'
 import { convertLatexToTypst, type ConversionResult, type ConversionWarning } from '@/lib/latex-converter'
 import { downloadBlob } from '@/lib/download-blob'
@@ -546,7 +546,7 @@ export async function importAllProjects(file: File): Promise<number> {
   }
 
   // Go back to home after import
-  useProjectStore.setState({ hasSelectedProject: false, currentProjectId: null, currentFilePath: null })
+  clearSelectionState()
 
   return imported
 }

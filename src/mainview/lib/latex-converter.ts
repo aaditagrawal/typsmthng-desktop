@@ -36,6 +36,7 @@ export async function convertLatexToTypst(source: string): Promise<ConversionRes
   const warnings: ConversionWarning[] = []
   const metadata: ConversionResult['metadata'] = { packages: [], graphicspath: [] }
 
+  resetEmitDepth()
   const typst = emitRoot(ast, warnings, metadata)
   return {
     typst: rewriteConvertedAssetPaths(typst, metadata.graphicspath),
@@ -439,16 +440,40 @@ function extractPreambleMetadata(
   }
 }
 
+// Guard the mutually recursive emit functions: adversarial nesting like
+// thousands of `{{{{...}}}}` groups would otherwise overflow the call stack
+// and fail the whole import with an opaque RangeError.
+const MAX_EMIT_DEPTH = 400
+let emitDepth = 0
+
+export function resetEmitDepth(): void {
+  emitDepth = 0
+}
+
 function emitNodes(
   nodes: Ast.Node[],
   warnings: ConversionWarning[],
   inMath: boolean,
 ): string {
-  const parts: string[] = []
-  for (let i = 0; i < nodes.length; i++) {
-    parts.push(emitNode(nodes[i], warnings, inMath))
+  if (emitDepth >= MAX_EMIT_DEPTH) {
+    if (!warnings.some((warning) => warning.construct === 'deep-nesting')) {
+      warnings.push({
+        message: `Content nested deeper than ${MAX_EMIT_DEPTH} levels was dropped`,
+        construct: 'deep-nesting',
+      })
+    }
+    return ''
   }
-  return parts.join('')
+  emitDepth += 1
+  try {
+    const parts: string[] = []
+    for (let i = 0; i < nodes.length; i++) {
+      parts.push(emitNode(nodes[i], warnings, inMath))
+    }
+    return parts.join('')
+  } finally {
+    emitDepth -= 1
+  }
 }
 
 function emitNode(
@@ -939,6 +964,13 @@ function findMatchingBrace(spec: string, openIdx: number): number {
   return -1
 }
 
+/**
+ * Cap for *{n}{...} repeat counts. Real documents stay far below this;
+ * without a cap a hostile spec like *{2000000000}{c} would allocate a
+ * multi-GB string and crash the renderer during import.
+ */
+const MAX_STAR_COLUMN_REPEAT = 100
+
 /** Expand *{n}{inner} repetitions (simple; inner may contain braces, not nested *). */
 function expandStarColumnSpec(spec: string): string {
   let result = ''
@@ -950,7 +982,9 @@ function expandStarColumnSpec(spec: string): string {
         const innerEnd = findMatchingBrace(spec, nEnd + 1)
         const n = Number.parseInt(spec.slice(i + 2, nEnd), 10)
         if (innerEnd !== -1 && Number.isFinite(n) && n >= 0) {
-          result += spec.slice(nEnd + 2, innerEnd).repeat(n)
+          result += spec
+            .slice(nEnd + 2, innerEnd)
+            .repeat(Math.min(n, MAX_STAR_COLUMN_REPEAT))
           i = innerEnd + 1
           continue
         }

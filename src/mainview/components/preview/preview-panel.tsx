@@ -262,12 +262,17 @@ function useCompileToast() {
   const compileTime = useCompileStore((s) => s.compileTime)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastShownCompileTimeRef = useRef(0)
 
   useEffect(() => {
     if (compileTime <= 0 || compileTime === lastShownCompileTimeRef.current) return
     lastShownCompileTimeRef.current = compileTime
-    setTimeout(() => setToast({ message: `Compiled in ${compileTime}ms`, type: 'success' }), 0)
+    if (showTimerRef.current) clearTimeout(showTimerRef.current)
+    showTimerRef.current = setTimeout(() => {
+      showTimerRef.current = null
+      setToast({ message: `Compiled in ${compileTime}ms`, type: 'success' })
+    }, 0)
 
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => setToast(null), 2000)
@@ -275,6 +280,7 @@ function useCompileToast() {
 
   useEffect(() => {
     return () => {
+      if (showTimerRef.current) clearTimeout(showTimerRef.current)
       if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [])

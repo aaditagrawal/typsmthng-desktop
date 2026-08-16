@@ -364,7 +364,8 @@ async function doCompile(request: CompileRequest): Promise<void> {
     )
     const transformed = transformCompileInputs(compileInputs)
     const preambleLines = getInjectedPreambleLineCount(transformed.mainSource)
-    store.setCompiledMainPath(transformed.mainPath)
+    // Defer setCompiledMainPath until the staleness check below: a stale
+    // request must not repoint preview click-mapping at the wrong main file.
     perfMeasure('compile.input-build', inputStart, {
       files: 1 + compileInputs.extraFiles.length + compileInputs.extraBinaryFiles.length,
       requestId: request.requestId,
@@ -401,6 +402,8 @@ async function doCompile(request: CompileRequest): Promise<void> {
     if (isStaleRequest(request.requestId)) {
       return
     }
+
+    store.setCompiledMainPath(transformed.mainPath)
 
     const totalSample = perfMeasure('compile.total', totalStart, {
       requestId: request.requestId,

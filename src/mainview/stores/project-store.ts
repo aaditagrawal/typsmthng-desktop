@@ -89,7 +89,6 @@ interface ProjectState {
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   updateFileContent: (path: string, content: string) => void;
   stageFileContent: (path: string, content: string) => void;
-  addBinaryFile: (path: string, data: Uint8Array) => Promise<void>;
   addBinaryFilesBatch: (entries: Array<{ path: string; data: Uint8Array }>) => Promise<void>;
   createFolder: (path: string) => Promise<void>;
   deleteFolder: (path: string) => Promise<void>;
@@ -99,10 +98,10 @@ interface ProjectState {
   saveCurrentProject: () => Promise<void>;
   getCurrentProject: () => Project | undefined;
   toggleFavoriteProject: (id: string) => Promise<void>;
-  removeRecentProject: (id: string) => Promise<void>;
   setHiddenFilesVisible: (value: boolean) => Promise<void>;
   revealCurrentProjectInFinder: () => Promise<void>;
   revealPathInFinder: (projectPath: string) => Promise<void>;
+  openPathInDefaultApp: (projectPath: string) => Promise<void>;
   reloadConflictFile: () => Promise<void>;
   dismissConflict: () => void;
   getCompileBundle: (liveSource: string, currentFilePath?: string | null) => Promise<CompileBundle>;
@@ -341,7 +340,7 @@ function bumpApplyProjectGeneration() {
   return applyProjectGeneration;
 }
 
-function clearSelectionState() {
+export function clearSelectionState() {
   bumpApplyProjectGeneration();
   useProjectStore.setState((state) => ({
     projects: mergeProjects(state.metadata, null),
@@ -1014,10 +1013,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return;
     }
 
-    void desktopRpc.request.stageFileWrite({
+    desktopRpc.request.stageFileWrite({
       rootPath: project.rootPath,
       path: normalizedPath,
       content,
+    }).catch((error) => {
+      console.error(`Failed to stage write for "${normalizedPath}":`, error);
+      useEditorStore.setState({ saveStatus: "unsaved" });
     });
 
     set((state) => {
@@ -1056,15 +1058,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const project = get().getCurrentProject();
     if (!project) return;
 
-    void desktopRpc.request.stageFileWrite({
+    desktopRpc.request.stageFileWrite({
       rootPath: project.rootPath,
       path: normalizeRelativePath(filePath),
       content,
+    }).catch((error) => {
+      console.error(`Failed to stage write for "${filePath}":`, error);
+      useEditorStore.setState({ saveStatus: "unsaved" });
     });
-  },
-
-  addBinaryFile: async (filePath, data) => {
-    await get().addBinaryFilesBatch([{ path: filePath, data }]);
   },
 
   addBinaryFilesBatch: async (entries) => {
@@ -1213,11 +1214,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         updatedAt: Date.now(),
       };
 
+      // Plain string surgery: String.replace would misinterpret `$&`/`$'`
+      // patterns in the new folder name as replacement directives.
       const nextCurrentFilePath =
-        state.currentFilePath === normalizedOld ||
-        state.currentFilePath?.startsWith(`${normalizedOld}/`)
-          ? state.currentFilePath?.replace(normalizedOld, normalizedNew) ?? null
-          : state.currentFilePath;
+        state.currentFilePath === normalizedOld
+          ? normalizedNew
+          : state.currentFilePath?.startsWith(`${normalizedOld}/`)
+            ? `${normalizedNew}${state.currentFilePath.slice(normalizedOld.length)}`
+            : state.currentFilePath;
 
       return {
         projects: updateProjectList(state.projects, nextProject),
@@ -1271,11 +1275,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     applyMetadataState(metadata);
   },
 
-  removeRecentProject: async (id) => {
-    const metadata = await desktopRpc.request.removeRecentVault({ rootPath: id });
-    applyMetadataState(metadata);
-  },
-
   setHiddenFilesVisible: async (value) => {
     const project = get().getCurrentProject();
     if (!project) return;
@@ -1298,6 +1297,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const project = get().getCurrentProject();
     if (!project) return;
     await desktopRpc.request.revealInFinder({
+      absolutePath: joinAbsolute(project.rootPath, projectPath),
+    });
+  },
+
+  openPathInDefaultApp: async (projectPath) => {
+    const project = get().getCurrentProject();
+    if (!project) return;
+    await desktopRpc.request.openPath({
       absolutePath: joinAbsolute(project.rootPath, projectPath),
     });
   },
