@@ -17,6 +17,7 @@ export const AUDIENCE_HASH = "#/audience";
 
 /** Fullscreen transitions on macOS misbehave when requested in the same tick as window creation. */
 const FULLSCREEN_DELAY_MS = 160;
+const FULLSCREEN_FALLBACK_DELAY_MS = 900;
 /** Inset so the pre-fullscreen frame is unambiguously on the target display. */
 const DISPLAY_INSET_PX = 48;
 
@@ -149,6 +150,16 @@ export class PresentationWindowManager {
 			} catch (error) {
 				console.warn("Failed to fullscreen audience window:", error);
 			}
+			// Some window managers refuse fullscreen for undecorated windows;
+			// covering the display bounds exactly is the next best thing.
+			setTimeout(() => {
+				if (this.audience?.window.id !== window.id) return;
+				try {
+					if (!window.isFullScreen()) {
+						window.setFrame(bounds.x, bounds.y, bounds.width, bounds.height);
+					}
+				} catch {}
+			}, FULLSCREEN_FALLBACK_DELAY_MS);
 		}, FULLSCREEN_DELAY_MS);
 
 		return { ok: true, displayId: entry.displayId };

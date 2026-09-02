@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PresentationSnapshot } from '../../shared/presentation'
 
 const rpcRequests = {
-  presentationPublish: vi.fn(async () => ({ ok: true })),
+  presentationPublish: vi.fn(async (_snapshot: PresentationSnapshot) => ({ ok: true })),
   presentationOpenAudience: vi.fn(async ({ displayId }: { displayId: number | null }) => ({ ok: true, displayId: displayId ?? 2 })),
   presentationCloseAudience: vi.fn(async () => ({ ok: true })),
   presentationGetDisplays: vi.fn(async () => ({ displays: [] })),
@@ -130,8 +131,8 @@ describe('presentation store', () => {
 
     vi.advanceTimersByTime(40)
     expect(rpcRequests.presentationPublish.mock.calls.length).toBe(initialPublishes + 1)
-    const lastCall = rpcRequests.presentationPublish.mock.calls.at(-1)?.[0] as { state?: { laser: { x: number } } }
-    expect(lastCall.state?.laser.x).toBeCloseTo(0.3)
+    const lastCall = rpcRequests.presentationPublish.mock.calls.at(-1)?.[0]
+    expect(lastCall?.state?.laser.x).toBeCloseTo(0.3)
   })
 
   it('applies audience input and resends the snapshot when the audience reports ready', async () => {
@@ -148,10 +149,10 @@ describe('presentation store', () => {
     expect(usePresentationStore.getState().state.annotations['2']).toHaveLength(1)
 
     api.handleInput({ kind: 'ready' })
-    const last = rpcRequests.presentationPublish.mock.calls.at(-1)?.[0] as { deck?: unknown; state?: unknown }
+    const last = rpcRequests.presentationPublish.mock.calls.at(-1)?.[0]
     expect(rpcRequests.presentationPublish.mock.calls.length).toBeGreaterThan(before)
-    expect(last.deck).toBeDefined()
-    expect(last.state).toBeDefined()
+    expect(last?.deck).toBeDefined()
+    expect(last?.state).toBeDefined()
   })
 
   it('writes sidecar notes after a debounce and flushes them on end', async () => {

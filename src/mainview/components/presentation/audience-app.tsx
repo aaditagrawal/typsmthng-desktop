@@ -185,14 +185,8 @@ export default function AudienceApp() {
   )
   const handleErase = useCallback((slide: number, strokeId: string) => sendInput({ kind: 'erase', slide, strokeId }), [])
 
-  const interactiveCursorTool = state.tool !== 'pointer' || state.laserEnabled
-
   return (
-    <div
-      ref={wheelRef}
-      className="presentation-root h-full w-full select-none"
-      style={{ cursor: cursorHidden && !interactiveCursorTool ? 'none' : undefined }}
-    >
+    <div ref={wheelRef} className="presentation-root h-full w-full select-none">
       {ended || !deck ? (
         <IdleScreen connected={connected} />
       ) : (
@@ -201,6 +195,7 @@ export default function AudienceApp() {
           slide={state.slide}
           state={state}
           interactive
+          cursorHidden={cursorHidden}
           onSurfaceClick={handleSurfaceClick}
           onContextMenu={handleContextMenu}
           onStroke={handleStroke}

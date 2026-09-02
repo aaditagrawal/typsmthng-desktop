@@ -31,6 +31,8 @@ export interface SlideStageProps {
   style?: React.CSSProperties
   /** Renders a decorative frame and drop shadow around the slide. */
   framed?: boolean
+  /** Force-hide the cursor (idle audience surface); tools override this. */
+  cursorHidden?: boolean
   emptyLabel?: string
 }
 
@@ -117,6 +119,46 @@ function newStrokeId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function StrokeLayer({
+  strokes,
+  overlayHeight,
+  blend = 'normal',
+  opacity = 1,
+}: {
+  strokes: Stroke[]
+  overlayHeight: number
+  blend?: 'normal' | 'multiply'
+  opacity?: number
+}) {
+  return (
+    <svg
+      viewBox={`0 0 ${OVERLAY_WIDTH} ${overlayHeight}`}
+      preserveAspectRatio="none"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        mixBlendMode: blend,
+        opacity,
+      }}
+    >
+      {strokes.map((stroke) => (
+        <path
+          key={stroke.id}
+          d={strokePath(stroke, overlayHeight)}
+          fill="none"
+          stroke={stroke.color}
+          strokeWidth={stroke.width * OVERLAY_WIDTH}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ))}
+    </svg>
+  )
+}
+
 function SlideImage({ src, fadeKey }: { src: string | null; fadeKey: string }) {
   const [layers, setLayers] = useState<Array<{ key: string; src: string }>>([])
 
@@ -180,6 +222,7 @@ export function SlideStage({
   className,
   style,
   framed = false,
+  cursorHidden = false,
   emptyLabel = 'Waiting for slides',
 }: SlideStageProps) {
   const [containerRef, containerSize] = useElementSize<HTMLDivElement>()
@@ -296,11 +339,13 @@ export function SlideStage({
     ? 'crosshair'
     : erasingTool
       ? 'cell'
-      : laserActive
+      : laserActive || cursorHidden
         ? 'none'
         : interactive && onSurfaceClick
           ? 'pointer'
           : 'default'
+  const penStrokes = strokes.filter((stroke) => stroke.tool === 'pen')
+  const highlightStrokes = strokes.filter((stroke) => stroke.tool === 'highlighter')
 
   const laserVisible = showLaser && state.laser.visible && state.laserEnabled
   const laserSize = Math.max(10, box.width * 0.014)
@@ -317,7 +362,11 @@ export function SlideStage({
         height: '100%',
         overflow: 'hidden',
         background,
-        cursor: interactive && onSurfaceClick && !drawingTool && !erasingTool && !laserActive ? 'pointer' : undefined,
+        cursor: cursorHidden
+          ? 'none'
+          : interactive && onSurfaceClick && !drawingTool && !erasingTool && !laserActive
+            ? 'pointer'
+            : undefined,
         ...style,
       }}
     >
@@ -365,26 +414,12 @@ export function SlideStage({
             </div>
           )}
 
-          {strokes.length > 0 && (
-            <svg
-              viewBox={`0 0 ${OVERLAY_WIDTH} ${overlayHeight}`}
-              preserveAspectRatio="none"
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
-            >
-              {strokes.map((stroke) => (
-                <path
-                  key={stroke.id}
-                  d={strokePath(stroke, overlayHeight)}
-                  fill="none"
-                  stroke={stroke.color}
-                  strokeWidth={stroke.width * OVERLAY_WIDTH}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity={stroke.tool === 'highlighter' ? 0.4 : 1}
-                  style={{ mixBlendMode: stroke.tool === 'highlighter' ? 'multiply' : 'normal' }}
-                />
-              ))}
-            </svg>
+          {/* Highlighter strokes multiply against the slide; pens draw on top. */}
+          {highlightStrokes.length > 0 && (
+            <StrokeLayer strokes={highlightStrokes} overlayHeight={overlayHeight} blend="multiply" opacity={0.45} />
+          )}
+          {penStrokes.length > 0 && (
+            <StrokeLayer strokes={penStrokes} overlayHeight={overlayHeight} />
           )}
 
           {laserVisible && (

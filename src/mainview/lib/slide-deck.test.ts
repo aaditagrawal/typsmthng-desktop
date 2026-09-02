@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeSlideGeometry, resolveNotesLayout } from './slide-deck'
+import { collectReferencedIds, computeSlideGeometry, resolveNotesLayout } from './slide-deck'
 import { fitSlide } from '../components/presentation/slide-stage'
 import { clampSlide } from '../../shared/presentation'
 
@@ -36,6 +36,25 @@ describe('computeSlideGeometry', () => {
     const [slide] = computeSlideGeometry([dualScreen], 'right')
     expect(slide.content).toEqual({ x: 0, y: 0, width: 720, height: 405 })
     expect(slide.notes).toEqual({ x: 720, y: 0, width: 720, height: 405 })
+  })
+})
+
+describe('collectReferencedIds', () => {
+  it('finds href, xlink:href and url() references, following defs transitively', () => {
+    const defs = new Map<string, string>([
+      ['glyphA', '<symbol id="glyphA"><path d="M0 0"/></symbol>'],
+      ['glyphB', '<symbol id="glyphB"><path d="M1 1"/></symbol>'],
+      ['grad', '<linearGradient id="grad"><stop stop-color="url(#pattern)"/></linearGradient>'],
+      ['pattern', '<pattern id="pattern"/>'],
+      ['unused', '<symbol id="unused"/>'],
+    ])
+    const page = '<g><use xlink:href="#glyphA"/><use href="#glyphA"/><rect fill="url(#grad)"/></g>'
+
+    expect(Array.from(collectReferencedIds(page, defs)).sort()).toEqual(['glyphA', 'grad', 'pattern'])
+  })
+
+  it('returns an empty set for pages without references', () => {
+    expect(collectReferencedIds('<g/>', new Map()).size).toBe(0)
   })
 })
 

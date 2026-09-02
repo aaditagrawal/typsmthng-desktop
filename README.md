@@ -17,11 +17,23 @@ The desktop app also adds a vault system for organizing multiple projects, full-
 - Vault-based project organization with full-text search
 - Multi-file projects with file tree, drag-and-drop, rename, delete
 - PDF export
+- Presentation mode: present any compiled document or slide deck fullscreen, or open a presenter view with the slides on an external display and current/next slide, speaker notes, timer, laser pointer, and annotations on your own screen (see below)
 - LaTeX-to-Typst conversion
 - Command palette search
 - Vim mode, theme switching, editor preferences
 - Background compilation and task queue
 - Auto-update support
+
+## Presenting
+
+Any compiled document can be presented; each page becomes a slide, whatever its aspect ratio. Decks built with touying, polylux, or plain `#set page(...)` all work.
+
+- **Present here** (`⌘⇧P` / `Ctrl+Shift+P`, or the ▶ button): fullscreen in the editor window with an auto-hiding toolbar, notes drawer (`S`), and slide overview (`G`).
+- **Presenter view** (`⌘⌥P` / `Ctrl+Alt+P`, or ▶ ▾): the slides open fullscreen on an external display while this window shows the current slide, the next slide, notes, an elapsed timer, the clock, and the drawing tools. Pick or switch the audience display from the header at any time.
+- **Notes**: type them in the presenter view; they are saved to `<deck>.notes.md` next to your file. You can also write notes in Typst with `#metadata((page: here().page(), text: "…")) <typsmthng-note>` inside a `context` block, and decks that render notes on the right half of a double-width page (touying's `show-notes-on-second-screen`) are split automatically.
+- **Tools**: laser pointer (`L`), pen (`D`), highlighter (`H`), eraser (`E`), clear (`C`), black/white screen (`B`/`W`). Annotations are stored per slide in slide-relative coordinates, so they line up on every display.
+- **Input**: click or right-click the slide, scroll, use mouse back/forward buttons, type a slide number and press Enter, or use any presentation remote (Page Up/Down, arrows, F5, Esc, `.`/`b`). Input from either window controls the presentation.
+- Recompiling while presenting updates both windows in place.
 
 ## Tech Stack
 

@@ -30,6 +30,7 @@ export type PresentationMode = 'off' | 'single' | 'presenter'
 /** Publishing cadence for the audience; laser motion is the hot path. */
 const PUBLISH_INTERVAL_MS = 33
 const NOTES_WRITE_DEBOUNCE_MS = 600
+const DECK_DISPOSE_DELAY_MS = 1000
 const NOTES_LAYOUT_STORAGE_KEY = 'typsmthng.presentation.notesLayout'
 
 interface PresentationStoreState {
@@ -245,15 +246,15 @@ export const usePresentationStore = create<PresentationStoreState>((set, get) =>
       if (get().sidecarPath === sidecarPath) set({ sidecarNotes })
     }
 
+    if (!get().timerRunning) get().toggleTimer()
+
     if (mode === 'single') {
       await get().setMainFullScreen(true)
       return
     }
 
     await get().refreshDisplays()
-    const displayId = options?.displayId ?? null
-    await get().openAudience(displayId)
-    if (!get().timerRunning) get().toggleTimer()
+    await get().openAudience(options?.displayId ?? null)
   },
 
   end: async () => {
@@ -308,7 +309,9 @@ export const usePresentationStore = create<PresentationStoreState>((set, get) =>
       notesLayout,
     }
     const slideDeck = new SlideDeck(deck)
-    previous?.dispose()
+    // The old blob URLs may still be painting the outgoing slide during the
+    // cross-fade, so release them after the transition has finished.
+    if (previous) setTimeout(() => previous.dispose(), DECK_DISPOSE_DELAY_MS)
 
     set({
       deck,

@@ -210,10 +210,6 @@ export default function PresenterShell() {
     performAction('prev')
   }, [state.tool, performAction])
 
-  useEffect(() => {
-    document.title = `${deckTitle} — Presenter`
-  }, [deckTitle])
-
   return (
     <div className="presentation-root flex flex-col h-full w-full select-none" style={{ position: 'relative' }}>
       {/* Header */}
@@ -347,6 +343,7 @@ export default function PresenterShell() {
         {sidebarOpen && (
           <aside
             className="flex flex-col shrink-0 min-h-0"
+            data-no-slide-wheel
             style={{
               width: 'clamp(280px, 32%, 460px)',
               padding: '18px 20px 12px 0',

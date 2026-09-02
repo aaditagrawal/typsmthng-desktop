@@ -89,6 +89,8 @@ export function usePresentationPointerNavigation<T extends HTMLElement>(
 
     const handleWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
+      // Scrollable chrome (notes drawer, menus) keeps its native wheel behaviour.
+      if (isEditableTarget(event.target) || (event.target as Element | null)?.closest?.('[data-no-slide-wheel]')) return
       event.preventDefault()
       // Trackpads keep emitting inertia deltas after a flick; ignore them
       // briefly so one gesture moves exactly one slide.

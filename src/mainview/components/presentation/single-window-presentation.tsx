@@ -65,7 +65,7 @@ function useAutoHide(active: boolean): { visible: boolean; hold: (hold: boolean)
 export default function SingleWindowPresentation() {
   const {
     slideDeck, state, gridOpen, notesOverlayOpen, setGridOpen, setNotesOverlayOpen, goto, performAction,
-    upsertStroke, eraseStroke, setLaser, end, mainFullScreen, setMainFullScreen, deckTitle,
+    upsertStroke, eraseStroke, setLaser, end, mainFullScreen, setMainFullScreen,
   } = usePresentationStore(
     useShallow((s) => ({
       slideDeck: s.slideDeck,
@@ -82,7 +82,6 @@ export default function SingleWindowPresentation() {
       end: s.end,
       mainFullScreen: s.mainFullScreen,
       setMainFullScreen: s.setMainFullScreen,
-      deckTitle: s.deck?.title ?? 'Presentation',
     })),
   )
   const gotoBuffer = usePresentationKeyboard({ onAction: performAction, onGoto: goto })
@@ -114,21 +113,18 @@ export default function SingleWindowPresentation() {
     performAction('prev')
   }, [state.tool, performAction])
 
-  useEffect(() => {
-    document.title = deckTitle
-  }, [deckTitle])
-
   return (
     <div
       ref={wheelRef}
       className="presentation-root h-full w-full select-none"
-      style={{ position: 'relative', cursor: chromeVisible || state.tool !== 'pointer' || state.laserEnabled ? undefined : 'none' }}
+      style={{ position: 'relative' }}
     >
       <SlideStage
         deck={slideDeck}
         slide={current}
         state={state}
         interactive
+        cursorHidden={!chromeVisible}
         onSurfaceClick={handleSurfaceClick}
         onContextMenu={handleContextMenu}
         onStroke={upsertStroke}
@@ -205,6 +201,7 @@ export default function SingleWindowPresentation() {
       {notesOverlayOpen && (
         <aside
           className="flex flex-col"
+          data-no-slide-wheel
           onMouseEnter={() => hud.hold(true)}
           onMouseLeave={() => hud.hold(false)}
           style={{

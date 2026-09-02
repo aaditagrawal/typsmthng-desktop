@@ -62,9 +62,33 @@ export function computeSlideGeometry(
 }
 
 interface ParsedDocument {
+  /** Non-page, non-defs children (styles etc.) serialised once. */
   sharedMarkup: string
+  /** `<defs>` children keyed by id; glyph symbols dominate the document size. */
+  defs: Map<string, string>
+  /** `<defs>` children without an id, always included. */
+  anonymousDefs: string
   pageMarkup: string[]
   rootAttributes: string
+}
+
+const ID_REFERENCE_RE = /(?:href="#|url\(['"]?#)([^"')]+)/g
+
+export function collectReferencedIds(markup: string, defs: Map<string, string>): Set<string> {
+  const needed = new Set<string>()
+  const queue = [markup]
+  while (queue.length > 0) {
+    const chunk = queue.pop()!
+    for (const match of chunk.matchAll(ID_REFERENCE_RE)) {
+      const id = match[1]
+      if (needed.has(id)) continue
+      needed.add(id)
+      // Defs can reference other defs (gradients, nested symbols).
+      const definition = defs.get(id)
+      if (definition) queue.push(definition)
+    }
+  }
+  return needed
 }
 
 function formatNumber(value: number): string {
@@ -91,17 +115,31 @@ function parseDocument(svg: string, pageCount: number): ParsedDocument {
   const root = doc.documentElement
   const serializer = new XMLSerializer()
 
+  const empty = { defs: new Map<string, string>(), anonymousDefs: '' }
+
   if (!root || root.nodeName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) {
-    return { sharedMarkup: '', pageMarkup: [svg], rootAttributes: '' }
+    return { ...empty, sharedMarkup: '', pageMarkup: [svg], rootAttributes: '' }
   }
 
+  const rootAttributes = serializeAttributes(root, new Set(['viewBox', 'width', 'height', 'style', 'class']))
   const pageGroups: Element[] = []
   const shared: string[] = []
+  const defs = new Map<string, string>()
+  const anonymousDefs: string[] = []
   for (const child of Array.from(root.children)) {
     const tag = child.nodeName.toLowerCase()
     if (tag === 'script') continue
     if (tag === 'g' && child.classList.contains('typst-page')) {
       pageGroups.push(child)
+      continue
+    }
+    if (tag === 'defs') {
+      for (const def of Array.from(child.children)) {
+        const id = def.getAttribute('id')
+        const markup = serializer.serializeToString(def)
+        if (id) defs.set(id, markup)
+        else anonymousDefs.push(markup)
+      }
       continue
     }
     shared.push(serializer.serializeToString(child))
@@ -113,11 +151,7 @@ function parseDocument(svg: string, pageCount: number): ParsedDocument {
       .filter((child) => child.nodeName.toLowerCase() !== 'script')
       .map((child) => serializer.serializeToString(child))
       .join('')
-    return {
-      sharedMarkup: '',
-      pageMarkup: [inner],
-      rootAttributes: serializeAttributes(root, new Set(['viewBox', 'width', 'height', 'style', 'class'])),
-    }
+    return { ...empty, sharedMarkup: '', pageMarkup: [inner], rootAttributes }
   }
 
   const pageMarkup = pageGroups.map((group) => {
@@ -127,9 +161,23 @@ function parseDocument(svg: string, pageCount: number): ParsedDocument {
 
   return {
     sharedMarkup: shared.join(''),
+    defs,
+    anonymousDefs: anonymousDefs.join(''),
     pageMarkup,
-    rootAttributes: serializeAttributes(root, new Set(['viewBox', 'width', 'height', 'style', 'class'])),
+    rootAttributes,
   }
+}
+
+/** Only the defs a page references; glyph outlines for other pages are dropped. */
+function buildDefsForPage(parsed: ParsedDocument, pageMarkup: string): string {
+  if (parsed.defs.size === 0 && !parsed.anonymousDefs) return ''
+  const needed = collectReferencedIds(pageMarkup, parsed.defs)
+  const parts: string[] = [parsed.anonymousDefs]
+  for (const id of needed) {
+    const markup = parsed.defs.get(id)
+    if (markup) parts.push(markup)
+  }
+  return `<defs>${parts.join('')}</defs>`
 }
 
 class LruCache<K, V> {
@@ -224,7 +272,7 @@ export class SlideDeck {
       : 0
     const viewBox = `${formatNumber(box.x)} ${formatNumber(box.y + fallbackOffset)} ${formatNumber(box.width)} ${formatNumber(box.height)}`
     const attrs = parsed.rootAttributes || `xmlns="${SVG_NS}" xmlns:xlink="http://www.w3.org/1999/xlink"`
-    const svg = `<svg ${attrs} class="typst-doc typst-slide" viewBox="${viewBox}" width="${formatNumber(box.width)}" height="${formatNumber(box.height)}">${parsed.sharedMarkup}${body}</svg>`
+    const svg = `<svg ${attrs} class="typst-doc typst-slide" viewBox="${viewBox}" width="${formatNumber(box.width)}" height="${formatNumber(box.height)}">${parsed.sharedMarkup}${buildDefsForPage(parsed, body)}${body}</svg>`
 
     this.svgCache.set(key, svg)
     return svg
