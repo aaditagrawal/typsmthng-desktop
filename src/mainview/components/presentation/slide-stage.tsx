@@ -348,7 +348,7 @@ export function SlideStage({
   const highlightStrokes = strokes.filter((stroke) => stroke.tool === 'highlighter')
 
   const laserVisible = showLaser && state.laser.visible && state.laserEnabled
-  const laserSize = Math.max(10, box.width * 0.014)
+  const laserSize = Math.max(12, box.width * 0.018)
 
   return (
     <div

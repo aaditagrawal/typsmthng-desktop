@@ -12,6 +12,7 @@ import { SlideStage } from './slide-stage'
 import { usePresentationKeyboard, usePresentationPointerNavigation } from './use-presentation-input'
 
 const HUD_HIDE_DELAY_MS = 2600
+const NOTES_DRAWER_WIDTH = 'clamp(300px, 34%, 480px)'
 
 /**
  * Keeps chrome visible while the mouse moves and hides it (plus the cursor)
@@ -153,48 +154,77 @@ export default function SingleWindowPresentation() {
         </div>
       )}
 
-      {/* Bottom HUD */}
+      {state.blackout !== 'none' && chromeVisible && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '6px 12px',
+            background: 'rgba(8,8,10,0.85)',
+            border: '1px solid var(--p-border-strong)',
+            borderRadius: '3px',
+            ...MONO_LABEL,
+            color: 'var(--p-text-dim)',
+          }}
+        >
+          {state.blackout === 'black' ? 'Black' : 'White'} screen · press <Kbd>{state.blackout === 'black' ? 'B' : 'W'}</Kbd> or click to resume
+        </div>
+      )}
+
+      {/* Bottom HUD, centred within the area not covered by the notes drawer */}
       <div
         className="presentation-hud"
         data-hidden={chromeVisible ? 'false' : 'true'}
-        onMouseEnter={() => hud.hold(true)}
-        onMouseLeave={() => hud.hold(false)}
         style={{
           position: 'absolute',
-          left: '50%',
+          left: '18px',
+          right: notesOverlayOpen ? `calc(${NOTES_DRAWER_WIDTH} + 18px)` : '18px',
           bottom: '18px',
-          transform: 'translateX(-50%)',
-          maxWidth: 'calc(100% - 32px)',
           display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          padding: '8px 12px',
-          background: 'rgba(12,12,14,0.86)',
-          backdropFilter: 'blur(14px)',
-          border: '1px solid var(--p-border-strong)',
-          borderRadius: '4px',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+          justifyContent: 'center',
+          pointerEvents: 'none',
           zIndex: 20,
         }}
       >
-        <PresentationToolbar variant="hud" />
-        <Divider />
-        <ElapsedTimer />
-        <Divider />
-        <WallClock />
-        <Divider />
-        <PButton active={gridOpen} onClick={() => setGridOpen(!gridOpen)} title="All slides (G)">
-          <LayoutGrid size={13} />
-        </PButton>
-        <PButton active={notesOverlayOpen} onClick={() => setNotesOverlayOpen(!notesOverlayOpen)} title="Notes and next slide (S)">
-          <StickyNote size={13} />
-        </PButton>
-        <PButton onClick={() => void setMainFullScreen(!mainFullScreen)} title={mainFullScreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}>
-          {mainFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-        </PButton>
-        <PButton tone="danger" onClick={() => void end()} title="End presentation (Esc)">
-          <X size={13} />
-        </PButton>
+        <div
+          onMouseEnter={() => hud.hold(true)}
+          onMouseLeave={() => hud.hold(false)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            padding: '8px 12px',
+            maxWidth: '100%',
+            overflowX: 'auto',
+            background: 'rgba(12,12,14,0.86)',
+            backdropFilter: 'blur(14px)',
+            border: '1px solid var(--p-border-strong)',
+            borderRadius: '4px',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+            pointerEvents: 'auto',
+          }}
+        >
+          <PresentationToolbar variant="hud" />
+          <Divider />
+          <ElapsedTimer />
+          <Divider />
+          <WallClock />
+          <Divider />
+          <PButton active={gridOpen} onClick={() => setGridOpen(!gridOpen)} title="All slides (G)">
+            <LayoutGrid size={13} />
+          </PButton>
+          <PButton active={notesOverlayOpen} onClick={() => setNotesOverlayOpen(!notesOverlayOpen)} title="Notes and next slide (S)">
+            <StickyNote size={13} />
+          </PButton>
+          <PButton onClick={() => void setMainFullScreen(!mainFullScreen)} title={mainFullScreen ? 'Exit fullscreen (F)' : 'Fullscreen (F)'}>
+            {mainFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </PButton>
+          <PButton tone="danger" onClick={() => void end()} title="End presentation (Esc)">
+            <X size={13} />
+          </PButton>
+        </div>
       </div>
 
       {/* Notes drawer */}
@@ -209,7 +239,7 @@ export default function SingleWindowPresentation() {
             top: 0,
             right: 0,
             bottom: 0,
-            width: 'clamp(300px, 34%, 480px)',
+            width: NOTES_DRAWER_WIDTH,
             padding: '18px 18px 90px',
             gap: '14px',
             background: 'rgba(10,10,12,0.92)',

@@ -50,7 +50,7 @@ export function PresentationToolbar({ variant = 'presenter' }: PresentationToolb
   const showColors = tool === 'pen' || tool === 'highlighter'
 
   return (
-    <div className="flex items-center" style={{ gap: '8px', flexWrap: 'wrap' }}>
+    <div className="flex items-center" style={{ gap: '8px', flexWrap: variant === 'hud' ? 'nowrap' : 'wrap' }}>
       <div className="flex items-center" style={{ gap: '4px' }}>
         <PButton onClick={prev} disabled={slide <= 0 && blackout === 'none'} title="Previous slide (←)">
           <ChevronLeft size={14} />

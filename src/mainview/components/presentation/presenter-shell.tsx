@@ -304,9 +304,9 @@ export default function PresenterShell() {
       {/* Body */}
       <div className="flex flex-1 min-h-0">
         <div ref={wheelRef} className="flex flex-col min-w-0" style={{ flex: 1, padding: '18px 20px 12px' }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: '10px' }}>
+          <div className="flex items-center" style={{ marginBottom: '10px', gap: '14px', minHeight: '16px' }}>
             <SectionLabel>Current · {String(current + 1).padStart(2, '0')}</SectionLabel>
-            <div className="flex items-center" style={{ gap: '8px' }}>
+            <div className="flex items-center" style={{ gap: '12px' }}>
               {gotoBuffer && (
                 <span style={{ ...MONO_LABEL, color: 'var(--accent)' }}>
                   Go to {gotoBuffer} <Kbd>⏎</Kbd>
