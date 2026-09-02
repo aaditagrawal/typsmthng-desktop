@@ -16,6 +16,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { isMacOS, revealLabel } from '@/lib/platform'
 import { compileCurrentToPdf } from '@/lib/compile-manager'
 import { downloadBlob } from '@/lib/download-blob'
+import { PresentMenu } from '@/components/presentation/present-menu'
 
 function ThemeToggle() {
   const theme = useSettingsStore((s) => s.theme)
@@ -180,6 +181,7 @@ export function Toolbar() {
         <button className="toolbar-button" title="Download PDF" onClick={() => void handleDownloadPdf()}>
           <Download size={16} />
         </button>
+        <PresentMenu />
       </div>
     </header>
   )

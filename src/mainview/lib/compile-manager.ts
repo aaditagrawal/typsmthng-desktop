@@ -442,7 +442,7 @@ async function doCompile(request: CompileRequest): Promise<void> {
     }
 
     if (result.success && result.svg && result.vectorData) {
-      store.setSvgResult(result.svg, result.vectorData, result.pageDimensions)
+      store.setSvgResult(result.svg, result.vectorData, result.pageDimensions, result.speakerNotes)
       const hasErrors = result.diagnostics.some((d) => d.severity === 'error')
       store.setStatus(hasErrors ? 'error' : 'success')
     } else {
