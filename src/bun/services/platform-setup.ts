@@ -71,10 +71,22 @@ function findMacOSAppBundle(): string | null {
 
 // ── Linux ───────────────────────────────────────────────────────────────
 
+export function isSystemLinuxInstall(execPath: string): boolean {
+	const normalized = execPath.replace(/\\/g, "/");
+	return (
+		normalized === "/usr/bin/typsmthng" ||
+		normalized.startsWith("/opt/typsmthng/") ||
+		normalized.startsWith("/usr/lib/typsmthng/")
+	);
+}
+
 async function setupLinux(): Promise<void> {
 	// Find the AppImage or binary path
 	const appImagePath = process.env.APPIMAGE;
 	const execPath = appImagePath ?? process.execPath;
+
+	// deb/rpm installs already ship /usr/bin, .desktop, MIME, and icons.
+	if (!appImagePath && isSystemLinuxInstall(execPath)) return;
 
 	// 1. CLI symlink in ~/.local/bin
 	const localBin = path.join(HOME, ".local", "bin");

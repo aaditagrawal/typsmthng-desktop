@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
-import { resolvePackagedAppRoot, windowsTypstOpenCommand } from './platform-setup'
+import { isSystemLinuxInstall, resolvePackagedAppRoot, windowsTypstOpenCommand } from './platform-setup'
 
 describe('windowsTypstOpenCommand', () => {
   it('keeps %1 literal so cmd.exe cannot eat the file-association placeholder', () => {
@@ -18,5 +18,19 @@ describe('resolvePackagedAppRoot', () => {
 
   it('returns null in unpackaged / dev layouts', () => {
     expect(resolvePackagedAppRoot('/usr/bin/bun', () => false)).toBeNull()
+  })
+})
+
+describe('isSystemLinuxInstall', () => {
+  it('detects deb/rpm install prefixes', () => {
+    expect(isSystemLinuxInstall('/opt/typsmthng/bin/launcher')).toBe(true)
+    expect(isSystemLinuxInstall('/usr/bin/typsmthng')).toBe(true)
+    expect(isSystemLinuxInstall('/usr/lib/typsmthng/bin/launcher')).toBe(true)
+  })
+
+  it('ignores AppImage and ad-hoc layouts', () => {
+    expect(isSystemLinuxInstall('/home/user/Downloads/typsmthng.AppImage')).toBe(false)
+    expect(isSystemLinuxInstall('/tmp/AppDir/usr/typsmthng/bin/launcher')).toBe(false)
+    expect(isSystemLinuxInstall('/usr/bin/bun')).toBe(false)
   })
 })
