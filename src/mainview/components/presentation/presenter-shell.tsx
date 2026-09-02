@@ -30,6 +30,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ['D / H / E', 'Pen / highlighter / eraser'],
   ['C', 'Clear annotations'],
   ['G', 'All slides'],
+  ['S', 'Show / hide notes'],
   ['T / R', 'Pause / reset timer'],
   ['F', 'Toggle fullscreen'],
   ['Esc', 'End presentation'],
@@ -160,8 +161,8 @@ function ShortcutHelp() {
 
 export default function PresenterShell() {
   const {
-    slideDeck, state, deckTitle, gridOpen, setGridOpen, goto, performAction, upsertStroke, eraseStroke, setLaser,
-    end, audienceOpen, lastError, mainFullScreen, setMainFullScreen,
+    slideDeck, state, deckTitle, gridOpen, setGridOpen, sidebarOpen, setSidebarOpen, goto, performAction,
+    upsertStroke, eraseStroke, setLaser, end, audienceOpen, lastError, mainFullScreen, setMainFullScreen,
   } = usePresentationStore(
     useShallow((s) => ({
       slideDeck: s.slideDeck,
@@ -169,6 +170,8 @@ export default function PresenterShell() {
       deckTitle: s.deck?.title ?? 'Presentation',
       gridOpen: s.gridOpen,
       setGridOpen: s.setGridOpen,
+      sidebarOpen: s.sidebarOpen,
+      setSidebarOpen: s.setSidebarOpen,
       goto: s.goto,
       performAction: s.performAction,
       upsertStroke: s.upsertStroke,
@@ -181,7 +184,6 @@ export default function PresenterShell() {
       setMainFullScreen: s.setMainFullScreen,
     })),
   )
-  const [sidebarOpen, setSidebarOpen] = useState(true)
   const gotoBuffer = usePresentationKeyboard({ onAction: performAction, onGoto: goto })
   const wheelRef = usePresentationPointerNavigation<HTMLDivElement>(performAction, !gridOpen)
 
@@ -273,7 +275,7 @@ export default function PresenterShell() {
           <PButton onClick={() => void setMainFullScreen(!mainFullScreen)} title={mainFullScreen ? 'Exit fullscreen (F)' : 'Fullscreen presenter (F)'}>
             {mainFullScreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           </PButton>
-          <PButton onClick={() => setSidebarOpen((value) => !value)} title={sidebarOpen ? 'Hide next slide and notes' : 'Show next slide and notes'}>
+          <PButton onClick={() => setSidebarOpen(!sidebarOpen)} title={sidebarOpen ? 'Hide next slide and notes (S)' : 'Show next slide and notes (S)'}>
             {sidebarOpen ? <PanelRightClose size={13} /> : <PanelRight size={13} />}
           </PButton>
           <PButton tone="danger" onClick={() => void end()} title="End presentation (Esc)" label="End">

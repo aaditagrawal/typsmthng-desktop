@@ -40,7 +40,10 @@ interface PresentationStoreState {
   state: PresentationState
   notesLayout: NotesLayout
   gridOpen: boolean
+  /** Single-window mode: the slide-over notes drawer. */
   notesOverlayOpen: boolean
+  /** Presenter mode: the next-slide + notes column. */
+  sidebarOpen: boolean
   timerRunning: boolean
   timerStartedAt: number | null
   timerAccumulatedMs: number
@@ -71,6 +74,7 @@ interface PresentationStoreState {
   clearAnnotations: (slide?: number) => void
   setGridOpen: (open: boolean) => void
   setNotesOverlayOpen: (open: boolean) => void
+  setSidebarOpen: (open: boolean) => void
   toggleTimer: () => void
   resetTimer: () => void
   setNotesLayout: (layout: NotesLayout) => void
@@ -201,6 +205,7 @@ export const usePresentationStore = create<PresentationStoreState>((set, get) =>
   notesLayout: loadNotesLayoutPreference(),
   gridOpen: false,
   notesOverlayOpen: false,
+  sidebarOpen: true,
   timerRunning: false,
   timerStartedAt: null,
   timerAccumulatedMs: 0,
@@ -409,6 +414,7 @@ export const usePresentationStore = create<PresentationStoreState>((set, get) =>
 
   setGridOpen: (open) => set({ gridOpen: open }),
   setNotesOverlayOpen: (open) => set({ notesOverlayOpen: open }),
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
   toggleTimer: () => {
     const { timerRunning, timerStartedAt, timerAccumulatedMs } = get()
@@ -547,7 +553,8 @@ export const usePresentationStore = create<PresentationStoreState>((set, get) =>
         set({ gridOpen: !store.gridOpen })
         break
       case 'toggle-notes':
-        set({ notesOverlayOpen: !store.notesOverlayOpen })
+        if (store.mode === 'presenter') set({ sidebarOpen: !store.sidebarOpen })
+        else set({ notesOverlayOpen: !store.notesOverlayOpen })
         break
       case 'toggle-timer':
         store.toggleTimer()
