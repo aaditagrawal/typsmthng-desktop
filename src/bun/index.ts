@@ -9,7 +9,7 @@ import type { UpdateState } from "../shared/update-types";
 import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
-import { ensurePackagedWorkingDirectory, resolvePackagedAppRoot, runPlatformSetup } from "./services/platform-setup";
+import { ensurePackagedWorkingDirectory, isSystemLinuxInstall, resolvePackagedAppRoot, runPlatformSetup } from "./services/platform-setup";
 import { saveDownloadFile } from "./services/save-download";
 import { loadUserSettings, saveUserSettings } from "./services/user-settings";
 import { loadSystemFontFiles } from "./services/system-fonts";
@@ -79,6 +79,11 @@ function setUpdateState(patch: Partial<UpdateState>) {
 
 async function performUpdateCheck(): Promise<UpdateState> {
 	try {
+		if (process.platform === "linux" && isSystemLinuxInstall(process.execPath)) {
+			setUpdateState({ status: "disabled" });
+			return updateState;
+		}
+
 		const channel = await Updater.localInfo.channel();
 		if (channel === "dev") {
 			setUpdateState({ status: "disabled" });
