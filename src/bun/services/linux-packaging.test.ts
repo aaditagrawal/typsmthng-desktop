@@ -53,8 +53,13 @@ describe("Linux packaging scripts", () => {
 		// Channel is injected by Actions, not the shell: pwsh ignores $ELECTROBUN_ENV,
 		// and Git-bash tar treats D:\ as a remote when electrobun extracts its CLI.
 		expect(release).toContain("bunx electrobun build --env=${{ env.ELECTROBUN_ENV }}");
-		expect(release).toContain("runner.os == 'Windows' && 'pwsh' || 'bash'");
-		expect(release).not.toMatch(/shell:\s*bash\s*\n\s*run:\s*bunx electrobun build/);
+		expect(release).toContain("if: runner.os == 'Windows'");
+		expect(release).toContain("if: runner.os != 'Windows'");
+		expect(release).toMatch(/if: runner\.os == 'Windows'\s*\n\s*shell: pwsh/);
+		expect(release).toMatch(/if: runner\.os != 'Windows'\s*\n\s*shell: bash/);
+		expect(release).not.toMatch(/shell:\s*"\$\{\{/);
+		expect(release).not.toContain("runner.os == 'Windows' && 'pwsh' || 'bash'");
+		expect(release).toMatch(/^name:\s*Release\s*$/m);
 		expect(readFileSync(path.join(ROOT, "scripts/package-linux-appimage.sh"), "utf-8")).toContain(
 			"collect-update-artifacts.sh",
 		);

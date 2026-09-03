@@ -171,8 +171,16 @@ jobs:
       # - Do not use Git-bash on Windows: Electrobun extracts with
       #   tar -xzf "D:\...\electrobun-win-x64.tar.gz", and GNU tar treats
       #   D: as a remote host (run 33731592957). pwsh uses Windows tar/bsdtar.
+      # Two static shell: keys — GitHub rejects dynamic shell: expressions
+      # (run 33732343439 never parsed name: Release).
+      - name: Build Electrobun app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: bunx electrobun build --env=${{ env.ELECTROBUN_ENV }} --targets ${{ matrix.platform }}-${{ matrix.arch }}
+
       - name: Build Electrobun app
-        shell: "${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}"
+        if: runner.os != 'Windows'
+        shell: bash
         run: bunx electrobun build --env=${{ env.ELECTROBUN_ENV }} --targets ${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: Inspect Electrobun output
