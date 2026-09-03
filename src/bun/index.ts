@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer, connect } from "node:net";
 import { extname, join, resolve } from "node:path";
 
+import type { PresentationCommand } from "../shared/presentation";
 import type { DesktopRPC } from "../shared/rpc";
 import type { UpdateState } from "../shared/update-types";
 import { resolveVaultRootFromTypFile } from "../shared/vault-root";
@@ -13,6 +14,7 @@ import { ensurePackagedWorkingDirectory, isSystemLinuxInstall, resolvePackagedAp
 import { saveDownloadFile } from "./services/save-download";
 import { loadUserSettings, saveUserSettings } from "./services/user-settings";
 import { loadSystemFontFiles } from "./services/system-fonts";
+import { AUDIENCE_HASH, PresentationWindowManager } from "./services/presentation-windows";
 
 // $OWD is set by the AppImage runtime; the AppRun script cds into the AppDir,
 // so process.cwd() there is not where the user invoked us from.
@@ -182,7 +184,18 @@ function requireMainWindow(): BrowserWindow<
 	return mainWindow;
 }
 
-const rpc = BrowserView.defineRPC<DesktopRPC>({
+let mainViewUrl = "views://mainview/index.html";
+
+const presentationWindows = new PresentationWindowManager({
+	createRpc: () => createRpc(),
+	getAudienceUrl: () => `${mainViewUrl}${AUDIENCE_HASH}`,
+	getMainWindow: () => mainWindow,
+});
+
+// Every webview needs its own RPC instance because Electrobun binds the
+// transport to the RPC object; the handlers themselves are shared.
+function createRpc(): DesktopBunRPC {
+	return BrowserView.defineRPC<DesktopRPC>({
 	handlers: {
 		requests: {
 			waitUntilReady: () => vaultService.waitUntilReady(),
@@ -259,11 +272,38 @@ const rpc = BrowserView.defineRPC<DesktopRPC>({
 					vaultService.flushWritesSync();
 					await vaultService.flushWrites({});
 				} catch {}
+				presentationWindows.closeAudience();
 				mainWindow?.close();
 			},
+			setMainWindowFullScreen: ({ fullScreen }) => {
+				const window = requireMainWindow();
+				if (window.isFullScreen() !== fullScreen) {
+					window.setFullScreen(fullScreen);
+				}
+				return { ok: true as const };
+			},
+			presentationGetDisplays: () => presentationWindows.listDisplays(),
+			presentationOpenAudience: ({ displayId }) =>
+				presentationWindows.openAudience(displayId),
+			presentationCloseAudience: () => {
+				presentationWindows.closeAudience();
+				return { ok: true as const };
+			},
+			presentationPublish: (snapshot) => {
+				presentationWindows.publish(snapshot);
+				return { ok: true as const };
+			},
+			presentationInput: (input) => {
+				presentationWindows.relayInput(input);
+				return { ok: true as const };
+			},
+			presentationGetSnapshot: () => presentationWindows.getSnapshot(),
 		},
 	},
-});
+	});
+}
+
+const rpc = createRpc();
 
 function applyMacOSWindowEffects(window: BrowserWindow<DesktopBunRPC>) {
 	// With ASAR packaging the bun entrypoint runs from a temp dir, so also
@@ -339,6 +379,12 @@ function applyMacOSWindowEffects(window: BrowserWindow<DesktopBunRPC>) {
 	}
 }
 
+function sendPresentationCommand(command: PresentationCommand) {
+	try {
+		mainWindow?.webview.rpc?.send.presentationCommand(command);
+	} catch {}
+}
+
 function setupMacOSMenu(window: BrowserWindow<DesktopBunRPC>) {
 	ApplicationMenu.setApplicationMenu([
 		{
@@ -349,11 +395,31 @@ function setupMacOSMenu(window: BrowserWindow<DesktopBunRPC>) {
 			submenu: [
 				{
 					label: "Close Window",
-					action: "close-main-window",
+					action: "close-window",
 					accelerator: "w",
 				},
 				{ type: "separator" },
 				{ role: "quit" },
+			],
+		},
+		{
+			label: "Present",
+			submenu: [
+				{
+					label: "Start Presentation",
+					action: "present-here",
+					accelerator: "CommandOrControl+Shift+P",
+				},
+				{
+					label: "Presenter View…",
+					action: "presenter-view",
+					accelerator: "CommandOrControl+Alt+P",
+				},
+				{ type: "separator" },
+				{
+					label: "End Presentation",
+					action: "end-presentation",
+				},
 			],
 		},
 		{
@@ -368,8 +434,21 @@ function setupMacOSMenu(window: BrowserWindow<DesktopBunRPC>) {
 
 	ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
 		const action = (event as { data?: { action?: string } })?.data?.action;
-		if (action === "close-main-window") {
-			window.close();
+		switch (action) {
+			case "close-window":
+				// Cmd+W on the fullscreen audience window should only end the
+				// presentation, never take the editor down with it.
+				if (presentationWindows.isAudienceFocused()) {
+					sendPresentationCommand("end-presentation");
+				} else {
+					window.close();
+				}
+				break;
+			case "present-here":
+			case "presenter-view":
+			case "end-presentation":
+				sendPresentationCommand(action);
+				break;
 		}
 	});
 }
@@ -431,6 +510,7 @@ const restoredFrame = clampWindowState({
 	height: storedWindowState?.height ?? DEFAULT_FRAME.height,
 });
 const url = await getMainViewUrl();
+mainViewUrl = url;
 
 mainWindow = new BrowserWindow<DesktopBunRPC>({
 	title: "typsmthng",
@@ -515,7 +595,12 @@ function startCliServer() {
 
 startCliServer();
 
+mainWindow.on("focus", () => {
+	presentationWindows.noteMainWindowFocused();
+});
+
 mainWindow.on("close", () => {
+	presentationWindows.closeAudience();
 	vaultService.flushWritesSync();
 	void (async () => {
 		try {

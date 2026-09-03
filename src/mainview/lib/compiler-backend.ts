@@ -9,6 +9,7 @@ import compilerWasmUrl from '@myriaddreamin/typst-ts-web-compiler/pkg/typst_ts_w
 import rendererWasmUrl from '@myriaddreamin/typst-ts-renderer/pkg/typst_ts_renderer_bg.wasm?url'
 import type { Diagnostic } from '@/stores/compile-store'
 import { getPreparedPackageForResolver, ensurePackagesForCompile as ensurePackagesForCompileRegistry } from './universe-registry'
+import { normalizeInlineNotes, SPEAKER_NOTE_LABEL, type InlineSpeakerNote } from './presentation-notes'
 
 let compiler: Awaited<ReturnType<typeof createTypstCompiler>> | null = null
 let renderer: Awaited<ReturnType<typeof createTypstRenderer>> | null = null
@@ -236,6 +237,32 @@ export interface CompileResult {
   diagnostics: Diagnostic[]
   success: boolean
   timings?: CompileTimings
+  /** Notes declared in the document with `<typsmthng-note>` metadata. */
+  speakerNotes?: InlineSpeakerNote[]
+}
+
+function sourcesMentionSpeakerNotes(
+  source: string,
+  extraFiles?: Array<{ path: string; content: string }>,
+): boolean {
+  if (source.includes(SPEAKER_NOTE_LABEL)) return true
+  return extraFiles?.some((file) => file.content.includes(SPEAKER_NOTE_LABEL)) ?? false
+}
+
+async function querySpeakerNotes(mainFilePath: string): Promise<InlineSpeakerNote[]> {
+  if (!compiler) return []
+  try {
+    const raw = await compiler.query({
+      mainFilePath,
+      root: PROJECT_ROOT,
+      selector: `<${SPEAKER_NOTE_LABEL}>`,
+      field: 'value',
+    })
+    return normalizeInlineNotes(raw)
+  } catch (error) {
+    console.warn('Speaker note query failed:', error)
+    return []
+  }
 }
 
 export interface LivePreviewController {
@@ -335,12 +362,19 @@ export async function compileTypstBackend(
   )
   const renderMs = performance.now() - renderStart
 
+  // Only pay for the query when a source actually declares notes; the
+  // compiled world is still warm so this is a cheap incremental pass.
+  const speakerNotes = sourcesMentionSpeakerNotes(source, extraFiles)
+    ? await querySpeakerNotes(normalizedMainFilePath)
+    : []
+
   return {
     svg,
     vectorData,
     pageDimensions,
     diagnostics,
     success: true,
+    speakerNotes,
     timings: {
       compileMs,
       renderMs,

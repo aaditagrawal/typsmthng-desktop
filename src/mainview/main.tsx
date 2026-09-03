@@ -12,12 +12,20 @@ window.onunhandledrejection = (e) => {
 const bootstrapStart = perfMark()
 const root = createRoot(document.getElementById('root')!)
 
-void import('./App.tsx')
+// The audience window loads the same bundle with a hash route so it needs no
+// extra Vite entry or Electrobun view; it never touches vaults or the compiler.
+const isAudienceWindow = window.location.hash.startsWith('#/audience')
+
+const appModule = isAudienceWindow
+  ? import('./components/presentation/audience-app.tsx')
+  : import('./App.tsx')
+
+void appModule
   .then(({ default: App }) => {
     perfMeasure('renderer.app_module', bootstrapStart)
     root.render(<App />)
   })
   .catch((error) => {
-    document.body.innerHTML = `<pre style="color:red;padding:20px">Failed to load App.tsx\n${error?.stack ?? error}</pre>`
+    document.body.innerHTML = `<pre style="color:red;padding:20px">Failed to load ${isAudienceWindow ? 'audience view' : 'App.tsx'}\n${error?.stack ?? error}</pre>`
     console.error('Failed to bootstrap renderer', error)
   })

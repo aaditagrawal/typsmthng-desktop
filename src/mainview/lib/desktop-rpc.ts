@@ -6,6 +6,11 @@ import type {
 	ExternalVaultEvent,
 	VaultRecord,
 } from "../../shared/rpc";
+import type {
+	PresentationCommand,
+	PresentationInput,
+	PresentationSnapshot,
+} from "../../shared/presentation";
 import type { UpdateState } from "../../shared/update-types";
 
 type ExternalVaultEventsPayload = {
@@ -22,6 +27,10 @@ const metadataListeners = new Set<(metadata: AppMetadata) => void>();
 const activeVaultOpenedListeners = new Set<(vault: VaultRecord) => void>();
 const activeVaultClosedListeners = new Set<() => void>();
 const updateStateListeners = new Set<(state: UpdateState) => void>();
+const presentationSnapshotListeners = new Set<(snapshot: PresentationSnapshot) => void>();
+const presentationInputListeners = new Set<(input: PresentationInput) => void>();
+const presentationAudienceClosedListeners = new Set<() => void>();
+const presentationCommandListeners = new Set<(command: PresentationCommand) => void>();
 
 function subscribe<T>(
 	listeners: Set<(value: T) => void>,
@@ -62,6 +71,26 @@ const desktopRpc = Electroview.defineRPC<DesktopRPC>({
 					listener();
 				}
 			},
+			presentationSnapshot(snapshot) {
+				for (const listener of presentationSnapshotListeners) {
+					listener(snapshot);
+				}
+			},
+			presentationInput(input) {
+				for (const listener of presentationInputListeners) {
+					listener(input);
+				}
+			},
+			presentationAudienceClosed() {
+				for (const listener of presentationAudienceClosedListeners) {
+					listener();
+				}
+			},
+			presentationCommand(command) {
+				for (const listener of presentationCommandListeners) {
+					listener(command);
+				}
+			},
 		},
 	},
 });
@@ -97,6 +126,31 @@ export function onUpdateStateChanged(
 	listener: (state: UpdateState) => void,
 ): Unsubscribe {
 	return subscribe(updateStateListeners, listener);
+}
+
+export function onPresentationSnapshot(
+	listener: (snapshot: PresentationSnapshot) => void,
+): Unsubscribe {
+	return subscribe(presentationSnapshotListeners, listener);
+}
+
+export function onPresentationInput(
+	listener: (input: PresentationInput) => void,
+): Unsubscribe {
+	return subscribe(presentationInputListeners, listener);
+}
+
+export function onPresentationAudienceClosed(listener: () => void): Unsubscribe {
+	presentationAudienceClosedListeners.add(listener);
+	return () => {
+		presentationAudienceClosedListeners.delete(listener);
+	};
+}
+
+export function onPresentationCommand(
+	listener: (command: PresentationCommand) => void,
+): Unsubscribe {
+	return subscribe(presentationCommandListeners, listener);
 }
 
 export { desktopRpc, electroview };

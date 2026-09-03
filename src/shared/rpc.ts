@@ -1,4 +1,10 @@
 import type { RPCSchema } from "electrobun/bun";
+import type {
+  PresentationCommand,
+  PresentationDisplays,
+  PresentationInput,
+  PresentationSnapshot,
+} from "./presentation";
 import type { UpdateState } from "./update-types";
 
 export interface ProjectTemplateMeta {
@@ -306,6 +312,38 @@ export type DesktopRPC = {
         params: void;
         response: void;
       };
+      setMainWindowFullScreen: {
+        params: { fullScreen: boolean };
+        response: { ok: true };
+      };
+      presentationGetDisplays: {
+        params: void;
+        response: PresentationDisplays;
+      };
+      /** Open (or move) the fullscreen audience window on a display. */
+      presentationOpenAudience: {
+        params: { displayId: number | null };
+        response: { ok: boolean; displayId: number | null };
+      };
+      presentationCloseAudience: {
+        params: void;
+        response: { ok: true };
+      };
+      /** Presenter -> bun: cache and fan out to audience windows. */
+      presentationPublish: {
+        params: PresentationSnapshot;
+        response: { ok: true };
+      };
+      /** Audience -> bun: forwarded to the presenter window. */
+      presentationInput: {
+        params: PresentationInput;
+        response: { ok: true };
+      };
+      /** Audience -> bun: fetch the latest snapshot on startup. */
+      presentationGetSnapshot: {
+        params: void;
+        response: PresentationSnapshot;
+      };
     };
   }>;
   webview: RPCSchema<{
@@ -318,6 +356,10 @@ export type DesktopRPC = {
       metadataUpdated: AppMetadata;
       activeVaultOpened: VaultRecord;
       activeVaultClosed: void;
+      presentationSnapshot: PresentationSnapshot;
+      presentationInput: PresentationInput;
+      presentationAudienceClosed: void;
+      presentationCommand: PresentationCommand;
     };
   }>;
 };
