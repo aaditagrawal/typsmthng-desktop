@@ -34,6 +34,18 @@ if [[ ! -d "$APP_BUNDLE" ]]; then
   fi
 fi
 
+# Electrobun 1.15.1 wraps the host arch even when `--targets macos-x64` is
+# passed on an arm64 runner (GitHub macos-15 is arm64). Name installers after
+# the directory Electrobun actually wrote, never after the matrix label.
+BUNDLE_PARENT_NAME="$(basename "$(dirname "$APP_BUNDLE")")"
+if [[ "$BUNDLE_PARENT_NAME" =~ macos-(arm64|x64)$ ]]; then
+  ACTUAL_ARCH="${BASH_REMATCH[1]}"
+  if [[ "$ACTUAL_ARCH" != "$ARCH" ]]; then
+    echo "==> Electrobun built macos-${ACTUAL_ARCH} (workflow asked for ${ARCH}); naming artifacts for ${ACTUAL_ARCH}"
+    ARCH="$ACTUAL_ARCH"
+  fi
+fi
+
 # Patch Info.plist for .typ file association
 if [[ -f "$ROOT_DIR/scripts/post-build-macos.sh" ]]; then
   bash "$ROOT_DIR/scripts/post-build-macos.sh" "$ARCH"

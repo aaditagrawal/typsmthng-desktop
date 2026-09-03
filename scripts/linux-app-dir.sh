@@ -38,9 +38,10 @@ find_zig_zstd() {
     "$ROOT_DIR/node_modules/electrobun/dist-linux-x64/zig-zstd" \
     "$ROOT_DIR/node_modules/electrobun/dist-linux-arm64/zig-zstd" \
     "$ROOT_DIR/node_modules/electrobun/dist-macos-arm64/zig-zstd" \
-    "$ROOT_DIR/node_modules/electrobun/dist-macos-x64/zig-zstd"
+    "$ROOT_DIR/node_modules/electrobun/dist-macos-x64/zig-zstd" \
+    "$ROOT_DIR/node_modules/electrobun/dist-win-x64/zig-zstd.exe"
   do
-    if [[ -x "$candidate" ]]; then
+    if [[ -f "$candidate" && ( -x "$candidate" || "$candidate" == *.exe ) ]]; then
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -53,6 +54,9 @@ unpack_zstd_tar() {
   mkdir -p "$dest"
   if command -v zstd &>/dev/null; then
     zstd -d -c "$src" | tar -xf - -C "$dest"
+    return
+  fi
+  if tar --zstd -xf "$src" -C "$dest" 2>/dev/null; then
     return
   fi
   local zig_zstd
