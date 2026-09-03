@@ -11,6 +11,7 @@ import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
 import { ensurePackagedWorkingDirectory, isSystemLinuxInstall, resolvePackagedAppRoot, runPlatformSetup } from "./services/platform-setup";
+import { readVersionInfo } from "./services/version-info";
 import { saveDownloadFile } from "./services/save-download";
 import { loadUserSettings, saveUserSettings } from "./services/user-settings";
 import { loadSystemFontFiles } from "./services/system-fonts";
@@ -19,6 +20,7 @@ import { AUDIENCE_HASH, PresentationWindowManager } from "./services/presentatio
 // $OWD is set by the AppImage runtime; the AppRun script cds into the AppDir,
 // so process.cwd() there is not where the user invoked us from.
 const LAUNCH_CWD = process.env.OWD ?? process.cwd();
+// Electrobun 1.15.1 reads ../Resources/version.json from cwd. Stay in bin/.
 ensurePackagedWorkingDirectory();
 
 const DEV_SERVER_PORT = 5173;
@@ -32,8 +34,16 @@ const MAC_NATIVE_DRAG_REGION_HEIGHT = 40;
 
 type DesktopBunRPC = ReturnType<typeof BrowserView.defineRPC<DesktopRPC>>;
 
+async function localChannel(): Promise<string> {
+	try {
+		return await Updater.localInfo.channel();
+	} catch {
+		return readVersionInfo().channel;
+	}
+}
+
 async function getMainViewUrl(): Promise<string> {
-	const channel = await Updater.localInfo.channel();
+	const channel = await localChannel();
 	if (channel === "dev") {
 		try {
 			await fetch(DEV_SERVER_URL, { method: "HEAD" });
@@ -86,7 +96,7 @@ async function performUpdateCheck(): Promise<UpdateState> {
 			return updateState;
 		}
 
-		const channel = await Updater.localInfo.channel();
+		const channel = await localChannel();
 		if (channel === "dev") {
 			setUpdateState({ status: "disabled" });
 			return updateState;
@@ -151,7 +161,7 @@ function parseStartupArgs(): { vaultPath: string | null; selectFile: string | nu
 		} else if (!arg.startsWith("-")) {
 			try {
 				// Resolve against the directory the user launched from, not the
-				// app root that ensurePackagedWorkingDirectory chdir'd into.
+				// bin/ directory that ensurePackagedWorkingDirectory chdir'd into.
 				const resolved = resolve(LAUNCH_CWD, arg);
 				if (existsSync(resolved)) {
 					const stat = statSync(resolved);
@@ -502,7 +512,13 @@ if (await tryForwardToRunningInstance()) {
 	process.exit(0);
 }
 
-const storedWindowState = await vaultService.getStoredWindowState();
+let storedWindowState: Awaited<ReturnType<typeof vaultService.getStoredWindowState>> | undefined;
+try {
+	storedWindowState = await vaultService.getStoredWindowState();
+} catch (error) {
+	console.warn("Failed to load stored window state; using defaults.", error);
+	storedWindowState = undefined;
+}
 const restoredFrame = clampWindowState({
 	x: storedWindowState?.x ?? DEFAULT_FRAME.x,
 	y: storedWindowState?.y ?? DEFAULT_FRAME.y,

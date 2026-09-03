@@ -93,6 +93,11 @@ cp -R "$APP_DIR"/. "$STAGING_DIR/opt/$APP_NAME/"
 if [[ -d "$STAGING_DIR/opt/$APP_NAME/bin" ]]; then
   find "$STAGING_DIR/opt/$APP_NAME/bin" -type f -exec chmod +x {} \;
 fi
+if [[ ! -f "$STAGING_DIR/opt/$APP_NAME/Resources/version.json" ]]; then
+  echo "Error: staged tree missing Resources/version.json"
+  echo "Electrobun 1.15.1 reads ../Resources/version.json from cwd /opt/${APP_NAME}/bin"
+  exit 1
+fi
 
 cat > "$STAGING_DIR/usr/bin/$APP_NAME" <<WRAPPER
 #!/bin/sh

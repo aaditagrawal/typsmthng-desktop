@@ -15,7 +15,21 @@ linux_bundle_name() {
 
 is_full_linux_app() {
   local dir="$1"
-  [[ -f "$dir/bin/launcher" && -f "$dir/bin/bun" && -f "$dir/bin/libNativeWrapper.so" ]]
+  [[ -f "$dir/bin/launcher" && -f "$dir/bin/bun" && -f "$dir/bin/libNativeWrapper.so" ]] || return 1
+  # The stable/canary self-extracting stub also has launcher+bun+wrapper but only
+  # a hashed tar.zst in Resources — require the unpacked app payload.
+  [[ -d "$dir/Resources/app" || -f "$dir/Resources/app.asar" ]]
+}
+
+ensure_version_json() {
+  local dest="$APP_DIR/Resources/version.json"
+  mkdir -p "$APP_DIR/Resources"
+  if [[ -f "$dest" ]]; then
+    echo "==> Found $dest"
+    return
+  fi
+  echo "==> Writing fallback $dest (Electrobun stub/tarball omitted it)"
+  (cd "$ROOT_DIR" && bun "$ROOT_DIR/scripts/write-version-json.ts" "$dest")
 }
 
 find_zig_zstd() {
@@ -93,7 +107,7 @@ ensure_linux_app_dir() {
     elif is_full_linux_app "$unpacked"; then
       APP_DIR="$unpacked"
     else
-      echo "Error: unpacked $zst but did not find bin/launcher + bun + libNativeWrapper.so"
+      echo "Error: unpacked $zst but did not find bin/launcher + bun + libNativeWrapper.so and Resources/app"
       find "$unpacked" -maxdepth 3 -type f | head -40
       exit 1
     fi
@@ -103,4 +117,11 @@ ensure_linux_app_dir() {
   echo "==> Contents:"
   ls -la "$APP_DIR"
   ls -la "$APP_DIR/bin"
+  ls -la "$APP_DIR/Resources" || true
+  ensure_version_json
+  if [[ ! -f "$APP_DIR/Resources/version.json" ]]; then
+    echo "Error: Resources/version.json missing after ensure_version_json"
+    exit 1
+  fi
+  echo "==> Electrobun version.json (from bin cwd): $APP_DIR/Resources/version.json"
 }
