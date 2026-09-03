@@ -94,5 +94,7 @@ echo "==> AppImage created: $OUTPUT_DIR/$APPIMAGE_NAME"
 # The Release workflow only invokes this script for Linux. Build deb/rpm from
 # the same Electrobun tree so they land in build/release/ with the AppImage.
 if [[ "${SKIP_LINUX_NATIVE_PACKAGES:-}" != "1" ]]; then
-  bash "$ROOT_DIR/scripts/package-linux-deb-rpm.sh"
+  SKIP_UPDATE_ARTIFACTS=1 bash "$ROOT_DIR/scripts/package-linux-deb-rpm.sh"
 fi
+
+bash "$ROOT_DIR/scripts/collect-update-artifacts.sh" "$ENV" "linux" "x64" "$OUTPUT_DIR"

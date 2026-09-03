@@ -5,7 +5,7 @@ import path from "node:path";
 /** Keep in sync with electrobun.config.ts / package.json. `scripts/update-version.ts` rewrites APP_VERSION. */
 export const APP_IDENTIFIER = "dev.typsmthng.desktop";
 export const APP_NAME = "typsmthng";
-export const APP_VERSION = "0.1.2";
+export const APP_VERSION = "0.1.3";
 export const APP_CHANNEL = "stable";
 export const APP_RELEASE_BASE_URL =
 	"https://github.com/aaditagrawal/typsmthng-desktop/releases/latest/download";

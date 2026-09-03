@@ -67,3 +67,5 @@ makensis \
   "$NSI_SCRIPT"
 
 echo "==> Windows installer created: $OUTPUT_DIR/$INSTALLER_NAME"
+
+bash "$ROOT_DIR/scripts/collect-update-artifacts.sh" "$ENV" "win" "x64" "$OUTPUT_DIR"

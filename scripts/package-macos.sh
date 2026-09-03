@@ -94,3 +94,5 @@ fi
 echo "==> macOS packaging complete:"
 echo "    DMG: $OUTPUT_DIR/$DMG_NAME"
 echo "    ZIP: $OUTPUT_DIR/$ZIP_NAME"
+
+bash "$ROOT_DIR/scripts/collect-update-artifacts.sh" "$ENV" "macos" "$ARCH" "$OUTPUT_DIR"

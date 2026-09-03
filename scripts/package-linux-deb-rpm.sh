@@ -208,3 +208,7 @@ rm -rf "$STAGING_DIR"
 echo "==> Linux native packages created:"
 echo "    DEB: $OUTPUT_DIR/$DEB_NAME"
 echo "    RPM: $OUTPUT_DIR/$RPM_NAME"
+
+if [[ "${SKIP_UPDATE_ARTIFACTS:-}" != "1" ]]; then
+  bash "$ROOT_DIR/scripts/collect-update-artifacts.sh" "$ENV" "linux" "x64" "$OUTPUT_DIR"
+fi
