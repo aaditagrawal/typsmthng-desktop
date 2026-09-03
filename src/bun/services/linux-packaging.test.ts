@@ -15,6 +15,8 @@ describe("Linux packaging scripts", () => {
 			"scripts/linux-app-dir.sh",
 			"scripts/package-linux-appimage.sh",
 			"scripts/package-linux-deb-rpm.sh",
+			"scripts/package-macos.sh",
+			"scripts/package-windows.sh",
 		]) {
 			execFileSync("bash", ["-n", path.join(ROOT, relative)]);
 		}
@@ -47,6 +49,8 @@ describe("Linux packaging scripts", () => {
 	it("release workflow uploads Electrobun updater artifacts from build/release", () => {
 		const release = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf-8");
 		expect(release).toContain("path: build/release/*");
+		expect(release).toContain("runner: macos-15-intel");
+		expect(release).toMatch(/shell:\s*bash[\s\S]*electrobun build --env=/);
 		expect(readFileSync(path.join(ROOT, "scripts/package-linux-appimage.sh"), "utf-8")).toContain(
 			"collect-update-artifacts.sh",
 		);
@@ -57,7 +61,37 @@ describe("Linux packaging scripts", () => {
 			"collect-update-artifacts.sh",
 		);
 	});
+
+	it("does not package a Windows dev tree as the requested channel", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/package-windows.sh"), "utf-8");
+		expect(src).toContain('name "${ENV}-win-*"');
+		expect(src).not.toContain('name "*-win-*"');
+		expect(src).toContain("unpack_zstd_tar");
+		expect(src).toContain(".tar.zst");
+	});
+
+	it("names macOS installers after Electrobun's host arch", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/package-macos.sh"), "utf-8");
+		expect(src).toContain("naming artifacts for");
+		expect(src).toContain("macos-(arm64|x64)");
+	});
+
+	it("can unpack Electrobun zstd tarballs on Windows via zig-zstd.exe", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/linux-app-dir.sh"), "utf-8");
+		expect(src).toContain("dist-win-x64/zig-zstd.exe");
+	});
 });
+
+function seedCollectScripts(repo: string) {
+	mkdirSync(path.join(repo, "scripts"), { recursive: true });
+	for (const name of [
+		"collect-update-artifacts.sh",
+		"validate-update-json.ts",
+		"generate-update-json.ts",
+	]) {
+		execSync(`cp "${path.join(ROOT, "scripts", name)}" "${path.join(repo, "scripts")}"`);
+	}
+}
 
 describe("collect-update-artifacts.sh", () => {
 	let dir = "";
@@ -69,11 +103,9 @@ describe("collect-update-artifacts.sh", () => {
 	it("copies the exact filename Electrobun fetches", () => {
 		dir = mkdtempSync(path.join(tmpdir(), "typsmthng-artifacts-"));
 		const repo = path.join(dir, "repo");
-		mkdirSync(path.join(repo, "scripts"), { recursive: true });
+		seedCollectScripts(repo);
 		mkdirSync(path.join(repo, "artifacts"), { recursive: true });
 		mkdirSync(path.join(repo, "build", "release"), { recursive: true });
-		execSync(`cp "${path.join(ROOT, "scripts/collect-update-artifacts.sh")}" "${path.join(repo, "scripts")}"`);
-		execSync(`cp "${path.join(ROOT, "scripts/validate-update-json.ts")}" "${path.join(repo, "scripts")}"`);
 		writeFileSync(
 			path.join(repo, "artifacts", "stable-linux-x64-update.json"),
 			JSON.stringify({ version: "0.1.3", hash: "testhash", platform: "linux", arch: "x64" }),
@@ -88,6 +120,103 @@ describe("collect-update-artifacts.sh", () => {
 		expect(existsSync(path.join(repo, "build", "release", "stable-linux-x64-typsmthng.tar.zst"))).toBe(
 			true,
 		);
+	});
+
+	it("maps Electrobun host-arch artifacts when the matrix arch differs", () => {
+		dir = mkdtempSync(path.join(tmpdir(), "typsmthng-artifacts-"));
+		const repo = path.join(dir, "repo");
+		seedCollectScripts(repo);
+		mkdirSync(path.join(repo, "artifacts"), { recursive: true });
+		mkdirSync(path.join(repo, "build", "release"), { recursive: true });
+		writeFileSync(
+			path.join(repo, "artifacts", "stable-macos-arm64-update.json"),
+			JSON.stringify({ version: "0.1.3", hash: "hosthash", platform: "macos", arch: "arm64" }),
+		);
+		writeFileSync(path.join(repo, "artifacts", "stable-macos-arm64-typsmthng.app.tar.zst"), "fake");
+
+		const output = execFileSync(
+			"bash",
+			[path.join(repo, "scripts/collect-update-artifacts.sh"), "stable", "macos", "x64"],
+			{ cwd: repo, encoding: "utf-8" },
+		);
+
+		expect(output).toContain("using Electrobun host output stable-macos-arm64-update.json");
+		expect(existsSync(path.join(repo, "build", "release", "stable-macos-arm64-update.json"))).toBe(
+			true,
+		);
+		expect(existsSync(path.join(repo, "build", "release", "stable-macos-x64-update.json"))).toBe(
+			false,
+		);
+	});
+
+	it("generates update.json from version.json when artifacts/ is missing", () => {
+		dir = mkdtempSync(path.join(tmpdir(), "typsmthng-artifacts-"));
+		const repo = path.join(dir, "repo");
+		seedCollectScripts(repo);
+		mkdirSync(path.join(repo, "build", "release"), { recursive: true });
+		mkdirSync(path.join(repo, "build", "stable-win-x64", "typsmthng", "Resources"), {
+			recursive: true,
+		});
+		writeFileSync(
+			path.join(repo, "build", "stable-win-x64", "typsmthng", "Resources", "version.json"),
+			JSON.stringify({
+				version: "0.1.3",
+				hash: "winhash123",
+				channel: "stable",
+				name: "typsmthng",
+			}),
+		);
+
+		execFileSync("bash", [path.join(repo, "scripts/collect-update-artifacts.sh"), "stable", "win", "x64"], {
+			cwd: repo,
+		});
+
+		const dest = path.join(repo, "build", "release", "stable-win-x64-update.json");
+		expect(existsSync(dest)).toBe(true);
+		expect(JSON.parse(readFileSync(dest, "utf-8"))).toMatchObject({
+			version: "0.1.3",
+			hash: "winhash123",
+			platform: "win",
+			arch: "x64",
+		});
+	});
+});
+
+describe("generate-update-json.ts", () => {
+	let dir = "";
+
+	afterEach(() => {
+		if (dir) rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("writes version and hash from version.json", () => {
+		dir = mkdtempSync(path.join(tmpdir(), "typsmthng-gen-update-"));
+		const versionJson = path.join(dir, "version.json");
+		const dest = path.join(dir, "stable-linux-x64-update.json");
+		writeFileSync(versionJson, JSON.stringify({ version: "0.1.3", hash: "abc123" }));
+		execFileSync("bun", [
+			path.join(ROOT, "scripts/generate-update-json.ts"),
+			dest,
+			versionJson,
+			"linux",
+			"x64",
+		]);
+		expect(JSON.parse(readFileSync(dest, "utf-8"))).toEqual({
+			version: "0.1.3",
+			hash: "abc123",
+			platform: "linux",
+			arch: "x64",
+		});
+	});
+
+	it("rejects fallback hash unknown", () => {
+		dir = mkdtempSync(path.join(tmpdir(), "typsmthng-gen-update-"));
+		const versionJson = path.join(dir, "version.json");
+		const dest = path.join(dir, "update.json");
+		writeFileSync(versionJson, JSON.stringify({ version: "0.1.3", hash: "unknown" }));
+		expect(() =>
+			execFileSync("bun", [path.join(ROOT, "scripts/generate-update-json.ts"), dest, versionJson]),
+		).toThrow(/usable hash/);
 	});
 });
 

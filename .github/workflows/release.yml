@@ -109,8 +109,11 @@ jobs:
             runner: macos-14
             platform: macos
             arch: arm64
+          # macos-15 (and macos-latest) are arm64. Electrobun 1.15.1 wraps the
+          # host arch, so an "x64" job on macos-15 emits stable-macos-arm64-*.
+          # macos-15-intel is GitHub's remaining x86_64 image (macos-13 retired).
           - label: macOS x64
-            runner: macos-15
+            runner: macos-15-intel
             platform: macos
             arch: x64
           - label: Linux x64 (AppImage)
@@ -162,8 +165,20 @@ jobs:
             libwebkit2gtk-4.1-0 \
             libjavascriptcoregtk-4.1-0
 
+      # Windows runners default to pwsh, which does not expand $ELECTROBUN_ENV
+      # (that's $env:ELECTROBUN_ENV). Empty --env= makes Electrobun wrap a
+      # *dev* tree and skip artifacts/. Force bash so --env=stable|canary sticks.
       - name: Build Electrobun app
+        shell: bash
         run: bunx electrobun build --env="$ELECTROBUN_ENV" --targets ${{ matrix.platform }}-${{ matrix.arch }}
+
+      - name: Inspect Electrobun output
+        if: always()
+        shell: bash
+        run: |
+          echo "runner=$(uname -s) $(uname -m) matrix=${{ matrix.platform }}-${{ matrix.arch }} env=${ELECTROBUN_ENV}"
+          ls -la build 2>/dev/null || echo "build/ missing"
+          ls -la artifacts 2>/dev/null || echo "artifacts/ missing"
 
       - name: Package (macOS)
         if: matrix.platform == 'macos'
