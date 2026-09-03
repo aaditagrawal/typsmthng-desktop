@@ -296,6 +296,42 @@ describe("optional tray stub", () => {
 	);
 });
 
+describe("WebKitGTK DMA-BUF renderer guard", () => {
+	it("applies WEBKIT_DISABLE_DMABUF_RENDERER only for NVIDIA or crash-marker, not unconditionally", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/linux-launcher-wrapper.sh"), "utf-8");
+		// Must set the env var somewhere
+		expect(src).toContain("WEBKIT_DISABLE_DMABUF_RENDERER=1");
+		// Must NOT export it unconditionally at the top level (should be guarded)
+		expect(src).not.toMatch(/^export\s+WEBKIT_DISABLE_DMABUF_RENDERER=1/m);
+		expect(src).not.toMatch(/^WEBKIT_DISABLE_DMABUF_RENDERER=1\s*$/m);
+	});
+
+	it("detects NVIDIA via /sys/module/nvidia", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/linux-launcher-wrapper.sh"), "utf-8");
+		expect(src).toContain("/sys/module/nvidia");
+	});
+
+	it("also sets __NV_DISABLE_EXPLICIT_SYNC for NVIDIA Wayland", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/linux-launcher-wrapper.sh"), "utf-8");
+		expect(src).toContain("__NV_DISABLE_EXPLICIT_SYNC=1");
+		expect(src).toContain("_has_nvidia");
+	});
+
+	it("respects a user-supplied WEBKIT_DISABLE_DMABUF_RENDERER value", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/linux-launcher-wrapper.sh"), "utf-8");
+		// Guard: only set if variable is unset (POSIX ${var+x} idiom)
+		expect(src).toMatch(/WEBKIT_DISABLE_DMABUF_RENDERER\+x/);
+	});
+
+	it("contains crash-marker logic to self-heal on non-NVIDIA VMs", () => {
+		const src = readFileSync(path.join(ROOT, "scripts/linux-launcher-wrapper.sh"), "utf-8");
+		expect(src).toContain("_dmabuf_crash_marker");
+		expect(src).toContain("webkit-dmabuf-crash");
+		// Marker should be written after a fast crash exit
+		expect(src).toContain("_elapsed");
+	});
+});
+
 describe("wrap_linux_launcher", () => {
 	it("installs a relocatable wrapper next to launcher.real", () => {
 		const dir = mkdtempSync(path.join(tmpdir(), "typsmthng-wrap-"));

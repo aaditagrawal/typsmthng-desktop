@@ -4,7 +4,7 @@ export default {
   app: {
     name: "typsmthng",
     identifier: "dev.typsmthng.desktop",
-    version: "0.1.3",
+    version: "0.1.4",
   },
   release: {
     baseUrl:
