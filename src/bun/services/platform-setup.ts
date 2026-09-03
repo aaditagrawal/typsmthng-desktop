@@ -80,13 +80,34 @@ export function isSystemLinuxInstall(execPath: string): boolean {
 	);
 }
 
+/**
+ * Electrobun's bun process is not a user-facing binary. PATH / .desktop must
+ * point at the AppImage or bin/launcher so `typsmthng file.typ` opens the app
+ * instead of running Bun against the Typst source.
+ */
+export function resolveLinuxUserLaunchPath(
+	execPath: string,
+	env: NodeJS.ProcessEnv = process.env,
+	exists: (candidate: string) => boolean = existsSync,
+): string {
+	const appImage = env.APPIMAGE;
+	if (appImage && exists(appImage)) return appImage;
+
+	const base = path.basename(execPath);
+	if (base === "bun" || base === "bun.exe") {
+		const launcher = path.join(path.dirname(execPath), "launcher");
+		if (exists(launcher)) return launcher;
+	}
+	return execPath;
+}
+
 async function setupLinux(): Promise<void> {
 	// Find the AppImage or binary path
 	const appImagePath = process.env.APPIMAGE;
-	const execPath = appImagePath ?? process.execPath;
+	const execPath = resolveLinuxUserLaunchPath(process.execPath);
 
 	// deb/rpm installs already ship /usr/bin, .desktop, MIME, and icons.
-	if (!appImagePath && isSystemLinuxInstall(execPath)) return;
+	if (!appImagePath && isSystemLinuxInstall(process.execPath)) return;
 
 	// 1. CLI symlink in ~/.local/bin
 	const localBin = path.join(HOME, ".local", "bin");
@@ -165,10 +186,11 @@ async function setupLinux(): Promise<void> {
 	// 5. Icon — copy to hicolor theme if available from AppImage
 	const iconDest = path.join(HOME, ".local", "share", "icons", "hicolor", "256x256", "apps", `${APP_NAME}.png`);
 	if (!existsSync(iconDest)) {
+		const appRoot = resolvePackagedAppRoot(process.execPath);
 		const iconCandidates = [
 			// Inside mounted AppImage
 			process.env.APPDIR ? path.join(process.env.APPDIR, `${APP_NAME}.png`) : null,
-			// Alongside the binary
+			appRoot ? path.join(appRoot, "Resources", "appIcon.png") : null,
 			path.join(path.dirname(execPath), "Resources", "appIcon.png"),
 		].filter(Boolean) as string[];
 
