@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Folder-backed Typst editor for Electrobun",
+  "license": "MIT",
   "bin": {
     "typsmthng": "./cli/typsmthng.ts"
   },

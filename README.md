@@ -130,4 +130,4 @@ bun run build
 
 ## License
 
-No license file is currently included in this repository.
+MIT. See [LICENSE](LICENSE).

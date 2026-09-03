@@ -125,6 +125,8 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     name: Build ${{ matrix.label }}
+    env:
+      ELECTROBUN_ENV: ${{ needs.preflight.outputs.prerelease == 'true' && 'canary' || 'stable' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -151,7 +153,7 @@ jobs:
         run: bash scripts/build-macos-effects.sh
 
       - name: Build Electrobun app
-        run: bunx electrobun build --targets ${{ matrix.platform }}-${{ matrix.arch }}
+        run: bunx electrobun build --env="$ELECTROBUN_ENV" --targets ${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: Package (macOS)
         if: matrix.platform == 'macos'

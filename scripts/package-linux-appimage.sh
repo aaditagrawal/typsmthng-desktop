@@ -11,31 +11,9 @@ VERSION=$(grep '"version"' "$ROOT_DIR/package.json" | head -1 | sed 's/.*"\([0-9
 APPIMAGE_NAME="${APP_NAME}-${VERSION}-linux-x64.AppImage"
 APPDIR="$BUILD_DIR/AppDir"
 
-# Electrobun outputs to build/{env}-linux-x64/{appname}/
-PLATFORM_DIR="$BUILD_DIR/${ENV}-linux-x64"
-if [[ ! -d "$PLATFORM_DIR" ]]; then
-  PLATFORM_DIR=$(find "$BUILD_DIR" -maxdepth 1 -name "*-linux-*" -type d 2>/dev/null | head -1)
-  if [[ -z "$PLATFORM_DIR" ]]; then
-    echo "Error: Electrobun build output not found in $BUILD_DIR"
-    ls -la "$BUILD_DIR" 2>/dev/null || echo "  (directory does not exist)"
-    exit 1
-  fi
-  echo "==> Found build output at $PLATFORM_DIR"
-fi
-
-# The app lives inside a subdirectory named after the app
-APP_DIR="$PLATFORM_DIR/$APP_NAME"
-if [[ ! -d "$APP_DIR" ]]; then
-  # Try finding it
-  APP_DIR=$(find "$PLATFORM_DIR" -maxdepth 1 -type d ! -name "$(basename "$PLATFORM_DIR")" 2>/dev/null | head -1)
-  if [[ -z "$APP_DIR" ]]; then
-    APP_DIR="$PLATFORM_DIR"
-  fi
-fi
-
-echo "==> Electrobun app directory: $APP_DIR"
-echo "==> Contents:"
-ls -la "$APP_DIR"
+# shellcheck source=linux-app-dir.sh
+. "$ROOT_DIR/scripts/linux-app-dir.sh"
+ensure_linux_app_dir
 
 # Ensure appimagetool is available (pin to a stable release, not continuous)
 APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
@@ -48,7 +26,7 @@ if ! command -v "$APPIMAGETOOL" &>/dev/null; then
 fi
 
 # Build AppDir structure
-# Electrobun Linux layout: {appname}/bin/launcher, {appname}/Resources/, {appname}/lib/
+# Electrobun Linux layout: {appname}/bin/launcher, {appname}/bin/*.so, {appname}/Resources/
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
@@ -86,14 +64,16 @@ fi
 cp "$ICON_SRC" "$APPDIR/$APP_NAME.png"
 cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png"
 
-# Create AppRun that launches the electrobun launcher binary
+# Electrobun loads libNativeWrapper.so / libasar.so from the launcher directory
+# (bin/), and bun:ffi also dlopens libNativeWrapper.so from process.cwd().
 cat > "$APPDIR/AppRun" <<APPRUN
 #!/bin/bash
 SELF=\$(readlink -f "\$0")
 HERE=\${SELF%/*}
-cd "\${HERE}/usr/${APP_NAME}"
-export LD_LIBRARY_PATH="\${HERE}/usr/${APP_NAME}/lib:\${LD_LIBRARY_PATH:-}"
-exec "\${HERE}/usr/${APP_NAME}/bin/launcher" "\$@"
+APP="\${HERE}/usr/${APP_NAME}"
+cd "\${APP}/bin" || exit 1
+export LD_LIBRARY_PATH="\${APP}/bin\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+exec "\${APP}/bin/launcher" "\$@"
 APPRUN
 chmod +x "$APPDIR/AppRun"
 
