@@ -123,6 +123,18 @@ describe('compiler-backend', () => {
     expect(loadFontsMock).toHaveBeenCalledWith([localFont], expect.objectContaining({ assets: ['text'] }))
   })
 
+  it('wraps font bytes as a fetch Response so typst.ts can call arrayBuffer()', async () => {
+    const mod = await loadModule()
+    const bytes = new Uint8Array([9, 8, 7, 5])
+    const response = mod.asFetchResponse(bytes.buffer)
+    expect(typeof response.arrayBuffer).toBe('function')
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
+
+    const fetcher = mod.createFontFetcher(async () => bytes.buffer)
+    const fetched = await fetcher('https://cdn.example/NewCMMath-Regular.otf')
+    expect(new Uint8Array(await fetched.arrayBuffer())).toEqual(bytes)
+  })
+
   it('compiles typst, maps diagnostics, and renders svg output', async () => {
     const mod = await loadModule()
     compilerMock.compile.mockResolvedValue({

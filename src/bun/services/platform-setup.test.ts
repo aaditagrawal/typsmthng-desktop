@@ -3,6 +3,7 @@ import path from 'node:path'
 import {
   ensurePackagedWorkingDirectory,
   isSystemLinuxInstall,
+  resolveLinuxUserLaunchPath,
   resolvePackagedAppRoot,
   windowsTypstOpenCommand,
 } from './platform-setup'
@@ -59,6 +60,28 @@ describe('ensurePackagedWorkingDirectory', () => {
       cwd = dir
     })).toBe(path.join('/opt', 'typsmthng', 'bin'))
     expect(cwd).toBe(path.join('/opt', 'typsmthng', 'bin'))
+  })
+})
+
+describe('resolveLinuxUserLaunchPath', () => {
+  it('uses APPIMAGE when set', () => {
+    const appImage = '/home/user/typsmthng.AppImage'
+    expect(
+      resolveLinuxUserLaunchPath('/tmp/.mount_typsm/usr/typsmthng/bin/bun', { APPIMAGE: appImage }, (p) => p === appImage),
+    ).toBe(appImage)
+  })
+
+  it('rewrites packaged bun to bin/launcher so PATH is not the JS runtime', () => {
+    const bun = path.join('/home/user/typsmthng/bin', 'bun')
+    const launcher = path.join('/home/user/typsmthng/bin', 'launcher')
+    const exists = (candidate: string) => candidate === launcher
+    expect(resolveLinuxUserLaunchPath(bun, {}, exists)).toBe(launcher)
+  })
+
+  it('leaves launcher and unknown binaries unchanged', () => {
+    const launcher = path.join('/home/user/typsmthng/bin', 'launcher')
+    expect(resolveLinuxUserLaunchPath(launcher, {}, () => true)).toBe(launcher)
+    expect(resolveLinuxUserLaunchPath('/usr/bin/typsmthng', {}, () => false)).toBe('/usr/bin/typsmthng')
   })
 })
 

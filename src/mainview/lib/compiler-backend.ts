@@ -107,6 +107,27 @@ async function loadWasmModule(url: string): Promise<ArrayBuffer> {
   return loadWasmViaXhr(resolved)
 }
 
+/**
+ * typst.ts `loadFonts` does `(await fetcher(url)).arrayBuffer()`.
+ * Passing `loadWasmModule` directly (an ArrayBuffer) throws and skips CDN
+ * text/math fonts, so the sample document compiles as "no font could be found".
+ */
+export function asFetchResponse(buffer: ArrayBuffer): Response {
+  return new Response(buffer, {
+    status: 200,
+    headers: { 'Content-Type': 'application/octet-stream' },
+  })
+}
+
+export function createFontFetcher(
+  load: (url: string) => Promise<ArrayBuffer> = loadWasmModule,
+): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    return asFetchResponse(await load(url))
+  }) as typeof fetch
+}
+
 function decodeVersion(version: unknown): string {
   if (version === undefined || version === null) return ''
   if (typeof version === 'string') return version
@@ -168,7 +189,7 @@ export async function initCompilerBackend(): Promise<void> {
   initPromise = (async () => {
     try {
       compiler = createTypstCompiler()
-      const fontFetcher = ((url: string) => loadWasmModule(url)) as unknown as typeof fetch
+      const fontFetcher = createFontFetcher()
       const fontLoaders = [
         loadFonts(additionalFontData, {
           assets: ['text'],
