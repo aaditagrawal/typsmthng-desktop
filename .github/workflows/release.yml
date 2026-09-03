@@ -165,12 +165,15 @@ jobs:
             libwebkit2gtk-4.1-0 \
             libjavascriptcoregtk-4.1-0
 
-      # Windows runners default to pwsh, which does not expand $ELECTROBUN_ENV
-      # (that's $env:ELECTROBUN_ENV). Empty --env= makes Electrobun wrap a
-      # *dev* tree and skip artifacts/. Force bash so --env=stable|canary sticks.
+      # Inject --env via Actions so the shell cannot drop it:
+      # - pwsh does not expand $ELECTROBUN_ENV (needs $env:ELECTROBUN_ENV);
+      #   empty --env= makes Electrobun wrap *dev* and skip artifacts/.
+      # - Do not use Git-bash on Windows: Electrobun extracts with
+      #   tar -xzf "D:\...\electrobun-win-x64.tar.gz", and GNU tar treats
+      #   D: as a remote host (run 33731592957). pwsh uses Windows tar/bsdtar.
       - name: Build Electrobun app
-        shell: bash
-        run: bunx electrobun build --env="$ELECTROBUN_ENV" --targets ${{ matrix.platform }}-${{ matrix.arch }}
+        shell: "${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}"
+        run: bunx electrobun build --env=${{ env.ELECTROBUN_ENV }} --targets ${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: Inspect Electrobun output
         if: always()
