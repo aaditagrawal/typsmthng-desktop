@@ -16,36 +16,9 @@ if [[ "$VERSION" == *-* ]]; then
   PRERELEASE="${VERSION#*-}"
 fi
 
-# Electrobun outputs to build/{env}-linux-x64/{appname}/
-PLATFORM_DIR="$BUILD_DIR/${ENV}-linux-x64"
-if [[ ! -d "$PLATFORM_DIR" ]]; then
-  PLATFORM_DIR=$(find "$BUILD_DIR" -maxdepth 1 -name "*-linux-*" -type d 2>/dev/null | head -1)
-  if [[ -z "$PLATFORM_DIR" ]]; then
-    echo "Error: Electrobun build output not found in $BUILD_DIR"
-    ls -la "$BUILD_DIR" 2>/dev/null || echo "  (directory does not exist)"
-    exit 1
-  fi
-  echo "==> Found build output at $PLATFORM_DIR"
-fi
-
-APP_DIR="$PLATFORM_DIR/$APP_NAME"
-if [[ ! -d "$APP_DIR" ]]; then
-  APP_DIR=$(find "$PLATFORM_DIR" -maxdepth 1 -type d ! -name "$(basename "$PLATFORM_DIR")" 2>/dev/null | head -1)
-  if [[ -z "$APP_DIR" ]]; then
-    APP_DIR="$PLATFORM_DIR"
-  fi
-fi
-
-echo "==> Electrobun app directory: $APP_DIR"
-echo "==> Contents:"
-ls -la "$APP_DIR"
-
-LAUNCHER="$APP_DIR/bin/launcher"
-if [[ ! -f "$LAUNCHER" ]]; then
-  echo "Error: Electrobun launcher missing at $LAUNCHER"
-  find "$APP_DIR" -maxdepth 2 -type f 2>/dev/null | sed 's/^/  /' || true
-  exit 1
-fi
+# shellcheck source=linux-app-dir.sh
+. "$ROOT_DIR/scripts/linux-app-dir.sh"
+ensure_linux_app_dir
 
 ensure_nfpm() {
   if command -v nfpm &>/dev/null; then
@@ -72,10 +45,34 @@ ensure_nfpm() {
   esac
 
   asset="nfpm_${NFPM_VERSION}_${os}_${arch}.tar.gz"
+  expected_sha=""
+  case "${os}_${arch}" in
+    Darwin_arm64) expected_sha="e8c9d1d9ac218eeed479375143dc46b8d51a2b8dbba8e2f9f15ecc8faa2e404b" ;;
+    Darwin_x86_64) expected_sha="2b04108f8757313dde92ed729560845aadfb7782887eb6988a5dd96f9c146861" ;;
+    Linux_arm64) expected_sha="1c0f5f2999b9a974bfb04fdb0cc3306096de530ac5dbb25d739cc5f5219c919c" ;;
+    Linux_x86_64) expected_sha="0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783" ;;
+  esac
+  if [[ -z "$expected_sha" ]]; then
+    echo "Error: no pinned SHA-256 for nfpm ${os}_${arch}"
+    exit 1
+  fi
   echo "==> Downloading nfpm ${NFPM_VERSION} ($asset)"
   mkdir -p "$BUILD_DIR"
   curl -fSL -o "$BUILD_DIR/$asset" \
     "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/${asset}"
+  actual_sha="$(
+    if command -v sha256sum &>/dev/null; then
+      sha256sum "$BUILD_DIR/$asset"
+    else
+      shasum -a 256 "$BUILD_DIR/$asset"
+    fi | awk '{print $1}'
+  )"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    echo "Error: nfpm checksum mismatch for $asset"
+    echo "  expected $expected_sha"
+    echo "  actual   $actual_sha"
+    exit 1
+  fi
   tar -xzf "$BUILD_DIR/$asset" -C "$BUILD_DIR" nfpm
   chmod +x "$BUILD_DIR/nfpm"
   NFPM_BIN="$BUILD_DIR/nfpm"
@@ -100,9 +97,10 @@ fi
 cat > "$STAGING_DIR/usr/bin/$APP_NAME" <<WRAPPER
 #!/bin/sh
 APP_ROOT="/opt/${APP_NAME}"
-cd "\$APP_ROOT" || exit 1
-export LD_LIBRARY_PATH="\${APP_ROOT}/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-exec "\${APP_ROOT}/bin/launcher" "\$@"
+BIN_DIR="\${APP_ROOT}/bin"
+cd "\$BIN_DIR" || exit 1
+export LD_LIBRARY_PATH="\${BIN_DIR}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+exec "\${BIN_DIR}/launcher" "\$@"
 WRAPPER
 chmod +x "$STAGING_DIR/usr/bin/$APP_NAME"
 
@@ -155,7 +153,7 @@ maintainer: typsmthng <hello@typsmthng.dev>
 description: Folder-backed Typst editor
 vendor: typsmthng
 homepage: https://github.com/aaditagrawal/typsmthng-desktop
-license: UNLICENSED
+license: MIT
 contents:
   - src: ${STAGING_DIR}/opt/${APP_NAME}
     dst: /opt/${APP_NAME}
@@ -178,14 +176,17 @@ overrides:
     depends:
       - libgtk-3-0
       - libwebkit2gtk-4.1-0
+      - libjavascriptcoregtk-4.1-0
       - libayatana-appindicator3-1
       - librsvg2-2
+      - libsoup-3.0-0
   rpm:
     depends:
       - gtk3
       - webkit2gtk4.1
-      - libappindicator-gtk3
+      - libayatana-appindicator-gtk3
       - librsvg2
+      - libsoup3
 YAML
 
 mkdir -p "$OUTPUT_DIR"

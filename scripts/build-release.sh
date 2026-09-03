@@ -37,8 +37,9 @@ echo "==> Building frontend (vite)"
 bun run --cwd "$ROOT_DIR" vite build
 
 # Step 3: Build Electrobun app
-echo "==> Building Electrobun app"
-bunx electrobun build --targets "$PLATFORM-$ARCH"
+ELECTROBUN_ENV="${ELECTROBUN_ENV:-stable}"
+echo "==> Building Electrobun app (--env=$ELECTROBUN_ENV)"
+bunx electrobun build --env="$ELECTROBUN_ENV" --targets "$PLATFORM-$ARCH"
 
 # Step 4: Package for distribution
 SCRIPTS_DIR="$ROOT_DIR/scripts"
