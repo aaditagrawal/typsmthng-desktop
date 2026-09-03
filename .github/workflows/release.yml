@@ -152,6 +152,16 @@ jobs:
         if: matrix.platform == 'macos'
         run: bash scripts/build-macos-effects.sh
 
+      - name: Linux runtime libraries
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc \
+            libayatana-appindicator3-1 \
+            libwebkit2gtk-4.1-0 \
+            libjavascriptcoregtk-4.1-0
+
       - name: Build Electrobun app
         run: bunx electrobun build --env="$ELECTROBUN_ENV" --targets ${{ matrix.platform }}-${{ matrix.arch }}
 

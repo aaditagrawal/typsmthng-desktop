@@ -11,6 +11,13 @@ import { resolveVaultRootFromTypFile } from "../shared/vault-root";
 import { DEFAULT_WINDOW_FRAME, clampWindowState } from "../shared/window-state";
 import { VaultService } from "./services/vault-service";
 import { ensurePackagedWorkingDirectory, isSystemLinuxInstall, resolvePackagedAppRoot, runPlatformSetup } from "./services/platform-setup";
+import {
+	electrobunArchName,
+	electrobunFetchErrorLooksLikeMissingManifest,
+	electrobunOsName,
+	interpretUpdateManifest,
+	updateManifestUrl,
+} from "./services/update-check";
 import { readVersionInfo } from "./services/version-info";
 import { saveDownloadFile } from "./services/save-download";
 import { loadUserSettings, saveUserSettings } from "./services/user-settings";
@@ -103,30 +110,83 @@ async function performUpdateCheck(): Promise<UpdateState> {
 		}
 
 		setUpdateState({ status: "checking", error: null });
+
+		const local = readVersionInfo();
+		const baseUrl = process.env.TYPSMTHNG_UPDATE_BASE_URL || local.baseUrl;
+		const os = electrobunOsName();
+		const arch = electrobunArchName();
+		const manifestUrl = updateManifestUrl(baseUrl, local.channel || channel, os, arch);
+		const cacheBuster = Math.random().toString(36).substring(7);
+
+		let status = 0;
+		let bodyText = "";
+		try {
+			const response = await fetch(`${manifestUrl}?${cacheBuster}`);
+			status = response.status;
+			bodyText = await response.text();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setUpdateState({
+				status: "error",
+				error: `Failed to fetch update info from ${manifestUrl}: ${message}`,
+			});
+			console.log(`typsmthng update check: error ${updateState.error}`);
+			return updateState;
+		}
+
+		const decision = interpretUpdateManifest({
+			status,
+			bodyText,
+			localHash: local.hash,
+			url: manifestUrl,
+		});
+
+		if (decision.kind === "up-to-date") {
+			setUpdateState({ status: "up-to-date", error: null });
+			console.log(`typsmthng update check: up-to-date (${decision.reason})`);
+			return updateState;
+		}
+
+		if (decision.kind === "error") {
+			setUpdateState({ status: "error", error: decision.error });
+			console.log(`typsmthng update check: error ${decision.error}`);
+			return updateState;
+		}
+
+		// Manifest names a newer hash — keep Electrobun's updater in sync so Download works.
 		const info = await Updater.checkForUpdate() as {
 			updateAvailable?: boolean;
 			version?: string;
 			error?: unknown;
 		};
-
-		if (info.error) {
-			setUpdateState({
-				status: "error",
-				error: info.error instanceof Error ? info.error.message : String(info.error),
-			});
-		} else if (info.updateAvailable) {
+		const electrobunError =
+			info.error instanceof Error ? info.error.message : info.error ? String(info.error) : "";
+		if (electrobunError && !electrobunFetchErrorLooksLikeMissingManifest(electrobunError)) {
+			setUpdateState({ status: "error", error: electrobunError });
+			console.log(`typsmthng update check: error ${electrobunError}`);
+		} else if (info.updateAvailable || decision.kind === "available") {
 			setUpdateState({
 				status: "available",
-				availableVersion: info.version ?? null,
+				availableVersion: info.version ?? decision.version,
+				error: null,
 			});
+			console.log(`typsmthng update check: available ${updateState.availableVersion ?? decision.hash}`);
 		} else {
-			setUpdateState({ status: "up-to-date" });
+			setUpdateState({ status: "up-to-date", error: null });
+			console.log("typsmthng update check: up-to-date");
 		}
 	} catch (error) {
-		setUpdateState({
-			status: "error",
-			error: error instanceof Error ? error.message : String(error),
-		});
+		const message = error instanceof Error ? error.message : String(error);
+		if (electrobunFetchErrorLooksLikeMissingManifest(message)) {
+			setUpdateState({ status: "up-to-date", error: null });
+			console.log("typsmthng update check: up-to-date (missing manifest)");
+		} else {
+			setUpdateState({
+				status: "error",
+				error: message,
+			});
+			console.log(`typsmthng update check: error ${message}`);
+		}
 	}
 	return updateState;
 }
@@ -638,13 +698,20 @@ mainWindow.on("close", () => {
 // Platform integration (CLI symlink, .desktop file, MIME type)
 void runPlatformSetup();
 
-// Check for updates (non-blocking, with UI feedback)
-setTimeout(async () => {
-	const state = await performUpdateCheck();
-	if (state.status === "available") {
-		await performUpdateDownload();
+// Check for updates (non-blocking, with UI feedback).
+// TYPSMTHNG_UPDATE_CHECK_DELAY_MS: milliseconds; negative skips the automatic check.
+{
+	const rawDelay = process.env.TYPSMTHNG_UPDATE_CHECK_DELAY_MS;
+	const delayMs = rawDelay === undefined || rawDelay === "" ? 15_000 : Number(rawDelay);
+	if (Number.isFinite(delayMs) && delayMs >= 0) {
+		setTimeout(async () => {
+			const state = await performUpdateCheck();
+			if (state.status === "available") {
+				await performUpdateDownload();
+			}
+		}, delayMs);
 	}
-}, 15_000);
+}
 
 // Handle startup arguments (e.g. `typsmthng /path/to/vault`).
 // Only set the override — getBootstrapState opens it once. Calling handleOpenFromCli

@@ -124,4 +124,105 @@ ensure_linux_app_dir() {
     exit 1
   fi
   echo "==> Electrobun version.json (from bin cwd): $APP_DIR/Resources/version.json"
+  compile_linux_tray_stub
+  bundle_linux_tray_libs
+  wrap_linux_launcher
+}
+
+compile_linux_tray_stub() {
+  local dest src
+  src="$ROOT_DIR/native/linux/stub-ayatana-appindicator3.c"
+  dest="$APP_DIR/lib/tray-stub"
+  if [[ ! -f "$src" ]]; then
+    echo "Error: tray stub source missing at $src"
+    exit 1
+  fi
+  if ! command -v gcc >/dev/null 2>&1; then
+    echo "Error: gcc is required to compile the optional-tray stub"
+    exit 1
+  fi
+  mkdir -p "$dest"
+  echo "==> Compiling optional tray stub into $dest"
+  gcc -shared -fPIC -Wl,-soname,libayatana-appindicator3.so.1 \
+    -o "$dest/libayatana-appindicator3.so.1" "$src"
+}
+
+# Copy Ayatana AppIndicator (and its small ayatana/dbusmenu deps) next to the
+# launcher so AppImage / extracted trees work without a system tray package.
+# GTK/WebKit stay system dependencies.
+bundle_linux_tray_libs() {
+  local dest="$APP_DIR/bin"
+  local lib=""
+  local line needed
+  mkdir -p "$dest"
+
+  if command -v ldconfig >/dev/null 2>&1; then
+    lib="$(ldconfig -p 2>/dev/null | awk '/libayatana-appindicator3\.so\.1($| )/{print $NF; exit}')"
+  fi
+  if [[ -z "$lib" || ! -f "$lib" ]]; then
+    for candidate in \
+      /usr/lib/x86_64-linux-gnu/libayatana-appindicator3.so.1 \
+      /usr/lib64/libayatana-appindicator3.so.1 \
+      /usr/lib/libayatana-appindicator3.so.1
+    do
+      if [[ -f "$candidate" ]]; then
+        lib="$candidate"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$lib" || ! -f "$lib" ]]; then
+    echo "==> System libayatana-appindicator3.so.1 not found; packaged tree will use the tray stub if needed"
+    return 0
+  fi
+
+  echo "==> Bundling tray library $lib → $dest"
+  cp -L "$lib" "$dest/libayatana-appindicator3.so.1"
+
+  if ! command -v ldd >/dev/null 2>&1; then
+    return 0
+  fi
+  while IFS= read -r line; do
+    needed="$(awk '{print $1}' <<<"$line")"
+    lib="$(awk '{print $3}' <<<"$line")"
+    case "$needed" in
+      *ayatana*|*dbusmenu*|*ido3*)
+        if [[ -n "$lib" && -f "$lib" ]]; then
+          echo "    also $needed"
+          cp -L "$lib" "$dest/$(basename "$lib")"
+        fi
+        ;;
+    esac
+  done < <(ldd "$dest/libayatana-appindicator3.so.1" 2>/dev/null || true)
+}
+
+wrap_linux_launcher() {
+  local wrapper_src="$ROOT_DIR/scripts/linux-launcher-wrapper.sh"
+  local launcher="$APP_DIR/bin/launcher"
+  local real="$APP_DIR/bin/launcher.real"
+
+  if [[ ! -f "$wrapper_src" ]]; then
+    echo "Error: launcher wrapper missing at $wrapper_src"
+    exit 1
+  fi
+  if [[ ! -e "$launcher" ]]; then
+    echo "Error: Electrobun launcher missing at $launcher"
+    exit 1
+  fi
+
+  if head -n 2 "$launcher" 2>/dev/null | grep -q "typsmthng-linux-launcher-wrapper"; then
+    echo "==> Linux launcher already wrapped"
+    if [[ ! -x "$real" ]]; then
+      echo "Error: wrapped launcher is missing $real"
+      exit 1
+    fi
+    return 0
+  fi
+
+  echo "==> Wrapping $launcher (optional tray; leave GDK backend to GTK)"
+  mv "$launcher" "$real"
+  chmod +x "$real"
+  cp "$wrapper_src" "$launcher"
+  chmod +x "$launcher"
 }
