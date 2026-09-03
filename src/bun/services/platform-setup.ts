@@ -365,14 +365,30 @@ export function windowsTypstOpenCommand(exePath: string): string {
 	return `"${exePath}" "%1"`;
 }
 
-/** Electrobun locates Resources from process.cwd(). File-association launches often start elsewhere. */
+/**
+ * Electrobun 1.15.1 getVersionInfo reads join("..", "Resources", "version.json")
+ * relative to process.cwd() and assumes cwd is the bundle `bin/` directory.
+ * File-association launches often start elsewhere; chdir to bin/, never the app root.
+ */
+export function isPackagedAppRoot(
+	appRoot: string,
+	exists: (candidate: string) => boolean = existsSync,
+): boolean {
+	return (
+		exists(path.join(appRoot, "Resources", "version.json")) ||
+		exists(path.join(appRoot, "Resources", "main.js")) ||
+		exists(path.join(appRoot, "Resources", "app")) ||
+		exists(path.join(appRoot, "bin", "launcher"))
+	);
+}
+
 export function resolvePackagedAppRoot(
 	execPath: string,
 	exists: (candidate: string) => boolean = existsSync,
 ): string | null {
 	const execDir = path.dirname(execPath);
 	const appRoot = path.join(execDir, "..");
-	if (exists(path.join(appRoot, "Resources", "version.json"))) return appRoot;
+	if (isPackagedAppRoot(appRoot, exists)) return appRoot;
 	return null;
 }
 
@@ -383,9 +399,12 @@ export function ensurePackagedWorkingDirectory(
 ): string | null {
 	const appRoot = resolvePackagedAppRoot(execPath, exists);
 	if (!appRoot) return null;
+	// dirname(execPath) is bin/ (Linux/Windows) or Contents/MacOS (macOS).
+	// Electrobun's cwd-relative ../Resources/version.json is resolved from here.
+	const binDir = path.dirname(execPath);
 	try {
-		chdir(appRoot);
-		return appRoot;
+		chdir(binDir);
+		return binDir;
 	} catch {
 		return null;
 	}

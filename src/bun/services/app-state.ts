@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Utils } from "electrobun/bun";
 
 import type { AppMetadata, RecentVaultRecord, WindowState } from "../../shared/rpc";
 import { DEFAULT_WINDOW_FRAME } from "../../shared/window-state";
+import { getUserDataDir } from "./version-info";
 
 const METADATA_FILENAME = "app-state.json";
 
@@ -20,7 +20,7 @@ const DEFAULT_METADATA: AppMetadata = {
 };
 
 function metadataPath(): string {
-  return path.join(Utils.paths.userData, METADATA_FILENAME);
+  return path.join(getUserDataDir(), METADATA_FILENAME);
 }
 
 function dedupeRecentDocuments(
@@ -71,7 +71,7 @@ export class AppStateService {
   async load(): Promise<AppMetadata> {
     if (this.cache) return this.cache;
 
-    await fs.mkdir(Utils.paths.userData, { recursive: true });
+    await fs.mkdir(getUserDataDir(), { recursive: true });
     try {
       const raw = await fs.readFile(metadataPath(), "utf8");
       const parsed = JSON.parse(raw) as AppMetadata;
@@ -85,7 +85,7 @@ export class AppStateService {
 
   async save(metadata: AppMetadata): Promise<AppMetadata> {
     const normalized = normalizeMetadata(metadata);
-    await fs.mkdir(Utils.paths.userData, { recursive: true });
+    await fs.mkdir(getUserDataDir(), { recursive: true });
     await fs.writeFile(metadataPath(), `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
     this.cache = normalized;
     return normalized;

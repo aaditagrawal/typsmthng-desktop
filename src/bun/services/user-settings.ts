@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Utils } from "electrobun/bun";
 
 import type { UserSettings } from "../../shared/rpc";
+import { getUserDataDir } from "./version-info";
 
 const SETTINGS_FILENAME = "user-settings.json";
 
 function settingsPath(): string {
-  return path.join(Utils.paths.userData, SETTINGS_FILENAME);
+  return path.join(getUserDataDir(), SETTINGS_FILENAME);
 }
 
 export async function loadUserSettings(): Promise<UserSettings | null> {
@@ -21,7 +21,7 @@ export async function loadUserSettings(): Promise<UserSettings | null> {
 }
 
 export async function saveUserSettings(settings: UserSettings): Promise<{ ok: true }> {
-  await fs.mkdir(Utils.paths.userData, { recursive: true });
+  await fs.mkdir(getUserDataDir(), { recursive: true });
   await fs.writeFile(settingsPath(), `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   return { ok: true as const };
 }

@@ -32,6 +32,11 @@ mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
 # Copy the entire electrobun app directory preserving structure
 cp -R "$APP_DIR" "$APPDIR/usr/$APP_NAME"
+if [[ ! -f "$APPDIR/usr/$APP_NAME/Resources/version.json" ]]; then
+  echo "Error: AppDir missing usr/${APP_NAME}/Resources/version.json"
+  echo "Electrobun 1.15.1 reads ../Resources/version.json from cwd .../usr/${APP_NAME}/bin"
+  exit 1
+fi
 
 # Create .desktop file
 cat > "$APPDIR/$APP_NAME.desktop" <<DESKTOP

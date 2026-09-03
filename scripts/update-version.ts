@@ -33,3 +33,12 @@ config = config.replace(
 );
 writeFileSync(configPath, config);
 console.log(`electrobun.config.ts: updated to ${version}`);
+
+const versionInfoPath = join(rootDir, "src/bun/services/version-info.ts");
+let versionInfo = readFileSync(versionInfoPath, "utf-8");
+versionInfo = versionInfo.replace(
+  /export const APP_VERSION = "[^"]*"/,
+  `export const APP_VERSION = "${version}"`,
+);
+writeFileSync(versionInfoPath, versionInfo);
+console.log(`src/bun/services/version-info.ts: APP_VERSION updated to ${version}`);

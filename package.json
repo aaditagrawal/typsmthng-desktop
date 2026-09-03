@@ -1,7 +1,7 @@
 {
   "name": "typsmthng-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "description": "Folder-backed Typst editor for Electrobun",
   "license": "MIT",
