@@ -91,33 +91,71 @@ describe("collect-update-artifacts.sh", () => {
 	});
 });
 
+const TRAY_STUB_SYMBOLS = [
+	"app_indicator_new",
+	"app_indicator_set_icon_full",
+	"app_indicator_set_menu",
+	"app_indicator_set_status",
+	"app_indicator_set_title",
+] as const;
+
 describe("optional tray stub", () => {
-	it.skipIf(process.platform !== "linux")("exports the AppIndicator symbols Electrobun links", () => {
-		const dir = mkdtempSync(path.join(tmpdir(), "typsmthng-tray-stub-"));
-		try {
-			const so = path.join(dir, "libayatana-appindicator3.so.1");
-			execFileSync("gcc", [
-				"-shared",
-				"-fPIC",
-				"-Wl,-soname,libayatana-appindicator3.so.1",
-				"-o",
-				so,
-				path.join(ROOT, "native/linux/stub-ayatana-appindicator3.c"),
-			]);
-			const nm = execFileSync("nm", ["-D", "--defined-only", so], { encoding: "utf-8" });
-			for (const symbol of [
-				"app_indicator_new",
-				"app_indicator_set_icon_full",
-				"app_indicator_set_menu",
-				"app_indicator_set_status",
-				"app_indicator_set_title",
-			]) {
-				expect(nm).toContain(symbol);
-			}
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
+	it("declares AppIndicator symbols and packaging compiles them as the Electrobun soname", () => {
+		const src = readFileSync(path.join(ROOT, "native/linux/stub-ayatana-appindicator3.c"), "utf-8");
+		for (const symbol of TRAY_STUB_SYMBOLS) {
+			expect(src, symbol).toMatch(new RegExp(`\\b${symbol}\\s*\\(`));
 		}
+
+		const packaging = readFileSync(path.join(ROOT, "scripts/linux-app-dir.sh"), "utf-8");
+		expect(packaging).toContain("stub-ayatana-appindicator3.c");
+		expect(packaging).toContain("compile_linux_tray_stub");
+		expect(packaging).toContain("-Wl,-soname,libayatana-appindicator3.so.1");
+		expect(packaging).toContain('dest="$APP_DIR/lib/tray-stub"');
+		expect(packaging).toContain('"$dest/libayatana-appindicator3.so.1"');
 	});
+
+	// gcc's first invocation on a cold GitHub runner can exceed vitest's 5s
+	// default (v0.1.3 release: 9919ms). Keep the .so export check, but do not
+	// fail quality-checks on a 5s compile budget.
+	it.skipIf(process.platform !== "linux")(
+		"exports the AppIndicator symbols Electrobun links",
+		() => {
+			const dir = mkdtempSync(path.join(tmpdir(), "typsmthng-tray-stub-"));
+			try {
+				const so = path.join(dir, "libayatana-appindicator3.so.1");
+				execFileSync(
+					"gcc",
+					[
+						"-shared",
+						"-fPIC",
+						"-Wl,-soname,libayatana-appindicator3.so.1",
+						"-o",
+						so,
+						path.join(ROOT, "native/linux/stub-ayatana-appindicator3.c"),
+					],
+					{ timeout: 25_000 },
+				);
+				let symbols = "";
+				try {
+					symbols = execFileSync("nm", ["-D", "--defined-only", so], {
+						encoding: "utf-8",
+						timeout: 5_000,
+					});
+				} catch {
+					symbols = execFileSync("readelf", ["-Ws", so], {
+						encoding: "utf-8",
+						timeout: 5_000,
+					});
+				}
+				for (const symbol of TRAY_STUB_SYMBOLS) {
+					expect(symbols).toContain(symbol);
+				}
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		30_000,
+	);
 });
 
 describe("wrap_linux_launcher", () => {
