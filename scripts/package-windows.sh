@@ -14,8 +14,9 @@ VERSION=$(grep '"version"' "$ROOT_DIR/package.json" | head -1 | sed 's/.*"\([0-9
 . "$ROOT_DIR/scripts/linux-app-dir.sh"
 
 # Electrobun outputs to build/{env}-win-x64/. Never silently package a
-# `dev-win-*` tree as a stable/canary release — that happens when
-# `--env=$ELECTROBUN_ENV` is expanded by PowerShell (empty) instead of bash.
+# `dev-win-*` tree as a stable/canary release — that happened when the
+# workflow ran `electrobun build --env=$ELECTROBUN_ENV` in pwsh (empty)
+# or Git-bash (GNU tar treats D:\ as a remote and never finished the wrap).
 PLATFORM_DIR="$BUILD_DIR/${ENV}-win-x64"
 if [[ ! -d "$PLATFORM_DIR" ]]; then
   PLATFORM_DIR=$(find "$BUILD_DIR" -maxdepth 1 -name "${ENV}-win-*" -type d 2>/dev/null | head -1 || true)

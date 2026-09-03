@@ -50,7 +50,11 @@ describe("Linux packaging scripts", () => {
 		const release = readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf-8");
 		expect(release).toContain("path: build/release/*");
 		expect(release).toContain("runner: macos-15-intel");
-		expect(release).toMatch(/shell:\s*bash[\s\S]*electrobun build --env=/);
+		// Channel is injected by Actions, not the shell: pwsh ignores $ELECTROBUN_ENV,
+		// and Git-bash tar treats D:\ as a remote when electrobun extracts its CLI.
+		expect(release).toContain("bunx electrobun build --env=${{ env.ELECTROBUN_ENV }}");
+		expect(release).toContain("runner.os == 'Windows' && 'pwsh' || 'bash'");
+		expect(release).not.toMatch(/shell:\s*bash\s*\n\s*run:\s*bunx electrobun build/);
 		expect(readFileSync(path.join(ROOT, "scripts/package-linux-appimage.sh"), "utf-8")).toContain(
 			"collect-update-artifacts.sh",
 		);
