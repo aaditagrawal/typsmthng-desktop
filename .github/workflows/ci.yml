@@ -38,8 +38,8 @@ jobs:
       - name: Debug build and GTK X11 smoke test
         run: |
           cargo build --locked --manifest-path native/gtk/Cargo.toml
-          xvfb-run -a -s '-screen 0 1920x1080x24' timeout 20s target/debug/typsmthng --smoke-test
-          xvfb-run -a -s '-screen 0 1920x1080x24' timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 20s target/debug/typsmthng --smoke-test
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
 
   platform-build:
     name: Build ${{ matrix.name }}
@@ -83,4 +83,4 @@ jobs:
       - name: Compile native application (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+        run: '"$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml'
