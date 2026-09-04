@@ -49,13 +49,10 @@ jobs:
         include:
           - name: macOS arm64
             os: macos-14
-            shell: bash
           - name: macOS x64
             os: macos-15-intel
-            shell: bash
           - name: Windows x64
             os: windows-2022
-            shell: msys2 {0}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -80,10 +77,10 @@ jobs:
         if: runner.os == 'Windows'
         run: rustup target add x86_64-pc-windows-gnu
       - name: Compile native application
-        shell: ${{ matrix.shell }}
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
-          else
-            cargo build --locked --release --manifest-path native/gtk/Cargo.toml
-          fi
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cargo build --locked --release --manifest-path native/gtk/Cargo.toml
+      - name: Compile native application (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
