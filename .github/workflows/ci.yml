@@ -73,6 +73,7 @@ jobs:
             mingw-w64-x86_64-gtk4
             mingw-w64-x86_64-gtksourceview5
             mingw-w64-x86_64-pkgconf
+            unzip
       - name: Windows GNU Rust target
         if: runner.os == 'Windows'
         run: rustup target add x86_64-pc-windows-gnu

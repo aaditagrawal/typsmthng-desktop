@@ -152,6 +152,7 @@ jobs:
             mingw-w64-x86_64-gtksourceview5
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-nsis
+            unzip
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - name: Build
