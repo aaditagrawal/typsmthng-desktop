@@ -156,7 +156,7 @@ jobs:
         with: { workspaces: native/gtk }
       - name: Build
         run: |
-          cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
           curl -fsSL -o /tmp/typst.zip https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-pc-windows-msvc.zip
           unzip -q /tmp/typst.zip -d /tmp
           cp /tmp/typst-x86_64-pc-windows-msvc/typst.exe target/x86_64-pc-windows-gnu/release/typst.exe
