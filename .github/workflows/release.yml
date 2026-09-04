@@ -156,6 +156,8 @@ jobs:
         with: { workspaces: native/gtk }
       - name: Build
         run: |
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
           "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
           curl -fsSL -o /tmp/typst.zip https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-pc-windows-msvc.zip
           unzip -q /tmp/typst.zip -d /tmp
