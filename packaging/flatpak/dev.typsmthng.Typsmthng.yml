@@ -1,0 +1,35 @@
+app-id: dev.typsmthng.Typsmthng
+runtime: org.gnome.Platform
+runtime-version: "48"
+sdk: org.gnome.Sdk
+command: typsmthng
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+  - --filesystem=home
+  - --talk-name=org.freedesktop.FileManager1
+modules:
+  - name: typsmthng
+    buildsystem: simple
+    build-options:
+      build-args: [--share=network]
+    build-commands:
+      - cargo build --release --locked --manifest-path source/native/gtk/Cargo.toml
+      - install -Dm755 source/target/release/typsmthng /app/bin/typsmthng
+      - install -Dm755 typst-dist/typst /app/lib/typsmthng/typst
+      - install -Dm644 source/native/gtk/data/language-specs/typst.lang /app/share/typsmthng/language-specs/typst.lang
+      - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.desktop /app/share/applications/dev.typsmthng.Typsmthng.desktop
+      - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.metainfo.xml /app/share/metainfo/dev.typsmthng.Typsmthng.metainfo.xml
+      - install -Dm644 source/assets/icon.png /app/share/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png
+      - install -Dm644 source/assets/typst.xml /app/share/mime/packages/typsmthng.xml
+    sources:
+      - type: archive
+        url: https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz
+        sha256: a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
+        dest: typst-dist
+      - type: dir
+        path: ../..
+        dest: source
