@@ -1057,6 +1057,9 @@ impl AppController {
                 return;
             }
         }
+        if let Some(cancel) = self.compile_cancellation.borrow().as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         let generation = self.compile_generation.get().wrapping_add(1);
         self.compile_generation.set(generation);
         if self.compile_in_flight.get() {
@@ -1311,6 +1314,7 @@ impl AppController {
         let generation = self.compile_generation.get();
         self.notes_in_flight.set(true);
         let mut options = self.compile_options();
+        options.cancellation = self.compile_cancellation.borrow().clone();
         if self.settings.borrow().google_fonts {
             if let Some(path) = GoogleFontCache::default().cached_directory() {
                 options.font_paths.push(path);

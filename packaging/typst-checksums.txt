@@ -1,0 +1,4 @@
+48f62ed034aa3a7978309579ac6ca00045e2ef0da73114e8af27cfd8e74dc05a  typst-aarch64-apple-darwin.tar.xz
+7f9fdd9584866245de9a79e0add8f9236fae6f40a8a45e2c4771ccc14db4e0fa  typst-x86_64-apple-darwin.tar.xz
+19ce3551153c2fe7ee9fa2f95208310c8f4d3209fedb699e0333faf8913f6736  typst-x86_64-pc-windows-msvc.zip
+a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  typst-x86_64-unknown-linux-musl.tar.xz

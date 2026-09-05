@@ -39,5 +39,8 @@ url = "2.5"
 wait-timeout = "0.2"
 zip = { version = "6.0", default-features = false, features = ["deflate"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 filetime = "0.2"

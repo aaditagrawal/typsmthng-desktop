@@ -1711,6 +1711,7 @@ dependencies = [
  "glib",
  "gtk4",
  "ignore",
+ "libc",
  "notify",
  "regex",
  "semver",

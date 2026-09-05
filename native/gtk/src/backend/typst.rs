@@ -326,7 +326,11 @@ impl TypstTool {
             .arg("value")
             .arg("--format")
             .arg("json");
-        let output = run_command(&mut command, PROCESS_TIMEOUT)?;
+        let output = run_command_cancellable(
+            &mut command,
+            PROCESS_TIMEOUT,
+            options.cancellation.as_deref(),
+        )?;
         if output.status != Some(0) {
             return Ok(Vec::new());
         }
@@ -459,6 +463,11 @@ fn run_command_cancellable(
     if cancellation.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
         return Err(BackendError::Process("Compilation superseded".into()));
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
@@ -502,8 +511,10 @@ fn run_command_cancellable(
         }
     };
     if status.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_process_tree(&mut child);
+        // A custom wrapper may have inherited output pipes. Do not wait on
+        // readers after failure if the operating system could not kill it.
+        return Err(failure.unwrap_or(BackendError::TypstTimeout));
     }
     let join_output = |reader: Option<std::thread::JoinHandle<std::io::Result<String>>>| {
         reader
@@ -525,6 +536,35 @@ fn run_command_cancellable(
         stdout,
         stderr,
     })
+}
+
+fn terminate_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // The child was explicitly placed in its own process group above.
+        // Kill the group so a wrapper's compiler cannot retain output pipes.
+        unsafe {
+            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if let Ok(mut killer) = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &child.id().to_string()])
+            .creation_flags(0x08000000)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if !matches!(killer.wait_timeout(Duration::from_secs(2)), Ok(Some(_))) {
+                let _ = killer.kill();
+                let _ = killer.wait();
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn typst_candidates() -> Vec<PathBuf> {
@@ -661,6 +701,26 @@ mod tests {
         );
         signal.join().unwrap();
         assert!(result.unwrap_err().to_string().contains("superseded"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_wrapper_does_not_wait_for_descendant_output_pipes() {
+        let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = cancellation.clone();
+        let signal = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let result = super::run_command_cancellable(
+            std::process::Command::new("sh").args(["-c", "sleep 10 & wait"]),
+            std::time::Duration::from_secs(15),
+            Some(&cancellation),
+        );
+        signal.join().unwrap();
+        assert!(result.is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
