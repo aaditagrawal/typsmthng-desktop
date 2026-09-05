@@ -1,6 +1,6 @@
 [package]
 name = "typsmthng-gtk"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Native GTK 4 desktop client for typsmthng"
@@ -38,6 +38,9 @@ ureq = { version = "3.1", features = ["json"] }
 url = "2.5"
 wait-timeout = "0.2"
 zip = { version = "6.0", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 filetime = "0.2"

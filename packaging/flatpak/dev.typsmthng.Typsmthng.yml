@@ -2,6 +2,8 @@ app-id: dev.typsmthng.Typsmthng
 runtime: org.gnome.Platform
 runtime-version: "48"
 sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
 command: typsmthng
 finish-args:
   - --share=ipc
@@ -16,6 +18,9 @@ modules:
     buildsystem: simple
     build-options:
       build-args: [--share=network]
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/typsmthng/cargo
     build-commands:
       - cargo build --release --locked --manifest-path source/native/gtk/Cargo.toml
       - install -Dm755 source/target/release/typsmthng /app/bin/typsmthng

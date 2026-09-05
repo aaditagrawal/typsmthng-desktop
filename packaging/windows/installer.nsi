@@ -5,7 +5,8 @@ Unicode true
 !include "StrFunc.nsh"
 ${StrStr}
 ${StrCase}
-${StrRep}
+${UnStrRep}
+!include "..\..\build\windows-files.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -23,9 +24,9 @@ RequestExecutionLevel user
 !insertmacro MUI_LANGUAGE "English"
 
 Section "Install"
-  ; The application keeps user state outside this directory. Replacing the
-  ; directory prevents files from an older installation surviving an upgrade.
-  RMDir /r "$INSTDIR"
+  ; A directory chosen by the user can contain unrelated files. Never remove
+  ; it recursively, on either installation or uninstallation.
+  !insertmacro RemoveInstalledFiles
   SetOutPath "$INSTDIR"
   File /r "..\..\build\windows\*"
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -35,7 +36,7 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\typsmthng\Uninstall.lnk" "$INSTDIR\uninstall.exe"
 
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "DisplayName" "typsmthng"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "UninstallString" '$"$INSTDIR\uninstall.exe$"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "Publisher" "typsmthng"
   WriteRegStr HKCU "Software\typsmthng" "InstallDir" "$INSTDIR"
@@ -65,6 +66,9 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
+  ; An older install must not unregister a newer copy at another location.
+  ReadRegStr $9 HKCU "Software\typsmthng" "InstallDir"
+  StrCmp $9 $INSTDIR 0 remove_payload
   ReadRegStr $0 HKCU "Software\Classes\.typ" ""
   ${If} $0 == "typsmthng.typ"
     ReadRegStr $1 HKCU "Software\typsmthng" "PrevTypAssoc"
@@ -74,15 +78,16 @@ Section "Uninstall"
       DeleteRegValue HKCU "Software\Classes\.typ" ""
     ${EndIf}
   ${EndIf}
-  RMDir /r "$INSTDIR"
-  RMDir /r "$SMPROGRAMS\typsmthng"
+  Delete "$SMPROGRAMS\typsmthng\typsmthng.lnk"
+  Delete "$SMPROGRAMS\typsmthng\Uninstall.lnk"
+  RMDir "$SMPROGRAMS\typsmthng"
   Delete "$SMPROGRAMS\typsmthng.lnk"
   DeleteRegKey HKCU "Software\Classes\typsmthng.typ"
   DeleteRegKey HKCU "Software\Classes\Directory\shell\typsmthng"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng"
   ReadRegStr $0 HKCU "Environment" "Path"
-  ${StrRep} $1 "$0" "$INSTDIR\bin;" ""
-  ${StrRep} $1 "$1" ";$INSTDIR\bin" ""
+  ${UnStrRep} $1 "$0" "$INSTDIR\bin;" ""
+  ${UnStrRep} $1 "$1" ";$INSTDIR\bin" ""
   ${If} $1 == "$INSTDIR\bin"
     DeleteRegValue HKCU "Environment" "Path"
   ${Else}
@@ -90,4 +95,8 @@ Section "Uninstall"
   ${EndIf}
   DeleteRegKey HKCU "Software\typsmthng"
   SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
+remove_payload:
+  !insertmacro RemoveInstalledFiles
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir "$INSTDIR"
 SectionEnd

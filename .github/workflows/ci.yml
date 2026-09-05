@@ -24,9 +24,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev librsvg2-common xvfb dbus-x11 flatpak-builder
       - name: Typst compiler for integration smoke
         run: |
-          curl -fsSL -o /tmp/typst.tar.xz https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz
-          tar -xJf /tmp/typst.tar.xz -C /tmp
-          sudo install -m755 /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
+          packaging/download-typst.sh x86_64-unknown-linux-musl /tmp/typst-dist
+          sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
       - name: Validate Flatpak manifest
         run: flatpak-builder --show-manifest packaging/flatpak/dev.typsmthng.Typsmthng.yml >/dev/null
       - name: Formatting
@@ -101,9 +100,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          curl -fsSL -o /tmp/typst.zip https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-pc-windows-msvc.zip
-          unzip -q /tmp/typst.zip -d /tmp
-          cp /tmp/typst-x86_64-pc-windows-msvc/typst.exe target/x86_64-pc-windows-gnu/release/typst.exe
+          packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/release
           export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
           timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
           timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo

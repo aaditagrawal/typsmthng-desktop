@@ -13,7 +13,21 @@ command -v typst >/dev/null 2>&1 || { echo "Typst 0.15.1 is required for packagi
 install -m755 "$(command -v typst)" "$appdir/usr/bin/typst"
 install -Dm644 "$repo_root/native/gtk/data/language-specs/typst.lang" "$appdir/usr/share/typsmthng/language-specs/typst.lang"
 install -Dm644 "$repo_root/assets/typst.xml" "$appdir/usr/share/mime/packages/typsmthng.xml"
-DEPLOY_GTK_VERSION=4 linuxdeploy --appdir "$appdir" \
+# GtkSourceView styles/languages and symbolic icons are runtime data and are
+# not found by linuxdeploy's ELF dependency traversal.
+cp -R "$(pkg-config --variable=prefix gtksourceview-5)/share/gtksourceview-5" "$appdir/usr/share/"
+mkdir -p "$appdir/usr/share/icons/hicolor/512x512/apps"
+cp -R /usr/share/icons/Adwaita "$appdir/usr/share/icons/"
+icon="$appdir/usr/share/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png"
+install -m644 "$repo_root/assets/icon.png" "$icon"
+query_loaders="$(pkg-config --variable=gdk_pixbuf_binarydir gdk-pixbuf-2.0)/../gdk-pixbuf-query-loaders"
+install -m755 "$query_loaders" "$appdir/usr/bin/gdk-pixbuf-query-loaders"
+output_dir="$repo_root/build/appimage-output"
+mkdir -p "$output_dir"
+version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo_root/native/gtk/Cargo.toml" | head -1)"
+cd "$output_dir"
+output="typsmthng-$version-linux-x64.AppImage"
+OUTPUT="$output" DEPLOY_GTK_VERSION=4 linuxdeploy --appdir "$appdir" \
   --desktop-file "$repo_root/packaging/linux/dev.typsmthng.Typsmthng.desktop" \
-  --icon-file "$repo_root/assets/icon.png" --plugin gtk --output appimage
-mv ./*.AppImage "$repo_root/build/release/"
+  --icon-file "$icon" --plugin gtk --output appimage
+mv "$output" "$repo_root/build/release/"

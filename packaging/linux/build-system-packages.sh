@@ -33,7 +33,7 @@ Section: editors
 Priority: optional
 Architecture: $arch
 Maintainer: typsmthng contributors
-Depends: libgtk-4-1 (>= 4.6), libgtksourceview-5-0 (>= 5.4), librsvg2-common
+Depends: libgtk-4-1 (>= 4.6), libgtksourceview-5-0 (>= 5.4), librsvg2-common, adwaita-icon-theme
 Description: Native GTK Typst editor and presentation studio
 EOF
 dpkg-deb --build --root-owner-group "$stage" "$repo_root/build/release/typsmthng_${version}_${arch}.deb"
@@ -45,6 +45,6 @@ if command -v fpm >/dev/null 2>&1; then
   fpm -s dir -t rpm -n typsmthng -v "$version" -a "$rpm_arch" -p "$rpm_output" --license MIT \
     --description "Native GTK Typst editor and presentation studio" \
     --after-install "$stage/DEBIAN/postinst" --after-remove "$stage/DEBIAN/postrm" \
-    --depends gtk4 --depends gtksourceview5 --depends librsvg2 \
+    --depends gtk4 --depends gtksourceview5 --depends librsvg2 --depends adwaita-icon-theme \
     -C "$stage" usr/bin usr/lib usr/share
 fi

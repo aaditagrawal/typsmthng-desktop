@@ -111,6 +111,18 @@ impl PresentationController {
         self.refresh();
     }
 
+    pub fn has_inline_note(&self, expected: &str) -> bool {
+        self.inline_notes
+            .borrow()
+            .iter()
+            .any(|note| note.contains(expected))
+    }
+
+    pub fn set_inline_notes(&self, notes: Vec<String>) {
+        self.inline_notes.replace(notes);
+        self.refresh();
+    }
+
     pub fn page_count(&self) -> usize {
         self.pages.borrow().len()
     }

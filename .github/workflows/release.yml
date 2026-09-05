@@ -9,6 +9,11 @@ on:
         description: Version without the v prefix
         required: true
         type: string
+      macos_signing:
+        description: "macOS signing (unsigned uses ad-hoc signatures without notarization)"
+        type: choice
+        options: [unsigned, signed]
+        default: unsigned
 
 permissions:
   contents: write
@@ -23,12 +28,16 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      macos_signing: ${{ steps.version.outputs.macos_signing }}
     steps:
       - uses: actions/checkout@v6
       - id: version
+        env:
+          RAW_VERSION: ${{ inputs.version || github.ref_name }}
+          REQUESTED_SIGNING: ${{ inputs.macos_signing }}
         shell: bash
         run: |
-          version="${{ inputs.version || github.ref_name }}"
+          version="$RAW_VERSION"
           version="${version#v}"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || exit 1
           manifest_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' native/gtk/Cargo.toml | head -1)"
@@ -37,6 +46,10 @@ jobs:
           [[ "$version" == *-* ]] && prerelease=true
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          signing="${REQUESTED_SIGNING:-signed}"
+          if [[ -z "$REQUESTED_SIGNING" && "$version" == "0.2.0" ]]; then signing=unsigned; fi
+          [[ "$signing" == signed || "$signing" == unsigned ]] || exit 1
+          echo "macos_signing=$signing" >> "$GITHUB_OUTPUT"
 
   linux:
     needs: preflight
@@ -49,7 +62,7 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev librsvg2-common ruby-dev rpm libfuse2 flatpak flatpak-builder xvfb dbus-x11
+          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev librsvg2-common adwaita-icon-theme ruby-dev rpm libfuse2 flatpak flatpak-builder xvfb dbus-x11
           sudo gem install --no-document fpm
           sudo curl -fsSL -o /usr/local/bin/linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
           echo 'c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  /usr/local/bin/linuxdeploy' | sha256sum -c -
@@ -59,9 +72,8 @@ jobs:
           sudo chmod +x /usr/local/bin/linuxdeploy-plugin-gtk
       - name: Bundle Typst
         run: |
-          curl -fsSL -o /tmp/typst.tar.xz https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz
-          tar -xJf /tmp/typst.tar.xz -C /tmp
-          sudo install -m755 /tmp/typst-x86_64-unknown-linux-musl/typst /usr/local/bin/typst
+          packaging/download-typst.sh x86_64-unknown-linux-musl /tmp/typst-dist
+          sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
       - name: Tests and packages
         run: |
           cargo test --locked --manifest-path native/gtk/Cargo.toml --all-targets
@@ -73,9 +85,13 @@ jobs:
           dpkg-deb --info build/release/*.deb >/dev/null
           rpm -qip build/release/*.rpm >/dev/null
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48
-          flatpak-builder --force-clean --repo=build/flatpak-repo build/flatpak-build packaging/flatpak/dev.typsmthng.Typsmthng.yml
-          flatpak build-bundle build/flatpak-repo "build/release/typsmthng_${{ needs.preflight.outputs.version }}_linux_x64.flatpak" dev.typsmthng.Typsmthng
+          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//24.08
+          flatpak_work="$(mktemp -d)"
+          trap 'rm -rf "$flatpak_work"' EXIT
+          mkdir -p "$flatpak_work/source"
+          git archive HEAD | tar -x -C "$flatpak_work/source"
+          flatpak-builder --force-clean --repo="$flatpak_work/repo" "$flatpak_work/build" "$flatpak_work/source/packaging/flatpak/dev.typsmthng.Typsmthng.yml"
+          flatpak build-bundle "$flatpak_work/repo" "build/release/typsmthng_${{ needs.preflight.outputs.version }}_linux_x64.flatpak" dev.typsmthng.Typsmthng
       - uses: actions/upload-artifact@v5
         with:
           name: release-linux-x64
@@ -98,13 +114,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - run: |
-          brew install gtk4 gtksourceview5 adwaita-icon-theme dylibbundler create-dmg
+          brew install gtk4 gtksourceview5 adwaita-icon-theme dylibbundler
           machine="$(uname -m)"
           [[ "$machine" == "arm64" ]] && machine="aarch64"
-          curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v0.15.1/typst-${machine}-apple-darwin.tar.xz"
-          tar -xJf /tmp/typst.tar.xz -C /tmp
-          sudo install -m755 "/tmp/typst-${machine}-apple-darwin/typst" /usr/local/bin/typst
+          packaging/download-typst.sh "${machine}-apple-darwin" /tmp/typst-dist
+          sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
       - name: Import signing certificate
+        if: needs.preflight.outputs.macos_signing == 'signed'
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -122,12 +138,14 @@ jobs:
       - name: Build and bundle
         env:
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_SIGNING_MODE: ${{ needs.preflight.outputs.macos_signing }}
         run: packaging/macos/bundle.sh "${{ needs.preflight.outputs.version }}" "${{ matrix.arch }}"
       - name: Verify packaged application
         run: |
           build/release/typsmthng.app/Contents/MacOS/typsmthng --smoke-test
           codesign --verify --deep --strict --verbose=2 build/release/typsmthng.app
       - name: Notarize and staple
+        if: needs.preflight.outputs.macos_signing == 'signed'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -140,6 +158,8 @@ jobs:
           xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
+      - name: Verify disk image integrity
+        run: hdiutil verify "build/release/typsmthng-${{ needs.preflight.outputs.version }}-macos-${{ matrix.arch }}.dmg"
       - uses: actions/upload-artifact@v5
         with:
           name: release-macos-${{ matrix.arch }}
@@ -158,12 +178,14 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
       - uses: msys2/setup-msys2@v2
+        id: msys2
         with:
           msystem: MINGW64
           update: true
           install: >-
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-adwaita-icon-theme
             mingw-w64-x86_64-gtksourceview5
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-nsis
@@ -175,28 +197,21 @@ jobs:
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
           "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
-          curl -fsSL -o /tmp/typst.zip https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-pc-windows-msvc.zip
-          unzip -q /tmp/typst.zip -d /tmp
-          cp /tmp/typst-x86_64-pc-windows-msvc/typst.exe target/x86_64-pc-windows-gnu/release/typst.exe
+          packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/release
           export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
           timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
           timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
           "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
       - name: Collect GTK runtime
+        env:
+          TYPSMTHNG_MINGW_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\mingw64
         shell: pwsh
         run: packaging/windows/collect-runtime.ps1
       - name: Installer
         run: makensis -DVERSION="${{ needs.preflight.outputs.version }}" packaging/windows/installer.nsi
-      - name: Verify installed application
+      - name: Verify install, upgrade, uninstall, and unrelated file preservation
         shell: pwsh
-        run: |
-          $installer = (Resolve-Path "build/release/typsmthng-windows-x64.exe").Path
-          $process = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -Wait
-          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
-          $binary = Join-Path $env:LOCALAPPDATA "typsmthng/bin/typsmthng.exe"
-          if (!(Test-Path $binary)) { throw "Installed binary is missing" }
-          $smoke = Start-Process -FilePath $binary -ArgumentList "--smoke-test" -PassThru -Wait
-          if ($smoke.ExitCode -ne 0) { throw "Installed smoke test exited with $($smoke.ExitCode)" }
+        run: packaging/windows/test-installer.ps1
       - uses: actions/upload-artifact@v5
         with:
           name: release-windows-x64
@@ -207,21 +222,45 @@ jobs:
     needs: [preflight, linux, macos, windows]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
           pattern: release-*
           merge-multiple: true
-      - name: Checksums
-        run: cd artifacts && sha256sum * > SHA256SUMS
+      - name: Verify complete artifact set and generate checksums
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          cd artifacts
+          for asset in \
+            "typsmthng_${VERSION}_amd64.deb" \
+            "typsmthng_${VERSION}_x86_64.rpm" \
+            "typsmthng-$VERSION-linux-x64.AppImage" \
+            "typsmthng_${VERSION}_linux_x64.flatpak" \
+            "typsmthng-$VERSION-macos-arm64.dmg" \
+            "typsmthng-$VERSION-macos-x64.dmg" \
+            "typsmthng-windows-x64.exe"; do
+            test -s "$asset" || { echo "Missing release artifact: $asset" >&2; exit 1; }
+          done
+          sha256sum -- *.deb *.rpm *.AppImage *.flatpak *.dmg *.exe > SHA256SUMS
+          sha256sum -c SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=(--generate-notes --target "${{ github.sha }}")
+          version="${{ needs.preflight.outputs.version }}"
+          title="v$version"
+          [[ "$version" != "0.2.0" ]] || title="v0.2.0 - G(TK)ood things come to those who wait"
+          notes="releases/v$version.md"
+          test -f "$notes"
+          if [[ "${{ needs.preflight.outputs.macos_signing }}" == unsigned ]]; then
+            printf '\nmacOS builds are unsigned (ad-hoc signed) and are not notarized by Apple.\n' >> "$notes"
+          fi
+          flags=(--notes-file "$notes" --title "$title" --target "${{ github.sha }}")
           if [[ "${{ needs.preflight.outputs.prerelease }}" == "true" ]]; then
             flags+=(--prerelease)
           else
             flags+=(--latest)
           fi
-          gh release create "v${{ needs.preflight.outputs.version }}" artifacts/* "${flags[@]}"
+          gh release create "v$version" artifacts/* --repo "${{ github.repository }}" "${flags[@]}"
