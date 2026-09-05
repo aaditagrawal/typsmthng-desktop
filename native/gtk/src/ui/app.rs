@@ -90,6 +90,7 @@ struct AppController {
     workspace: RefCell<Option<WorkspaceView>>,
     presentation: RefCell<Option<PresentationController>>,
     settings: RefCell<UiSettings>,
+    system_prefers_dark: bool,
     hidden_files: RefCell<bool>,
     render_cache: RefCell<Option<tempfile::TempDir>>,
     watcher: RefCell<Option<ExternalWatcher>>,
@@ -106,17 +107,37 @@ struct CompileFinished {
 
 impl AppController {
     fn build(application: &gtk::Application, options: LaunchOptions) -> Rc<Self> {
-        let state_store = StateStore::discover().ok();
-        let backend_settings = state_store
-            .as_ref()
-            .and_then(|store| store.load_settings().ok())
-            .unwrap_or_default();
-        let window_state = state_store
-            .as_ref()
-            .and_then(|store| store.load_metadata().ok())
-            .map(|metadata| metadata.window_state)
-            .unwrap_or_default();
+        let mut startup_errors = Vec::new();
+        let state_store = match StateStore::discover() {
+            Ok(store) => Some(store),
+            Err(error) => {
+                startup_errors.push(format!("State storage: {error}"));
+                None
+            }
+        };
+        let backend_settings = match state_store.as_ref().map(StateStore::load_settings) {
+            Some(Ok(settings)) => settings,
+            Some(Err(error)) => {
+                startup_errors.push(format!("Settings: {error}"));
+                UserSettings::default()
+            }
+            None => UserSettings::default(),
+        };
+        let window_state = match state_store.as_ref().map(StateStore::load_metadata) {
+            Some(Ok(metadata)) => metadata.window_state,
+            Some(Err(error)) => {
+                startup_errors.push(format!("Project history: {error}"));
+                BackendWindowState::default()
+            }
+            None => BackendWindowState::default(),
+        };
         let settings = settings_from_backend(&backend_settings);
+        let system_prefers_dark = gtk::Settings::default().is_some_and(|gtk_settings| {
+            gtk_settings.is_gtk_application_prefer_dark_theme()
+                || gtk_settings
+                    .gtk_theme_name()
+                    .is_some_and(|name| name.to_ascii_lowercase().contains("dark"))
+        });
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("typsmthng")
@@ -143,6 +164,7 @@ impl AppController {
             workspace: RefCell::new(None),
             presentation: RefCell::new(None),
             settings: RefCell::new(settings.clone()),
+            system_prefers_dark,
             hidden_files: RefCell::new(false),
             render_cache: RefCell::new(None),
             watcher: RefCell::new(None),
@@ -161,15 +183,19 @@ impl AppController {
             .as_ref()
             .unwrap()
             .apply_settings(settings.clone());
-        if let Some(gtk_settings) = gtk::Settings::default() {
-            gtk_settings.set_gtk_application_prefer_dark_theme(settings.theme == Theme::Dark);
-        }
+        controller.apply_theme(settings.theme);
         if settings.translucent {
             controller.window.add_css_class("translucent");
         }
         controller.window.present();
         if window_state.maximized {
             controller.window.maximize();
+        }
+        if !startup_errors.is_empty() {
+            controller.show_error(
+                "Some application data could not be loaded",
+                &startup_errors.join("\n"),
+            );
         }
         {
             let weak = Rc::downgrade(&controller);
@@ -265,13 +291,15 @@ impl AppController {
             toggle_favorite: callback1(&weak, Self::toggle_favorite),
             remove_recent: callback1(&weak, Self::remove_recent),
             rename_recent: callback1(&weak, Self::rename_recent),
-            import_project: callback0(&weak, Self::import_project_archive),
+            import_project: callback0(&weak, Self::show_import_options),
             export_all: callback0(&weak, Self::export_all_projects),
+            export_selected: callback1(&weak, Self::export_selected_projects),
             create_from_template: callback0(&weak, Self::create_from_template),
             create_workspace: callback0(&weak, Self::create_workspace),
             select_workspace: callback1(&weak, Self::select_workspace),
             manage_workspace: callback0(&weak, Self::manage_workspace),
             assign_workspace: callback1(&weak, Self::assign_project_workspace),
+            assign_selected_workspace: callback1(&weak, Self::assign_projects_workspace),
         });
         self.stack.add_named(&home.root, Some("home"));
         self.home.replace(Some(home));
@@ -287,7 +315,7 @@ impl AppController {
                 create_file: callback0(&weak, Self::prompt_create_file),
                 create_folder: callback0(&weak, Self::prompt_create_folder),
                 import_files: callback0(&weak, Self::import_files),
-                drop_files: callback1(&weak, Self::import_paths),
+                drop_files: callback1(&weak, Self::import_paths_at),
                 move_path: callback1(&weak, Self::move_path),
                 toggle_hidden: callback0(&weak, Self::toggle_hidden),
                 rename_path: callback1(&weak, Self::rename_path),
@@ -295,6 +323,7 @@ impl AppController {
                 trash_path: callback1(&weak, Self::trash_path),
                 reveal_path: callback1(&weak, Self::reveal_path),
                 open_external: callback1(&weak, Self::open_external),
+                preview_asset: callback1(&weak, Self::preview_asset),
                 check_update: callback0(&weak, Self::check_update),
                 export_pdf: callback0(&weak, Self::export_pdf),
                 export_project: callback0(&weak, Self::export_current_project),
@@ -314,12 +343,11 @@ impl AppController {
         );
         self.stack.add_named(&workspace.root, Some("workspace"));
         self.workspace.replace(Some(workspace));
-        let save_note: Rc<dyn Fn(usize, String)> = {
+        let save_note: Rc<dyn Fn(usize, String) -> bool> = {
             let weak = weak.clone();
             Rc::new(move |slide, text| {
-                if let Some(this) = weak.upgrade() {
-                    this.save_presentation_note(slide, &text);
-                }
+                weak.upgrade()
+                    .is_some_and(|this| this.save_presentation_note(slide, &text))
             })
         };
         let save_note_font_size: Rc<dyn Fn(u32)> = {
@@ -367,6 +395,11 @@ impl AppController {
                 workspace.present_search();
             }
         });
+        self.add_action("find", &["<Primary>f", "<Primary>h"], |this| {
+            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                workspace.present_document_search();
+            }
+        });
         self.add_action("settings", &["<Primary>comma"], Self::show_settings);
         self.add_action("sidebar", &["<Primary>backslash"], |this| {
             if let Some(workspace) = this.workspace.borrow().as_ref() {
@@ -384,7 +417,9 @@ impl AppController {
             }
         });
         self.add_action("cycle-theme", &["<Primary>j"], Self::cycle_theme);
-        self.add_action("quit", &["<Primary>q"], |this| this.application.quit());
+        self.add_action("quit", &["<Primary>q"], |this| {
+            this.window.close();
+        });
         self.add_action(
             "present",
             &["F5", "<Primary><Shift>p"],
@@ -408,12 +443,15 @@ impl AppController {
                     {
                         return glib::Propagation::Stop;
                     }
+                    if let Some(presentation) = this.presentation.borrow().as_ref() {
+                        if !presentation.end() {
+                            return glib::Propagation::Stop;
+                        }
+                    }
                     if let Some(store) = &this.state_store {
                         let _ = store.save_window_state(BackendWindowState {
                             width: this.window.width(),
                             height: this.window.height(),
-                            x: None,
-                            y: None,
                             maximized: this.window.is_maximized(),
                         });
                     }
@@ -448,7 +486,15 @@ impl AppController {
             }
         }
         if let Some(presentation) = self.presentation.borrow().as_ref() {
-            presentation.end();
+            if !presentation.end() {
+                return;
+            }
+        }
+        self.compile_generation
+            .set(self.compile_generation.get().wrapping_add(1));
+        self.pending_compile_source.replace(None);
+        if let Some(workspace) = self.workspace.borrow().as_ref() {
+            workspace.cancel_pending_compile();
         }
         self.project.replace(None);
         self.current_file.replace(None);
@@ -510,13 +556,15 @@ impl AppController {
                     .or_else(|| recent.and_then(|item| item.last_file_path))
                     .or_else(|| project.resolve_main_file(None).ok());
                 if let Some(store) = &self.state_store {
-                    let _ = store.upsert_recent(
+                    if let Err(error) = store.upsert_recent(
                         project.root(),
                         project.name(),
                         count,
                         main.clone(),
                         true,
-                    );
+                    ) {
+                        self.show_error("Could not update project history", &error.to_string());
+                    }
                 }
                 let rows = entries
                     .iter()
@@ -639,7 +687,10 @@ impl AppController {
             Ok(file) => {
                 self.current_file.replace(Some(path.clone()));
                 if let Some(store) = &self.state_store {
-                    let _ = store.persist_last_file(project.root(), Some(path.clone()));
+                    if let Err(error) = store.persist_last_file(project.root(), Some(path.clone()))
+                    {
+                        self.show_error("Could not update project history", &error.to_string());
+                    }
                 }
                 match file.content {
                     FileContent::Text(contents) => {
@@ -833,12 +884,34 @@ impl AppController {
 
     fn compile_options(&self) -> CompileOptions {
         let settings = self.settings.borrow();
-        let page_preamble = match settings.page_size.as_str() {
-            "a3" | "a4" | "a5" | "a6" | "us-letter" | "us-legal" | "iso-b5" => {
-                Some(format!("#set page(paper: \"{}\")", settings.page_size))
+        let owns_layout = self.project.borrow().as_ref().is_some_and(|project| {
+            project_layout_locked(project)
+                || project
+                    .resolve_main_file(self.current_file.borrow().as_deref())
+                    .ok()
+                    .and_then(|main| project.read_file(main).ok())
+                    .and_then(|file| match file.content {
+                        FileContent::Text(source) => Some(source),
+                        FileContent::Binary(_) => None,
+                    })
+                    .is_some_and(|source| {
+                        source
+                            .lines()
+                            .any(|line| line.trim_start().starts_with("#set page("))
+                    })
+        });
+        let page_preamble = if owns_layout {
+            None
+        } else {
+            match settings.page_size.as_str() {
+                "a3" | "a4" | "a5" | "a6" | "us-letter" | "us-legal" | "iso-b5" => {
+                    Some(format!("#set page(paper: \"{}\")", settings.page_size))
+                }
+                "presentation-16-9" => {
+                    Some("#set page(width: 13.333in, height: 7.5in)".to_string())
+                }
+                _ => None,
             }
-            "presentation-16-9" => Some("#set page(width: 13.333in, height: 7.5in)".to_string()),
-            _ => None,
         };
         CompileOptions {
             ignore_system_fonts: !settings.system_fonts,
@@ -983,18 +1056,9 @@ impl AppController {
         let sidecar = format!("{}.notes.md", current.trim_end_matches(".typ"));
         if let Ok(file) = project.read_file(&sidecar) {
             if let FileContent::Text(text) = file.content {
-                let mut slide = None;
-                for line in text.lines() {
-                    if let Some(number) = line
-                        .strip_prefix("## Slide ")
-                        .and_then(|value| value.trim().parse::<usize>().ok())
-                    {
-                        slide = number.checked_sub(1).filter(|index| *index < page_count);
-                    } else if let Some(index) = slide {
-                        if !sidecar_notes[index].is_empty() {
-                            sidecar_notes[index].push('\n');
-                        }
-                        sidecar_notes[index].push_str(line);
+                for (number, note) in parse_note_sections(&text) {
+                    if let Some(index) = number.checked_sub(1).filter(|index| *index < page_count) {
+                        sidecar_notes[index] = note;
                     }
                 }
             }
@@ -1015,12 +1079,16 @@ impl AppController {
         (inline_notes, sidecar_notes)
     }
 
-    fn save_presentation_note(&self, slide: usize, text: &str) {
+    fn save_presentation_note(&self, slide: usize, text: &str) -> bool {
         let (Some(project), Some(current)) = (
             self.project.borrow().as_ref().cloned(),
             self.compiled_main.borrow().clone(),
         ) else {
-            return;
+            self.show_error(
+                "Could not save speaker notes",
+                "There is no open Typst project to receive this note.",
+            );
+            return false;
         };
         let sidecar = format!("{}.notes.md", current.trim_end_matches(".typ"));
         let existing = project
@@ -1038,14 +1106,14 @@ impl AppController {
             sections.insert(slide + 1, text.trim().to_string());
         }
         if sections.is_empty() && existing.is_empty() {
-            return;
+            return true;
         }
-        let markdown = sections
-            .into_iter()
-            .map(|(number, note)| format!("## Slide {number}\n\n{note}\n"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let _ = project.write_text_atomic(&sidecar, &markdown);
+        let markdown = serialize_note_sections(&sections, &project.name());
+        if let Err(error) = project.write_text_atomic(&sidecar, &markdown) {
+            self.show_error("Could not save speaker notes", &error.to_string());
+            return false;
+        }
+        true
     }
 
     fn persist_presentation_note_font_size(&self, size: u32) {
@@ -1327,50 +1395,33 @@ impl AppController {
     }
 
     fn import_paths(&self, paths: Vec<PathBuf>) {
+        self.import_paths_at((paths, String::new()));
+    }
+
+    fn import_paths_at(&self, (paths, target_directory): (Vec<PathBuf>, String)) {
         let Some(project) = self.project.borrow().clone() else {
             return;
         };
         let mut conversion_warnings = Vec::new();
+        let mut import_errors = Vec::new();
         for path in paths {
             let Some(name) = path.file_name() else {
                 continue;
             };
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if extension == "tex" || extension == "ltx" {
-                match std::fs::read_to_string(&path) {
-                    Ok(source) => {
-                        let converted = convert_latex_to_typst(&source);
-                        conversion_warnings.extend(
-                            converted.warnings.iter().map(|warning| {
-                                format!("{}: {}", warning.construct, warning.message)
-                            }),
-                        );
-                        let source_target = unique_project_path(&project, Path::new(name));
-                        let target =
-                            unique_project_path(&project, &source_target.with_extension("typ"));
-                        let result = project
-                            .create_binary_file(&source_target, source.as_bytes())
-                            .and_then(|_| project.write_text_atomic(&target, &converted.typst));
-                        if let Err(error) = result {
-                            self.show_error("Could not import LaTeX", &error.to_string());
-                        }
-                    }
-                    Err(error) => self.show_error("Could not import LaTeX", &error.to_string()),
-                }
-            } else if path.is_file() {
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        let target = unique_project_path(&project, Path::new(name));
-                        if let Err(error) = project.create_binary_file(&target, &bytes) {
-                            self.show_error("Could not import file", &error.to_string());
-                        }
-                    }
-                    Err(error) => self.show_error("Could not import file", &error.to_string()),
-                }
+            let base = unique_project_path(&project, &Path::new(&target_directory).join(name));
+            if path.is_dir()
+                && path.canonicalize().is_ok_and(|source| {
+                    source.starts_with(project.root()) || project.root().starts_with(source)
+                })
+            {
+                import_errors.push(format!(
+                    "{}: cannot recursively import a project into itself",
+                    path.display()
+                ));
+                continue;
+            }
+            if let Err(error) = import_path_tree(&project, &path, &base, &mut conversion_warnings) {
+                import_errors.push(format!("{}: {error}", path.display()));
             }
         }
         self.refresh_project_files();
@@ -1384,13 +1435,21 @@ impl AppController {
                 ),
             );
         }
+        if !import_errors.is_empty() {
+            self.show_error(
+                "Some files could not be imported",
+                &import_errors.join("\n"),
+            );
+        }
     }
 
     fn toggle_hidden(&self) {
         let value = !*self.hidden_files.borrow();
         self.hidden_files.replace(value);
         if let (Some(store), Some(project)) = (&self.state_store, self.project.borrow().as_ref()) {
-            let _ = store.set_hidden_files_visible(project.root(), value);
+            if let Err(error) = store.set_hidden_files_visible(project.root(), value) {
+                self.show_error("Could not save hidden-file setting", &error.to_string());
+            }
         }
         self.refresh_project_files();
     }
@@ -1517,11 +1576,13 @@ impl AppController {
             return;
         };
         let target = project.root().join(path);
-        let folder = if target.is_dir() {
-            target
-        } else {
-            target.parent().unwrap_or(project.root()).to_path_buf()
-        };
+        if reveal_in_file_manager(&target) {
+            return;
+        }
+        let folder = target
+            .parent()
+            .unwrap_or_else(|| project.root())
+            .to_path_buf();
         let uri = gio::File::for_path(folder).uri();
         if let Err(error) =
             gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
@@ -1539,6 +1600,17 @@ impl AppController {
             gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
         {
             self.show_error("Could not open path", &error.to_string());
+        }
+    }
+
+    fn preview_asset(&self, path: String) {
+        let Some(project) = self.project.borrow().as_ref().cloned() else {
+            return;
+        };
+        if let Some(workspace) = self.workspace.borrow().as_ref() {
+            if workspace.save_before_navigation() {
+                workspace.show_binary_file(&project.root().join(path));
+            }
         }
     }
 
@@ -1730,15 +1802,45 @@ impl AppController {
         let Some(project) = self.project.borrow().clone() else {
             return;
         };
-        if let Some(workspace) = self.workspace.borrow().as_ref() {
-            if !workspace.save_before_navigation() {
+        let entries = match project.entries(*self.hidden_files.borrow()) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.show_error("Could not refresh project", &error.to_string());
                 return;
             }
+        };
+        let main = project
+            .resolve_main_file(self.current_file.borrow().as_deref())
+            .ok();
+        let rows = entries
+            .iter()
+            .map(|entry| FileRow {
+                path: entry.path.clone(),
+                name: entry.name.clone(),
+                depth: entry.path.matches('/').count(),
+                is_directory: entry.kind == EntryKind::Directory,
+                is_binary: entry.is_binary,
+                is_main: main.as_deref() == Some(entry.path.as_str()),
+            })
+            .collect::<Vec<_>>();
+        if let Some(workspace) = self.workspace.borrow().as_ref() {
+            workspace.set_project(&project.name(), &rows);
         }
-        // Drop the RefCell guard before `open_project` selects the file and
-        // mutates `current_file`. Watcher-driven refreshes otherwise panic.
-        let current_file = self.current_file.borrow().clone();
-        self.open_project(project.root(), current_file);
+        if let Some(store) = &self.state_store {
+            let count = entries
+                .iter()
+                .filter(|entry| entry.kind == EntryKind::File)
+                .count();
+            if let Err(error) = store.upsert_recent(
+                project.root(),
+                project.name(),
+                count,
+                self.current_file.borrow().clone(),
+                true,
+            ) {
+                self.show_error("Could not update project history", &error.to_string());
+            }
+        }
     }
 
     fn poll_external_changes(&self) {
@@ -1768,13 +1870,42 @@ impl AppController {
                         | ExternalEventKind::Renamed
                 )
             {
-                if dirty {
+                if let Some(destination) = event.renamed_to.as_ref() {
+                    self.current_file.replace(Some(destination.clone()));
+                    let disk = self.project.borrow().as_ref().and_then(|project| {
+                        project
+                            .read_file(destination)
+                            .ok()
+                            .and_then(|file| match file.content {
+                                FileContent::Text(text) => Some(text),
+                                FileContent::Binary(_) => None,
+                            })
+                    });
+                    self.disk_baseline
+                        .replace(disk.map(|source| (destination.clone(), source)));
+                    if let Some(workspace) = self.workspace.borrow().as_ref() {
+                        workspace.set_current_path(destination);
+                    }
+                    if let (Some(store), Some(project)) =
+                        (&self.state_store, self.project.borrow().as_ref())
+                    {
+                        if let Err(error) =
+                            store.persist_last_file(project.root(), Some(destination.clone()))
+                        {
+                            self.show_error("Could not update project history", &error.to_string());
+                        }
+                    }
+                    refresh_tree = true;
+                } else if dirty {
                     if let Some(workspace) = self.workspace.borrow().as_ref() {
                         workspace.show_conflict(&event.path);
                     }
                 } else if event.kind == ExternalEventKind::Changed {
                     self.select_file(event.path);
-                } else if event.kind == ExternalEventKind::Removed {
+                } else if matches!(
+                    event.kind,
+                    ExternalEventKind::Removed | ExternalEventKind::Renamed
+                ) {
                     self.current_file.replace(None);
                     self.disk_baseline.replace(None);
                     refresh_tree = true;
@@ -1800,9 +1931,7 @@ impl AppController {
 
     fn settings_changed(&self, settings: UiSettings) {
         self.settings.replace(settings.clone());
-        if let Some(gtk_settings) = gtk::Settings::default() {
-            gtk_settings.set_gtk_application_prefer_dark_theme(settings.theme == Theme::Dark);
-        }
+        self.apply_theme(settings.theme);
         if settings.translucent {
             self.window.add_css_class("translucent");
         } else {
@@ -1812,7 +1941,9 @@ impl AppController {
             workspace.apply_settings(settings.clone());
         }
         if let Some(store) = &self.state_store {
-            let _ = store.save_settings(&settings_to_backend(&settings));
+            if let Err(error) = store.save_settings(&settings_to_backend(&settings)) {
+                self.show_error("Could not save settings", &error.to_string());
+            }
         }
         if self.project.borrow().is_some() {
             if let Some(workspace) = self.workspace.borrow().as_ref() {
@@ -1833,6 +1964,16 @@ impl AppController {
         self.settings_changed(settings);
     }
 
+    fn apply_theme(&self, theme: Theme) {
+        if let Some(gtk_settings) = gtk::Settings::default() {
+            gtk_settings.set_gtk_application_prefer_dark_theme(match theme {
+                Theme::Dark => true,
+                Theme::Light => false,
+                Theme::System => self.system_prefers_dark,
+            });
+        }
+    }
+
     fn show_settings(&self) {
         if let Some(workspace) = self.workspace.borrow().as_ref() {
             workspace.present_settings();
@@ -1841,14 +1982,20 @@ impl AppController {
 
     fn toggle_favorite(&self, path: String) {
         if let Some(store) = &self.state_store {
-            let _ = store.toggle_favorite(Path::new(&path));
+            if let Err(error) = store.toggle_favorite(Path::new(&path)) {
+                self.show_error("Could not update favorite", &error.to_string());
+                return;
+            }
         }
         self.refresh_recents();
     }
 
     fn remove_recent(&self, path: String) {
         if let Some(store) = &self.state_store {
-            let _ = store.remove_recent(Path::new(&path));
+            if let Err(error) = store.remove_recent(Path::new(&path)) {
+                self.show_error("Could not remove recent project", &error.to_string());
+                return;
+            }
         }
         self.refresh_recents();
     }
@@ -1893,8 +2040,10 @@ impl AppController {
                 .ok()
                 .and_then(|metadata| metadata.selected_home_workspace_id);
             if current != selected {
-                let _ = store.select_workspace(selected);
-                self.refresh_recents();
+                match store.select_workspace(selected) {
+                    Ok(_) => self.refresh_recents(),
+                    Err(error) => self.show_error("Could not select workspace", &error.to_string()),
+                }
             }
         }
     }
@@ -1951,11 +2100,22 @@ impl AppController {
     }
 
     fn assign_project_workspace(&self, path: String) {
+        self.assign_projects_workspace(vec![path]);
+    }
+
+    fn assign_projects_workspace(&self, paths: Vec<String>) {
+        if paths.is_empty() {
+            return;
+        }
         let Some(store) = &self.state_store else {
             return;
         };
-        let Ok(metadata) = store.load_metadata() else {
-            return;
+        let metadata = match store.load_metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                self.show_error("Could not load workspaces", &error.to_string());
+                return;
+            }
         };
         let mut ids = vec![None];
         let mut labels = vec!["No workspace".to_string()];
@@ -1983,7 +2143,20 @@ impl AppController {
                 if let Some(this) = weak.upgrade() {
                     if let Some(store) = &this.state_store {
                         let selected = ids.get(picker.selected() as usize).cloned().flatten();
-                        let _ = store.assign_workspace(Path::new(&path), selected);
+                        let mut failures = Vec::new();
+                        for path in &paths {
+                            if let Err(error) =
+                                store.assign_workspace(Path::new(path), selected.clone())
+                            {
+                                failures.push(format!("{path}: {error}"));
+                            }
+                        }
+                        if !failures.is_empty() {
+                            this.show_error(
+                                "Some projects could not be moved",
+                                &failures.join("\n"),
+                            );
+                        }
                     }
                     this.refresh_recents();
                 }
@@ -1991,6 +2164,144 @@ impl AppController {
             dialog.close();
         });
         dialog.present();
+    }
+
+    fn show_import_options(&self) {
+        let dialog = gtk::MessageDialog::builder()
+            .title("Import project")
+            .transient_for(&self.window)
+            .modal(true)
+            .buttons(gtk::ButtonsType::None)
+            .text("Choose an import source")
+            .secondary_text("Archives preserve complete projects. LaTeX files and folders are converted to editable Typst while their assets are copied alongside them.")
+            .build();
+        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+        dialog.add_button("Archive…", gtk::ResponseType::Other(1));
+        dialog.add_button("LaTeX files…", gtk::ResponseType::Other(2));
+        dialog.add_button("LaTeX folder…", gtk::ResponseType::Other(3));
+        let weak = self.weak();
+        dialog.connect_response(move |dialog, response| {
+            dialog.close();
+            if let Some(this) = weak.upgrade() {
+                match response {
+                    gtk::ResponseType::Other(1) => this.import_project_archive(),
+                    gtk::ResponseType::Other(2) => this.choose_latex_files(),
+                    gtk::ResponseType::Other(3) => this.choose_latex_folder(),
+                    _ => {}
+                }
+            }
+        });
+        dialog.present();
+    }
+
+    fn choose_latex_files(&self) {
+        let chooser = gtk::FileChooserNative::builder()
+            .title("Choose LaTeX files and assets")
+            .transient_for(&self.window)
+            .action(gtk::FileChooserAction::Open)
+            .accept_label("Continue")
+            .cancel_label("Cancel")
+            .build();
+        chooser.set_select_multiple(true);
+        chooser.connect_response({
+            let weak = self.weak();
+            move |chooser, response| {
+                if response == gtk::ResponseType::Accept {
+                    if let Some(this) = weak.upgrade() {
+                        let files = chooser.files();
+                        let paths = (0..files.n_items())
+                            .filter_map(|index| files.item(index))
+                            .filter_map(|item| item.downcast::<gio::File>().ok())
+                            .filter_map(|file| file.path())
+                            .collect::<Vec<_>>();
+                        this.choose_latex_import_destination(paths);
+                    }
+                }
+                chooser.destroy();
+            }
+        });
+        chooser.show();
+    }
+
+    fn choose_latex_folder(&self) {
+        let chooser = gtk::FileChooserNative::builder()
+            .title("Choose a LaTeX project folder")
+            .transient_for(&self.window)
+            .action(gtk::FileChooserAction::SelectFolder)
+            .accept_label("Continue")
+            .cancel_label("Cancel")
+            .build();
+        chooser.connect_response({
+            let weak = self.weak();
+            move |chooser, response| {
+                if response == gtk::ResponseType::Accept {
+                    if let (Some(this), Some(path)) =
+                        (weak.upgrade(), chooser.file().and_then(|file| file.path()))
+                    {
+                        this.choose_latex_import_destination(vec![path]);
+                    }
+                }
+                chooser.destroy();
+            }
+        });
+        chooser.show();
+    }
+
+    fn choose_latex_import_destination(&self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        let chooser = gtk::FileChooserNative::builder()
+            .title("Choose destination parent folder")
+            .transient_for(&self.window)
+            .action(gtk::FileChooserAction::SelectFolder)
+            .accept_label("Import here")
+            .cancel_label("Cancel")
+            .build();
+        chooser.connect_response({
+            let weak = self.weak();
+            move |chooser, response| {
+                if response == gtk::ResponseType::Accept {
+                    if let (Some(this), Some(parent)) =
+                        (weak.upgrade(), chooser.file().and_then(|file| file.path()))
+                    {
+                        let paths = paths.clone();
+                        this.prompt_name(
+                            "Imported LaTeX project",
+                            "Project name",
+                            move |this, name| {
+                                let destination = parent.join(&name);
+                                if paths.iter().filter(|path| path.is_dir()).any(|path| {
+                                    path.canonicalize()
+                                        .is_ok_and(|source| destination.starts_with(source))
+                                }) {
+                                    this.show_error(
+                                        "Could not import LaTeX",
+                                        "The destination cannot be inside the source project.",
+                                    );
+                                    return;
+                                }
+                                match import_latex_sources(&paths, &parent, &name) {
+                                    Ok((project, warnings)) => {
+                                        this.open_project(project.root(), None);
+                                        if !warnings.is_empty() {
+                                            this.show_notice(
+                                                "LaTeX imported with warnings",
+                                                &warnings.join("\n"),
+                                            );
+                                        }
+                                    }
+                                    Err(error) => this
+                                        .show_error("Could not import LaTeX", &error.to_string()),
+                                }
+                            },
+                        );
+                    }
+                }
+                chooser.destroy();
+            }
+        });
+        chooser.show();
     }
 
     fn import_project_archive(&self) {
@@ -2108,14 +2419,45 @@ impl AppController {
     }
 
     fn export_all_projects(&self) {
+        let paths = match self.state_store.as_ref().map(StateStore::load_metadata) {
+            Some(Ok(metadata)) => metadata
+                .recent_projects
+                .into_iter()
+                .map(|project| project.root_path.to_string_lossy().into_owned())
+                .collect(),
+            Some(Err(error)) => {
+                self.show_error("Could not load project history", &error.to_string());
+                return;
+            }
+            None => Vec::new(),
+        };
+        self.export_projects_by_paths(
+            paths,
+            "Export all recent projects",
+            "typsmthng-all-projects.zip",
+        );
+    }
+
+    fn export_selected_projects(&self, paths: Vec<String>) {
+        self.export_projects_by_paths(
+            paths,
+            "Export selected projects",
+            "typsmthng-selected-projects.zip",
+        );
+    }
+
+    fn export_projects_by_paths(&self, paths: Vec<String>, title: &str, filename: &str) {
+        if paths.is_empty() {
+            return;
+        }
         let chooser = gtk::FileChooserNative::builder()
-            .title("Export all recent projects")
+            .title(title)
             .transient_for(&self.window)
             .action(gtk::FileChooserAction::Save)
             .accept_label("Export")
             .cancel_label("Cancel")
             .build();
-        chooser.set_current_name("typsmthng-all-projects.zip");
+        chooser.set_current_name(filename);
         chooser.connect_response({
             let weak = self.weak();
             move |chooser, response| {
@@ -2125,15 +2467,10 @@ impl AppController {
                     {
                         let mut projects = Vec::new();
                         let mut failures = Vec::new();
-                        if let Some(store) = &this.state_store {
-                            for recent in store.load_metadata().unwrap_or_default().recent_projects
-                            {
-                                match Project::open(&recent.root_path) {
-                                    Ok(project) => projects.push(project),
-                                    Err(error) => {
-                                        failures.push(format!("{}: {error}", recent.name))
-                                    }
-                                }
+                        for path in &paths {
+                            match Project::open(path) {
+                                Ok(project) => projects.push(project),
+                                Err(error) => failures.push(format!("{path}: {error}")),
                             }
                         }
                         if failures.is_empty() {
@@ -2296,29 +2633,42 @@ impl AppController {
             move |dialog, response| {
                 if response == gtk::ResponseType::Accept {
                     if let Some(this) = weak.upgrade() {
-                        let (source, auxiliary) = match choices.selected() {
+                        let (template_id, source, auxiliary, layout_locked) = match choices.selected() {
                             1 => (
+                                "article",
                                 "#set page(paper: \"a4\")\n#set text(size: 11pt)\n\n= Article title\n\nStart writing here.\n",
                                 Vec::new(),
+                                true,
                             ),
                             2 => (
+                                "slides-16-9",
                                 "#set page(width: 13.333in, height: 7.5in, margin: 0.7in)\n#set text(size: 28pt)\n\n= Presentation\n\n#pagebreak()\n\n= Next slide\n",
                                 Vec::new(),
+                                true,
                             ),
                             3 => (
+                                "report",
                                 "#set page(paper: \"a4\", margin: 25mm)\n#set text(size: 11pt)\n\n= Report\n\n== Summary\n",
                                 Vec::new(),
+                                true,
                             ),
                             _ => (
+                                "research-starter",
                                 "= Research Starter\n\n== Abstract\nSummarize your contribution, methods, and key findings.\n\n== Introduction\nDescribe the context, problem, and why the work matters.\n\n== Method\nExplain your approach, assumptions, and data.\n\n== Results\nReport your most relevant outcomes.\n\n== Discussion\nInterpret results, limits, and future work.\n\n== References\n#bibliography(\"refs.bib\")\n",
                                 vec![(
                                     "refs.bib".to_string(),
                                     "@article{sample2026,\n  title = {Replace with your first citation},\n  author = {Doe, Jane},\n  journal = {Journal Name},\n  year = {2026}\n}\n"
                                         .to_string(),
                                 )],
+                                false,
                             ),
                         };
-                        this.choose_builtin_template(source.to_string(), auxiliary);
+                        this.choose_builtin_template(
+                            template_id.to_string(),
+                            source.to_string(),
+                            auxiliary,
+                            layout_locked,
+                        );
                     }
                 }
                 dialog.close();
@@ -2327,7 +2677,13 @@ impl AppController {
         dialog.present();
     }
 
-    fn choose_builtin_template(&self, source: String, auxiliary: Vec<(String, String)>) {
+    fn choose_builtin_template(
+        &self,
+        template_id: String,
+        source: String,
+        auxiliary: Vec<(String, String)>,
+        layout_locked: bool,
+    ) {
         let chooser = gtk::FileChooserNative::builder()
             .title("Choose a parent folder")
             .transient_for(&self.window)
@@ -2344,6 +2700,7 @@ impl AppController {
                     {
                         let source = source.clone();
                         let auxiliary = auxiliary.clone();
+                        let template_id = template_id.clone();
                         this.prompt_name("Template project", "Project name", move |this, name| {
                             match Project::create(&parent, &name) {
                                 Ok(project) => {
@@ -2353,7 +2710,13 @@ impl AppController {
                                             for (path, contents) in &auxiliary {
                                                 project.write_text_atomic(path, contents)?;
                                             }
-                                            Ok(())
+                                            write_template_metadata(
+                                                &project,
+                                                "built-in",
+                                                &format!("built-in/{template_id}"),
+                                                "main.typ",
+                                                layout_locked,
+                                            )
                                         });
                                     match written {
                                         Ok(_) => this
@@ -2424,7 +2787,12 @@ impl AppController {
         let result_path = destination.clone();
         std::thread::spawn(move || {
             let result = TypstTool::detect().and_then(|tool| {
-                tool.init_template(&spec, &destination, &CompileOptions::default())
+                tool.init_template(&spec, &destination, &CompileOptions::default())?;
+                let project = Project::open(&destination)?;
+                let entrypoint = project
+                    .resolve_main_file(None)
+                    .unwrap_or_else(|_| "main.typ".into());
+                write_template_metadata(&project, "universe", &spec, &entrypoint, true)
             });
             let _ = sender.send(result.map(|()| result_path));
         });
@@ -2450,16 +2818,69 @@ impl AppController {
     }
 
     fn show_guide(&self) {
-        let dialog = gtk::MessageDialog::builder()
+        let guide = gtk::Window::builder()
+            .title("Guide — typsmthng")
             .transient_for(&self.window)
-            .modal(true)
-            .message_type(gtk::MessageType::Info)
-            .buttons(gtk::ButtonsType::Close)
-            .text("typsmthng quick guide")
-            .secondary_text("Open an ordinary folder containing Typst files. Edit with GtkSourceView, inspect the live page stack, search with Ctrl+K, compile with Ctrl+Enter, and present with F5. Presenter view uses a second GTK window and supports notes, timer, grid, blackout, laser, pen, highlighter, and eraser controls.")
+            .modal(false)
+            .hide_on_close(true)
+            .default_width(760)
+            .default_height(720)
             .build();
-        dialog.connect_response(|dialog, _| dialog.close());
-        dialog.present();
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let header = gtk::HeaderBar::new();
+        header.set_title_widget(Some(&gtk::Label::new(Some("typsmthng guide"))));
+        root.append(&header);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 20);
+        content.set_margin_top(28);
+        content.set_margin_bottom(36);
+        content.set_margin_start(32);
+        content.set_margin_end(32);
+        guide_section(
+            &content,
+            "HOW IT FITS TOGETHER",
+            "A file is an ordinary document or asset on disk. A project is the folder containing those files. A workspace is only an optional home-screen grouping; it never moves or owns project files.",
+        );
+        guide_section(
+            &content,
+            "GETTING STARTED",
+            "Create a blank project, use a built-in starter, initialize a template from Typst Universe, open an existing folder, or import a .typst/.zip archive. LaTeX imports accept individual files, whole directories, and archives while preserving relative assets. Conversion warnings identify constructs that still need review; custom packages, custom macros, and TikZ may require manual work.",
+        );
+        guide_section(
+            &content,
+            "THE EDITOR",
+            "GtkSourceView provides Typst highlighting, line numbers, matching brackets, auto-pairs, undo/redo, optional Vim input, wrapping, and automatic saves. Use Ctrl/Cmd+F or Ctrl/Cmd+H for document find and replace, Ctrl/Cmd+K for project files/content/commands, Ctrl/Cmd+/ to comment, Ctrl/Cmd+D to duplicate lines, and Ctrl/Cmd+S to save now.",
+        );
+        guide_section(
+            &content,
+            "WRITING TYPST",
+            "Start headings with =, emphasize with *bold* and _italic_, create lists with - item, insert images with #image(\"images/figure.png\"), and add citations with @key plus #bibliography(\"refs.bib\"). A project may use typst.toml, main.typ, or another selected .typ entrypoint.",
+        );
+        guide_section(
+            &content,
+            "PREVIEW AND DIAGNOSTICS",
+            "The right pane compiles through the native Typst CLI. Resize the split, zoom or fit pages, follow safe external links, and activate diagnostics to jump to their file and line. External edits are watched; conflicting unsaved changes must be resolved before saving.",
+        );
+        guide_section(
+            &content,
+            "PRESENTATION",
+            "F5 presents in this window; Shift+F5 opens presenter and audience windows. Navigate with arrows, Page Up/Down, Space, or a typed slide number. Presenter view includes current/next slides, editable sidecar and inline notes, a timer, grid, black/white screen, laser pointer, pen, highlighter, eraser, monitor selection, and note font controls.",
+        );
+        guide_section(
+            &content,
+            "EXPORTING AND UPDATES",
+            "Export the current document as PDF or package one, selected, or all projects as portable archives. Template metadata is retained but private .typsmthng state is excluded. Update checks use signed release-channel artifacts and verify SHA-256 before an installer can be opened; Linux system packages update through their package manager.",
+        );
+        guide_section(
+            &content,
+            "STORAGE AND RECOVERY",
+            "Projects stay in regular filesystem folders and work with git, sync tools, and other editors. App preferences, recents, workspaces, and window state live in the platform application-data directory. File deletion uses the operating system Trash when available.",
+        );
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroll.set_child(Some(&content));
+        root.append(&scroll);
+        guide.set_child(Some(&root));
+        guide.present();
     }
 
     fn prompt_name(
@@ -2501,11 +2922,14 @@ impl AppController {
     }
 
     fn refresh_recents(&self) {
-        let metadata = self
-            .state_store
-            .as_ref()
-            .and_then(|store| store.load_metadata().ok())
-            .unwrap_or_default();
+        let metadata = match self.state_store.as_ref().map(StateStore::load_metadata) {
+            Some(Ok(metadata)) => metadata,
+            Some(Err(error)) => {
+                self.show_error("Could not load project history", &error.to_string());
+                Default::default()
+            }
+            None => Default::default(),
+        };
         let selected = metadata.selected_home_workspace_id.clone();
         let projects = metadata
             .recent_projects
@@ -2677,10 +3101,7 @@ fn parse_note_sections(markdown: &str) -> std::collections::BTreeMap<usize, Stri
         lines.clear();
     };
     for line in markdown.lines() {
-        if let Some(number) = line
-            .strip_prefix("## Slide ")
-            .and_then(|value| value.trim().parse::<usize>().ok())
-        {
+        if let Some(number) = sidecar_slide_heading(line) {
             flush(slide, &mut lines, &mut sections);
             slide = Some(number);
         } else if slide.is_some() {
@@ -2689,6 +3110,32 @@ fn parse_note_sections(markdown: &str) -> std::collections::BTreeMap<usize, Stri
     }
     flush(slide, &mut lines, &mut sections);
     sections
+}
+
+fn serialize_note_sections(
+    sections: &std::collections::BTreeMap<usize, String>,
+    title: &str,
+) -> String {
+    let mut markdown = format!("# Speaker notes — {title}\n\n");
+    for (number, note) in sections {
+        markdown.push_str(&format!("## Slide {number}\n\n{}\n\n", note.trim()));
+    }
+    markdown.truncate(markdown.trim_end().len());
+    markdown.push('\n');
+    markdown
+}
+
+fn sidecar_slide_heading(line: &str) -> Option<usize> {
+    let heading = line.trim().strip_prefix("##")?.trim();
+    let number = if heading
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("slide"))
+    {
+        heading.get(5..)?.trim()
+    } else {
+        heading
+    };
+    number.parse::<usize>().ok().filter(|number| *number > 0)
 }
 
 fn populate_universe_results(list: &gtk::ListBox, templates: &[UniverseTemplate]) {
@@ -2747,6 +3194,99 @@ fn import_latex_file(
     Ok(project)
 }
 
+fn import_latex_sources(
+    sources: &[PathBuf],
+    parent: &Path,
+    project_name: &str,
+) -> typsmthng_gtk::backend::Result<(Project, Vec<String>)> {
+    let project = Project::create(parent, project_name)?;
+    project.delete_permanently("main.typ")?;
+    let mut warnings = Vec::new();
+    for source in sources {
+        if source.is_dir() {
+            let mut children = std::fs::read_dir(source)
+                .map_err(|error| {
+                    BackendError::Process(format!("could not read {}: {error}", source.display()))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|error| BackendError::Process(error.to_string()))?;
+            children.sort_by_key(std::fs::DirEntry::file_name);
+            for child in children {
+                import_path_tree(
+                    &project,
+                    &child.path(),
+                    Path::new(&child.file_name()),
+                    &mut warnings,
+                )?;
+            }
+        } else if let Some(name) = source.file_name() {
+            let target = unique_project_path(&project, Path::new(name));
+            import_path_tree(&project, source, &target, &mut warnings)?;
+        }
+    }
+    if project.resolve_main_file(None).is_err() {
+        project.write_text_atomic(
+            "main.typ",
+            "= Imported LaTeX project\n\nNo convertible .tex source was selected. Add or import a LaTeX source to continue.\n",
+        )?;
+        warnings.push("No convertible .tex source was found; a new main.typ was created.".into());
+    }
+    Ok((project, warnings))
+}
+
+fn reveal_in_file_manager(target: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open")
+        .arg("-R")
+        .arg(target)
+        .status();
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{}", target.display()))
+        .status();
+    #[cfg(target_os = "linux")]
+    let status = {
+        let uri = gio::File::for_path(target).uri();
+        std::process::Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.FileManager1",
+                "--object-path",
+                "/org/freedesktop/FileManager1",
+                "--method",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("['{uri}']"),
+                "",
+            ])
+            .status()
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let status = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "file manager reveal is unsupported",
+    ));
+    status.is_ok_and(|status| status.success())
+}
+
+fn guide_section(container: &gtk::Box, heading: &str, body: &str) {
+    let title = gtk::Label::new(Some(heading));
+    title.add_css_class("eyebrow");
+    title.set_halign(gtk::Align::Start);
+    title.set_selectable(true);
+    container.append(&title);
+    let text = gtk::Label::new(Some(body));
+    text.set_halign(gtk::Align::Start);
+    text.set_valign(gtk::Align::Start);
+    text.set_wrap(true);
+    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    text.set_selectable(true);
+    text.set_xalign(0.0);
+    container.append(&text);
+    container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+}
+
 fn convert_latex_project_if_needed(project: &Project) -> typsmthng_gtk::backend::Result<()> {
     let entries = project.entries(true)?;
     for source_path in entries.iter().filter_map(|entry| {
@@ -2765,8 +3305,118 @@ fn convert_latex_project_if_needed(project: &Project) -> typsmthng_gtk::backend:
     Ok(())
 }
 
+fn import_path_tree(
+    project: &Project,
+    source: &Path,
+    target: &Path,
+    warnings: &mut Vec<String>,
+) -> typsmthng_gtk::backend::Result<()> {
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
+        BackendError::Process(format!("could not inspect {}: {error}", source.display()))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(BackendError::Process(
+            "symbolic links are not imported for safety".into(),
+        ));
+    }
+    if metadata.is_dir() {
+        project.create_folder(target)?;
+        let mut children = std::fs::read_dir(source)
+            .map_err(|error| {
+                BackendError::Process(format!("could not read {}: {error}", source.display()))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| BackendError::Process(error.to_string()))?;
+        children.sort_by_key(std::fs::DirEntry::file_name);
+        for child in children {
+            import_path_tree(
+                project,
+                &child.path(),
+                &target.join(child.file_name()),
+                warnings,
+            )?;
+        }
+        return Ok(());
+    }
+    if !metadata.is_file() {
+        return Err(BackendError::Process("unsupported filesystem entry".into()));
+    }
+
+    let bytes = std::fs::read(source).map_err(|error| {
+        BackendError::Process(format!("could not read {}: {error}", source.display()))
+    })?;
+    project.create_binary_file(target, &bytes)?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if extension.eq_ignore_ascii_case("tex") || extension.eq_ignore_ascii_case("ltx") {
+        let latex = std::str::from_utf8(&bytes).map_err(|error| {
+            BackendError::Process(format!("{} is not UTF-8 LaTeX: {error}", source.display()))
+        })?;
+        let converted = convert_latex_to_typst(latex);
+        warnings.extend(
+            converted
+                .warnings
+                .iter()
+                .map(|warning| format!("{}: {}", target.display(), warning.message)),
+        );
+        let typst_target = unique_project_path(project, &target.with_extension("typ"));
+        project.write_text_atomic(typst_target, &converted.typst)?;
+    }
+    Ok(())
+}
+
+fn write_template_metadata(
+    project: &Project,
+    source: &str,
+    resolved_spec: &str,
+    entrypoint: &str,
+    layout_locked: bool,
+) -> typsmthng_gtk::backend::Result<()> {
+    project.create_folder(".typsmthng").or_else(|error| {
+        if project.root().join(".typsmthng").is_dir() {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })?;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let metadata = serde_json::json!({
+        "source": source,
+        "resolvedSpec": resolved_spec,
+        "templateEntrypoint": entrypoint.trim_start_matches('/'),
+        "layoutLocked": layout_locked,
+        "createdAt": created_at,
+    });
+    let serialized = serde_json::to_string_pretty(&metadata)
+        .map_err(|error| BackendError::Process(error.to_string()))?;
+    project
+        .write_text_atomic(".typsmthng/template.json", &(serialized + "\n"))
+        .map(|_| ())
+}
+
+fn project_layout_locked(project: &Project) -> bool {
+    project
+        .read_file(".typsmthng/template.json")
+        .ok()
+        .and_then(|file| match file.content {
+            FileContent::Text(source) => serde_json::from_str::<serde_json::Value>(&source).ok(),
+            FileContent::Binary(_) => None,
+        })
+        .and_then(|metadata| {
+            metadata
+                .get("layoutLocked")
+                .and_then(serde_json::Value::as_bool)
+        })
+        .unwrap_or(false)
+}
+
 fn unique_project_path(project: &Project, desired: &Path) -> PathBuf {
-    if project.read_file(desired).is_err() {
+    if !project.root().join(desired).exists() {
         return desired.to_path_buf();
     }
     let parent = desired.parent().unwrap_or_else(|| Path::new(""));
@@ -2782,9 +3432,87 @@ fn unique_project_path(project: &Project, desired: &Path) -> PathBuf {
             name.push_str(extension);
         }
         let candidate = parent.join(name);
-        if project.read_file(&candidate).is_err() {
+        if !project.root().join(&candidate).exists() {
             return candidate;
         }
     }
     parent.join(format!("{stem}-imported"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+    use typsmthng_gtk::backend::Project;
+
+    use super::{
+        import_latex_sources, parse_note_sections, project_layout_locked, serialize_note_sections,
+        sidecar_slide_heading, write_template_metadata,
+    };
+
+    #[test]
+    fn sidecar_headings_accept_legacy_and_current_forms() {
+        assert_eq!(sidecar_slide_heading("## Slide 2"), Some(2));
+        assert_eq!(sidecar_slide_heading("## slide 3"), Some(3));
+        assert_eq!(sidecar_slide_heading(" ## 4 "), Some(4));
+        assert_eq!(sidecar_slide_heading("# Slide 5"), None);
+        assert_eq!(sidecar_slide_heading("## Slide 0"), None);
+    }
+
+    #[test]
+    fn legacy_sidecar_sections_survive_parsing() {
+        let sections = parse_note_sections(
+            "# Speaker notes\n\n## 1\n\nFirst note\n\n## slide 2\n\nSecond note\n\n## Slide 3\n\nThird note\n",
+        );
+        assert_eq!(sections.get(&1).map(String::as_str), Some("First note"));
+        assert_eq!(sections.get(&2).map(String::as_str), Some("Second note"));
+        assert_eq!(sections.get(&3).map(String::as_str), Some("Third note"));
+        let serialized = serialize_note_sections(&sections, "Demo");
+        assert_eq!(
+            serialized,
+            "# Speaker notes — Demo\n\n## Slide 1\n\nFirst note\n\n## Slide 2\n\nSecond note\n\n## Slide 3\n\nThird note\n"
+        );
+        assert_eq!(parse_note_sections(&serialized), sections);
+    }
+
+    #[test]
+    fn template_metadata_is_native_and_controls_layout() {
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "template").unwrap();
+        write_template_metadata(
+            &project,
+            "universe",
+            "@preview/demo:1.0.0",
+            "main.typ",
+            true,
+        )
+        .unwrap();
+        assert!(project_layout_locked(&project));
+        let metadata = fs::read_to_string(project.root().join(".typsmthng/template.json")).unwrap();
+        assert!(metadata.contains("\"layoutLocked\": true"));
+        assert!(!metadata.contains("electrobun"));
+    }
+
+    #[test]
+    fn latex_folder_import_preserves_assets_and_converts_nested_sources() {
+        let source = tempdir().unwrap();
+        fs::create_dir(source.path().join("images")).unwrap();
+        fs::write(source.path().join("images/chart.png"), b"png").unwrap();
+        fs::write(
+            source.path().join("paper.tex"),
+            "\\documentclass{article}\\begin{document}Hello\\includegraphics{images/chart.png}\\end{document}",
+        )
+        .unwrap();
+        let destination = tempdir().unwrap();
+        let (project, _) = import_latex_sources(
+            &[source.path().to_path_buf()],
+            destination.path(),
+            "Imported",
+        )
+        .unwrap();
+        assert!(project.root().join("paper.tex").is_file());
+        assert!(project.root().join("paper.typ").is_file());
+        assert!(project.root().join("images/chart.png").is_file());
+    }
 }

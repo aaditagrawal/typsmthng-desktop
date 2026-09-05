@@ -1,10 +1,5 @@
-# Dependencies
-node_modules/
-
 # Build output
 build/
-dist/
-artifacts/
 target/
 
 # Compiled native libraries

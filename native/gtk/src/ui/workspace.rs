@@ -24,6 +24,80 @@ struct PreviewPicture {
     aspect_ratio: f64,
 }
 
+#[derive(Clone)]
+struct SettingsDialog {
+    window: gtk::Window,
+    font: gtk::SpinButton,
+    line_numbers: gtk::Switch,
+    wrapping: gtk::Switch,
+    vim: gtk::Switch,
+    auto_compile: gtk::Switch,
+    delay: gtk::SpinButton,
+    theme: gtk::DropDown,
+    page_size: gtk::DropDown,
+    notes_layout: gtk::DropDown,
+    system_fonts: gtk::Switch,
+    google_fonts: gtk::Switch,
+    translucent: gtk::Switch,
+}
+
+#[derive(Clone)]
+struct DocumentSearchDialog {
+    window: gtk::Window,
+    find: gtk::Entry,
+}
+
+impl DocumentSearchDialog {
+    fn present(&self, buffer: &sourceview5::Buffer) {
+        if let Some((start, end)) = buffer.selection_bounds() {
+            let selected = buffer.text(&start, &end, true);
+            if !selected.is_empty() && !selected.contains('\n') {
+                self.find.set_text(&selected);
+            }
+        }
+        self.window.present();
+        self.find.grab_focus();
+        self.find.select_region(0, -1);
+    }
+}
+
+impl SettingsDialog {
+    fn sync(&self, settings: &UiSettings) {
+        self.font.set_value(settings.font_size as f64);
+        self.line_numbers.set_active(settings.line_numbers);
+        self.wrapping.set_active(settings.line_wrapping);
+        self.vim.set_active(settings.vim_mode);
+        self.auto_compile.set_active(settings.auto_compile);
+        self.delay.set_value(settings.compile_delay_ms as f64);
+        self.theme.set_selected(match settings.theme {
+            Theme::System => 0,
+            Theme::Light => 1,
+            Theme::Dark => 2,
+        });
+        self.page_size
+            .set_selected(match settings.page_size.as_str() {
+                "a3" => 1,
+                "a4" => 2,
+                "a5" => 3,
+                "a6" => 4,
+                "us-letter" => 5,
+                "us-legal" => 6,
+                "iso-b5" => 7,
+                "presentation-16-9" => 8,
+                _ => 0,
+            });
+        self.notes_layout
+            .set_selected(match settings.presentation_notes_layout.as_str() {
+                "right-half" => 1,
+                "whole" => 2,
+                _ => 0,
+            });
+        self.system_fonts.set_active(settings.system_fonts);
+        self.google_fonts.set_active(settings.google_fonts);
+        self.translucent.set_active(settings.translucent);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FileRow {
     pub path: String,
@@ -60,7 +134,7 @@ pub struct WorkspaceCallbacks {
     pub create_file: Rc<dyn Fn()>,
     pub create_folder: Rc<dyn Fn()>,
     pub import_files: Rc<dyn Fn()>,
-    pub drop_files: Rc<dyn Fn(Vec<PathBuf>)>,
+    pub drop_files: Rc<dyn Fn((Vec<PathBuf>, String))>,
     pub move_path: Rc<dyn Fn((String, String))>,
     pub toggle_hidden: Rc<dyn Fn()>,
     pub rename_path: Rc<dyn Fn(String)>,
@@ -68,6 +142,7 @@ pub struct WorkspaceCallbacks {
     pub trash_path: Rc<dyn Fn(String)>,
     pub reveal_path: Rc<dyn Fn(String)>,
     pub open_external: Rc<dyn Fn(String)>,
+    pub preview_asset: Rc<dyn Fn(String)>,
     pub check_update: Rc<dyn Fn()>,
     pub export_pdf: Rc<dyn Fn()>,
     pub export_project: Rc<dyn Fn()>,
@@ -113,6 +188,8 @@ pub struct WorkspaceView {
     compile_label: gtk::Label,
     page_label: gtk::Label,
     settings: Rc<RefCell<UiSettings>>,
+    settings_dialog: SettingsDialog,
+    document_search_dialog: DocumentSearchDialog,
     dirty: Rc<Cell<bool>>,
     suppress_changes: Rc<Cell<bool>>,
     pending_compile: Rc<RefCell<Option<glib::SourceId>>>,
@@ -142,6 +219,7 @@ impl WorkspaceView {
             "system-search-symbolic",
             "Search files, contents, and commands (Ctrl+K)",
         );
+        let document_search = icon_button("edit-find-symbolic", "Find and replace (Ctrl+F)");
         let compile = icon_button("view-refresh-symbolic", "Compile now (Ctrl+Enter)");
         let export = icon_button("document-save-symbolic", "Export PDF (Ctrl+Shift+E)");
         let export_project = icon_button("package-x-generic-symbolic", "Export project ZIP");
@@ -155,6 +233,7 @@ impl WorkspaceView {
         toolbar.append(&project_label);
         toolbar.append(&gtk::Label::new(Some("/")));
         toolbar.append(&file_label);
+        toolbar.append(&document_search);
         toolbar.append(&search);
         toolbar.append(&compile);
         toolbar.append(&export);
@@ -288,6 +367,7 @@ impl WorkspaceView {
             }
         });
         editor.add_controller(vim_keys);
+        install_pair_completion(&editor, &buffer, vim_context.clone());
         let editor_scroll = gtk::ScrolledWindow::new();
         editor_scroll.set_child(Some(&editor));
         editor_scroll.set_hexpand(true);
@@ -482,6 +562,7 @@ impl WorkspaceView {
             buffer.clone(),
             editor.clone(),
         );
+        let document_search_dialog = build_document_search_dialog(window, &buffer, &editor);
 
         let pending_compile = Rc::new(RefCell::new(None::<glib::SourceId>));
         {
@@ -539,11 +620,20 @@ impl WorkspaceView {
         }
         {
             let dialog = settings_dialog.clone();
-            settings_button.connect_clicked(move |_| dialog.present());
+            let settings = settings.clone();
+            settings_button.connect_clicked(move |_| {
+                dialog.sync(&settings.borrow());
+                dialog.window.present();
+            });
         }
         {
             let dialog = search_dialog.clone();
             search.connect_clicked(move |_| dialog.present());
+        }
+        {
+            let dialog = document_search_dialog.clone();
+            let buffer = buffer.clone();
+            document_search.connect_clicked(move |_| dialog.present(&buffer));
         }
         diagnostics_close.connect_clicked({
             let diagnostics_revealer = diagnostics_revealer.clone();
@@ -607,7 +697,7 @@ impl WorkspaceView {
                 if paths.is_empty() {
                     false
                 } else {
-                    callback(paths);
+                    callback((paths, String::new()));
                     true
                 }
             }
@@ -708,6 +798,8 @@ impl WorkspaceView {
             compile_label,
             page_label,
             settings,
+            settings_dialog,
+            document_search_dialog,
             dirty,
             suppress_changes,
             pending_compile,
@@ -818,6 +910,9 @@ impl WorkspaceView {
             ];
             if !file.is_directory {
                 actions.insert(1, ("Duplicate", self.callbacks.duplicate_path.clone()));
+                if file.name.to_ascii_lowercase().ends_with(".svg") {
+                    actions.insert(2, ("Preview image", self.callbacks.preview_asset.clone()));
+                }
             }
             for (label, callback) in actions {
                 let button = gtk::Button::with_label(label);
@@ -854,6 +949,31 @@ impl WorkspaceView {
                     }
                 });
                 line.add_controller(drop);
+                let external_drop = gtk::DropTarget::new(
+                    gtk::gdk::FileList::static_type(),
+                    gtk::gdk::DragAction::COPY,
+                );
+                external_drop.connect_drop({
+                    let target = file.path.clone();
+                    let callback = self.callbacks.drop_files.clone();
+                    move |_, value, _, _| {
+                        let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                            return false;
+                        };
+                        let paths = files
+                            .files()
+                            .into_iter()
+                            .filter_map(|file| file.path())
+                            .collect::<Vec<_>>();
+                        if paths.is_empty() {
+                            false
+                        } else {
+                            callback((paths, target.clone()));
+                            true
+                        }
+                    }
+                });
+                line.add_controller(external_drop);
             }
             row.set_child(Some(&line));
             self.file_list.append(&row);
@@ -900,6 +1020,10 @@ impl WorkspaceView {
         self.save_label.set_text("File removed");
     }
 
+    pub fn set_current_path(&self, path: &str) {
+        self.file_label.set_text(path);
+    }
+
     pub fn source_text(&self) -> String {
         buffer_text(&self.buffer)
     }
@@ -934,21 +1058,19 @@ impl WorkspaceView {
         true
     }
 
-    fn cancel_pending_compile(&self) {
+    pub fn cancel_pending_compile(&self) {
         if let Some(source) = self.pending_compile.borrow_mut().take() {
             source.remove();
         }
     }
 
     pub fn present_settings(&self) {
-        for child in gtk::Window::list_toplevels() {
-            if let Ok(candidate) = child.downcast::<gtk::Window>() {
-                if candidate.title().as_deref() == Some("Settings — typsmthng") {
-                    candidate.present();
-                    break;
-                }
-            }
-        }
+        self.settings_dialog.sync(&self.settings.borrow());
+        self.settings_dialog.window.present();
+    }
+
+    pub fn present_document_search(&self) {
+        self.document_search_dialog.present(&self.buffer);
     }
 
     pub fn present_search(&self) {
@@ -1285,6 +1407,92 @@ fn buffer_text(buffer: &sourceview5::Buffer) -> String {
         .to_string()
 }
 
+fn install_pair_completion(
+    editor: &sourceview5::View,
+    buffer: &sourceview5::Buffer,
+    vim_context: Rc<RefCell<Option<sourceview5::VimIMContext>>>,
+) {
+    let keys = gtk::EventControllerKey::new();
+    keys.connect_key_pressed({
+        let buffer = buffer.clone();
+        move |_, key, _, modifiers| {
+            if vim_context.borrow().is_some()
+                || modifiers.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::ALT_MASK
+                        | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+            {
+                return glib::Propagation::Proceed;
+            }
+
+            let cursor = buffer.iter_at_mark(&buffer.get_insert());
+            if key == gtk::gdk::Key::BackSpace {
+                let mut before = cursor;
+                let mut after = cursor;
+                if before.backward_char() && after.forward_char() {
+                    let pair = (before.char(), cursor.char());
+                    if matches!(
+                        pair,
+                        ('(', ')') | ('[', ']') | ('{', '}') | ('\'', '\'') | ('"', '"')
+                    ) {
+                        buffer.begin_user_action();
+                        buffer.delete(&mut before, &mut after);
+                        buffer.end_user_action();
+                        return glib::Propagation::Stop;
+                    }
+                }
+                return glib::Propagation::Proceed;
+            }
+
+            let Some(character) = key.to_unicode() else {
+                return glib::Propagation::Proceed;
+            };
+            if matches!(character, ')' | ']' | '}') && cursor.char() == character {
+                let mut next = cursor;
+                next.forward_char();
+                buffer.place_cursor(&next);
+                return glib::Propagation::Stop;
+            }
+            let closing = match character {
+                '(' => ')',
+                '[' => ']',
+                '{' => '}',
+                '\'' => '\'',
+                '"' => '"',
+                _ => return glib::Propagation::Proceed,
+            };
+            let start_offset = buffer
+                .selection_bounds()
+                .map(|(start, _)| start.offset())
+                .unwrap_or_else(|| cursor.offset());
+            let selected = buffer
+                .selection_bounds()
+                .map(|(start, end)| buffer.text(&start, &end, true).to_string())
+                .unwrap_or_default();
+            let replacement = format!("{character}{selected}{closing}");
+            buffer.begin_user_action();
+            if let Some((mut start, mut end)) = buffer.selection_bounds() {
+                buffer.delete(&mut start, &mut end);
+                buffer.insert(&mut start, &replacement);
+            } else {
+                buffer.insert_at_cursor(&replacement);
+            }
+            buffer.end_user_action();
+            let inside_start = buffer.iter_at_offset(start_offset + 1);
+            let inside_end =
+                buffer.iter_at_offset(start_offset + 1 + selected.chars().count() as i32);
+            if selected.is_empty() {
+                buffer.place_cursor(&inside_start);
+            } else {
+                buffer.select_range(&inside_start, &inside_end);
+            }
+            glib::Propagation::Stop
+        }
+    });
+    editor.add_controller(keys);
+}
+
 fn refresh_file_visibility(list: &gtk::ListBox, files: &[FileRow], expanded: &HashSet<String>) {
     for (index, file) in files.iter().enumerate() {
         let visible = ancestor_directories(&file.path).all(|parent| expanded.contains(parent));
@@ -1467,11 +1675,196 @@ fn focus_source_line(
     }
 }
 
+fn build_document_search_dialog(
+    parent: &gtk::ApplicationWindow,
+    buffer: &sourceview5::Buffer,
+    editor: &sourceview5::View,
+) -> DocumentSearchDialog {
+    let window = gtk::Window::builder()
+        .title("Find and replace — typsmthng")
+        .transient_for(parent)
+        .modal(false)
+        .resizable(false)
+        .hide_on_close(true)
+        .default_width(540)
+        .build();
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    root.set_margin_top(14);
+    root.set_margin_bottom(14);
+    root.set_margin_start(14);
+    root.set_margin_end(14);
+
+    let find = gtk::Entry::new();
+    find.set_placeholder_text(Some("Find in current file"));
+    let replace = gtk::Entry::new();
+    replace.set_placeholder_text(Some("Replace with"));
+    let case_sensitive = gtk::CheckButton::with_label("Match case");
+    let status = gtk::Label::new(None);
+    status.add_css_class("muted");
+    status.set_halign(gtk::Align::Start);
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let previous = gtk::Button::with_label("Previous");
+    let next = gtk::Button::with_label("Next");
+    let replace_one = gtk::Button::with_label("Replace");
+    let replace_all = gtk::Button::with_label("Replace all");
+    controls.append(&previous);
+    controls.append(&next);
+    controls.append(&replace_one);
+    controls.append(&replace_all);
+    controls.append(&case_sensitive);
+    root.append(&find);
+    root.append(&replace);
+    root.append(&controls);
+    root.append(&status);
+    window.set_child(Some(&root));
+
+    let select_match: Rc<dyn Fn(bool)> = {
+        let buffer = buffer.clone();
+        let editor = editor.clone();
+        let find = find.clone();
+        let case_sensitive = case_sensitive.clone();
+        let status = status.clone();
+        Rc::new(move |backwards| {
+            let query = find.text();
+            if query.is_empty() {
+                status.set_text("Enter text to find");
+                return;
+            }
+            match select_document_match(&buffer, &query, case_sensitive.is_active(), backwards) {
+                Ok(true) => {
+                    status.set_text("");
+                    editor.grab_focus();
+                }
+                Ok(false) => status.set_text("No matches"),
+                Err(error) => status.set_text(&error),
+            }
+        })
+    };
+    next.connect_clicked({
+        let select_match = select_match.clone();
+        move |_| select_match(false)
+    });
+    previous.connect_clicked({
+        let select_match = select_match.clone();
+        move |_| select_match(true)
+    });
+    find.connect_activate({
+        let select_match = select_match.clone();
+        move |_| select_match(false)
+    });
+    replace_one.connect_clicked({
+        let buffer = buffer.clone();
+        let find = find.clone();
+        let replace = replace.clone();
+        let case_sensitive = case_sensitive.clone();
+        let select_match = select_match.clone();
+        move |_| {
+            if let Some((mut start, mut end)) = buffer.selection_bounds() {
+                let selected = buffer.text(&start, &end, true);
+                if document_regex(&find.text(), case_sensitive.is_active()).is_ok_and(|regex| {
+                    regex
+                        .find(&selected)
+                        .is_some_and(|item| item.range() == (0..selected.len()))
+                }) {
+                    buffer.begin_user_action();
+                    buffer.delete(&mut start, &mut end);
+                    buffer.insert(&mut start, &replace.text());
+                    buffer.end_user_action();
+                }
+            }
+            select_match(false);
+        }
+    });
+    replace_all.connect_clicked({
+        let buffer = buffer.clone();
+        let find = find.clone();
+        let replace = replace.clone();
+        let case_sensitive = case_sensitive.clone();
+        let status = status.clone();
+        move |_| {
+            let query = find.text();
+            let Ok(regex) = document_regex(&query, case_sensitive.is_active()) else {
+                status.set_text("Enter text to find");
+                return;
+            };
+            let source = buffer_text(&buffer);
+            let count = regex.find_iter(&source).count();
+            if count == 0 {
+                status.set_text("No matches");
+                return;
+            }
+            let ranges = regex
+                .find_iter(&source)
+                .map(|item| {
+                    (
+                        source[..item.start()].chars().count() as i32,
+                        source[..item.end()].chars().count() as i32,
+                    )
+                })
+                .collect::<Vec<_>>();
+            buffer.begin_user_action();
+            for (start, end) in ranges.into_iter().rev() {
+                let mut start = buffer.iter_at_offset(start);
+                let mut end = buffer.iter_at_offset(end);
+                buffer.delete(&mut start, &mut end);
+                buffer.insert(&mut start, &replace.text());
+            }
+            buffer.end_user_action();
+            status.set_text(&format!("Replaced {count} match(es)"));
+        }
+    });
+
+    DocumentSearchDialog { window, find }
+}
+
+fn document_regex(query: &str, case_sensitive: bool) -> Result<Regex, String> {
+    if query.is_empty() {
+        return Err("empty search".into());
+    }
+    regex::RegexBuilder::new(&regex::escape(query))
+        .case_insensitive(!case_sensitive)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn select_document_match(
+    buffer: &sourceview5::Buffer,
+    query: &str,
+    case_sensitive: bool,
+    backwards: bool,
+) -> Result<bool, String> {
+    let source = buffer_text(buffer);
+    let regex = document_regex(query, case_sensitive)?;
+    let matches = regex.find_iter(&source).collect::<Vec<_>>();
+    if matches.is_empty() {
+        return Ok(false);
+    }
+    let cursor = buffer.iter_at_mark(&buffer.get_insert()).offset().max(0) as usize;
+    let selected = if backwards {
+        matches
+            .iter()
+            .rev()
+            .find(|item| source[..item.end()].chars().count() < cursor)
+            .unwrap_or_else(|| matches.last().expect("non-empty matches"))
+    } else {
+        matches
+            .iter()
+            .find(|item| source[..item.start()].chars().count() >= cursor)
+            .unwrap_or_else(|| matches.first().expect("non-empty matches"))
+    };
+    let start_offset = source[..selected.start()].chars().count() as i32;
+    let end_offset = source[..selected.end()].chars().count() as i32;
+    let start = buffer.iter_at_offset(start_offset);
+    let end = buffer.iter_at_offset(end_offset);
+    buffer.select_range(&start, &end);
+    Ok(true)
+}
+
 fn build_settings_dialog(
     parent: &gtk::ApplicationWindow,
     settings: Rc<RefCell<UiSettings>>,
     on_changed: Rc<dyn Fn(UiSettings)>,
-) -> gtk::Window {
+) -> SettingsDialog {
     let dialog = gtk::Window::builder()
         .title("Settings — typsmthng")
         .transient_for(parent)
@@ -1614,6 +2007,22 @@ fn build_settings_dialog(
     root.append(&scroll);
     dialog.set_child(Some(&root));
 
+    let settings_dialog = SettingsDialog {
+        window: dialog.clone(),
+        font: font.clone(),
+        line_numbers: line_numbers.clone(),
+        wrapping: wrapping.clone(),
+        vim: vim.clone(),
+        auto_compile: auto_compile.clone(),
+        delay: delay.clone(),
+        theme: theme.clone(),
+        page_size: page_size.clone(),
+        notes_layout: notes_layout.clone(),
+        system_fonts: system_fonts.clone(),
+        google_fonts: google_fonts.clone(),
+        translucent: translucent.clone(),
+    };
+
     apply.connect_clicked({
         let dialog = dialog.clone();
         move |_| {
@@ -1657,7 +2066,7 @@ fn build_settings_dialog(
             dialog.set_visible(false);
         }
     });
-    dialog
+    settings_dialog
 }
 
 fn setting_heading(label: &str) -> gtk::Label {

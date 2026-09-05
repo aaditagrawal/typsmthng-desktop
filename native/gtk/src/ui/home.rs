@@ -22,11 +22,13 @@ pub struct HomeCallbacks {
     pub rename_recent: Rc<dyn Fn(String)>,
     pub import_project: Rc<dyn Fn()>,
     pub export_all: Rc<dyn Fn()>,
+    pub export_selected: Rc<dyn Fn(Vec<String>)>,
     pub create_from_template: Rc<dyn Fn()>,
     pub create_workspace: Rc<dyn Fn()>,
     pub select_workspace: Rc<dyn Fn(String)>,
     pub manage_workspace: Rc<dyn Fn()>,
     pub assign_workspace: Rc<dyn Fn(String)>,
+    pub assign_selected_workspace: Rc<dyn Fn(Vec<String>)>,
 }
 
 #[derive(Clone)]
@@ -126,6 +128,14 @@ impl HomeView {
 
         let recents_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         recents_header.append(&section_label("Recent vaults"));
+        let assign_selected = gtk::Button::with_label("Move selected…");
+        assign_selected.add_css_class("flat");
+        assign_selected.set_sensitive(false);
+        let export_selected = gtk::Button::with_label("Export selected…");
+        export_selected.add_css_class("flat");
+        export_selected.set_sensitive(false);
+        recents_header.append(&assign_selected);
+        recents_header.append(&export_selected);
         let recents_hint = gtk::Label::new(Some("Your projects remain ordinary folders"));
         recents_hint.set_hexpand(true);
         recents_hint.set_halign(gtk::Align::End);
@@ -135,7 +145,7 @@ impl HomeView {
         content.append(&recents_header);
 
         let recent_list = gtk::ListBox::new();
-        recent_list.set_selection_mode(gtk::SelectionMode::None);
+        recent_list.set_selection_mode(gtk::SelectionMode::Multiple);
         recent_list.set_activate_on_single_click(true);
         recent_list.add_css_class("boxed-list");
         let recent_scroll = gtk::ScrolledWindow::new();
@@ -217,6 +227,27 @@ impl HomeView {
                 }
             });
         }
+        recent_list.connect_selected_rows_changed({
+            let assign_selected = assign_selected.clone();
+            let export_selected = export_selected.clone();
+            move |list| {
+                let has_selection = !list.selected_rows().is_empty();
+                assign_selected.set_sensitive(has_selection);
+                export_selected.set_sensitive(has_selection);
+            }
+        });
+        assign_selected.connect_clicked({
+            let recent_list = recent_list.clone();
+            let recent_paths = recent_paths.clone();
+            let callback = callbacks.assign_selected_workspace.clone();
+            move |_| callback(selected_recent_paths(&recent_list, &recent_paths.borrow()))
+        });
+        export_selected.connect_clicked({
+            let recent_list = recent_list.clone();
+            let recent_paths = recent_paths.clone();
+            let callback = callbacks.export_selected.clone();
+            move |_| callback(selected_recent_paths(&recent_list, &recent_paths.borrow()))
+        });
 
         Self {
             root,
@@ -348,6 +379,13 @@ impl HomeView {
             self.recent_list.append(&row);
         }
     }
+}
+
+fn selected_recent_paths(list: &gtk::ListBox, paths: &[String]) -> Vec<String> {
+    list.selected_rows()
+        .into_iter()
+        .filter_map(|row| paths.get(row.index() as usize).cloned())
+        .collect()
 }
 
 fn section_label(text: &str) -> gtk::Label {

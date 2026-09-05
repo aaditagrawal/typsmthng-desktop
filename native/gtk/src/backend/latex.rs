@@ -32,10 +32,15 @@ pub fn convert_latex_to_typst(source: &str) -> ConversionResult {
         .captures(&source)
         .map(|capture| capture[1].to_owned())
         .unwrap_or_else(|| source.clone());
+    body = convert_verbatim_environments(body);
+    body = convert_tabular_environments(body);
+    body = convert_float_environments(body);
+    body = convert_block_environments(body);
     body = convert_lists(body);
     body = convert_math_environments(body);
     body = convert_sections(body);
     body = convert_commands(body);
+    body = resolve_graphics_paths(body, &metadata.graphics_paths);
     body = convert_math(body);
     body = body
         .replace("\\&", "&")
@@ -84,9 +89,18 @@ pub fn convert_latex_to_typst(source: &str) -> ConversionResult {
 }
 
 fn strip_comments(source: &str) -> String {
+    let mut in_verbatim = false;
     source
         .lines()
         .map(|line| {
+            if in_verbatim
+                || line.contains("\\begin{verbatim}")
+                || line.contains("\\begin{verbatim*}")
+            {
+                in_verbatim =
+                    !line.contains("\\end{verbatim}") && !line.contains("\\end{verbatim*}");
+                return line;
+            }
             let mut slash_count = 0;
             for (offset, character) in line.char_indices() {
                 if character == '%' && slash_count % 2 == 0 {
@@ -162,6 +176,179 @@ fn convert_sections(mut text: String) -> String {
             .into_owned();
     }
     text
+}
+
+fn convert_verbatim_environments(mut text: String) -> String {
+    let pattern = Regex::new(r"(?s)\\begin\{verbatim\*?\}(.*?)\\end\{verbatim\*?\}").unwrap();
+    while pattern.is_match(&text) {
+        text = pattern
+            .replace_all(&text, |capture: &Captures| {
+                format!(
+                    "#raw(\"{}\", block: true)",
+                    escape_multiline_string(capture[1].trim_matches('\n'))
+                )
+            })
+            .into_owned();
+    }
+    text
+}
+
+fn convert_tabular_environments(mut text: String) -> String {
+    let pattern =
+        Regex::new(r"(?s)\\begin\{tabular\*?\}\{(?:[^{}]|\{[^{}]*\})*\}(.*?)\\end\{tabular\*?\}")
+            .unwrap();
+    let row_separator = Regex::new(r"\\\\(?:\[[^]]*\])?").unwrap();
+    let rules = Regex::new(r"\\(?:hline|toprule|midrule|bottomrule)\b").unwrap();
+    while pattern.is_match(&text) {
+        text = pattern
+            .replace_all(&text, |capture: &Captures| {
+                let body = rules.replace_all(&capture[1], "");
+                let rows = row_separator
+                    .split(&body)
+                    .map(str::trim)
+                    .filter(|row| !row.is_empty())
+                    .map(|row| row.split('&').map(str::trim).collect::<Vec<_>>())
+                    .collect::<Vec<_>>();
+                let columns = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+                let cells = rows
+                    .iter()
+                    .flat_map(|row| {
+                        row.iter()
+                            .copied()
+                            .chain(std::iter::repeat_n("", columns - row.len()))
+                    })
+                    .map(|cell| format!("  [{cell}],"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("#table(\n  columns: {columns},\n{cells}\n)")
+            })
+            .into_owned();
+    }
+    text
+}
+
+fn convert_float_environments(mut text: String) -> String {
+    for environment in ["figure", "table"] {
+        let pattern = Regex::new(&format!(
+            r"(?s)\\begin\{{{environment}\*?\}}(?:\[[^]]*\])?(.*?)\\end\{{{environment}\*?\}}"
+        ))
+        .unwrap();
+        while pattern.is_match(&text) {
+            text = pattern
+                .replace_all(&text, |capture: &Captures| {
+                    let (body, caption) = take_simple_command(&capture[1], "caption");
+                    let (body, label) = take_simple_command(&body, "label");
+                    let body = body.replace("\\centering", "");
+                    let body = body.trim();
+                    let caption = caption
+                        .filter(|caption| !caption.trim().is_empty())
+                        .map(|caption| format!(",\n  caption: [{}]", caption.trim()))
+                        .unwrap_or_default();
+                    let label = label
+                        .filter(|label| !label.trim().is_empty())
+                        .map(|label| format!(" <{}>", label.trim()))
+                        .unwrap_or_default();
+                    format!("#figure(\n  [{body}]{caption}\n){label}")
+                })
+                .into_owned();
+        }
+    }
+    text
+}
+
+fn convert_block_environments(mut text: String) -> String {
+    for (environment, replacement) in [
+        ("quote", "#quote(block: true)"),
+        ("quotation", "#quote(block: true)"),
+        ("center", "#align(center)"),
+        ("flushleft", "#align(left)"),
+        ("flushright", "#align(right)"),
+    ] {
+        let pattern = Regex::new(&format!(
+            r"(?s)\\begin\{{{environment}\}}(.*?)\\end\{{{environment}\}}"
+        ))
+        .unwrap();
+        while pattern.is_match(&text) {
+            text = pattern
+                .replace_all(&text, |capture: &Captures| {
+                    format!("{replacement}[{}]", capture[1].trim())
+                })
+                .into_owned();
+        }
+    }
+    for environment in [
+        "theorem",
+        "lemma",
+        "proposition",
+        "corollary",
+        "proof",
+        "definition",
+        "example",
+        "remark",
+    ] {
+        let pattern = Regex::new(&format!(
+            r"(?s)\\begin\{{{environment}\}}(?:\[([^]]*)\])?(.*?)\\end\{{{environment}\}}"
+        ))
+        .unwrap();
+        while pattern.is_match(&text) {
+            text = pattern
+                .replace_all(&text, |capture: &Captures| {
+                    let heading = capture
+                        .get(1)
+                        .map(|title| format!("{} ({})", title_case(environment), title.as_str()))
+                        .unwrap_or_else(|| title_case(environment));
+                    format!(
+                        "#block[#strong[{heading}.] {}]",
+                        capture.get(2).map_or("", |body| body.as_str()).trim()
+                    )
+                })
+                .into_owned();
+        }
+    }
+    text
+}
+
+fn take_simple_command(text: &str, command: &str) -> (String, Option<String>) {
+    let marker = format!("\\{command}");
+    let Some(start) = text.find(&marker) else {
+        return (text.to_owned(), None);
+    };
+    let mut argument_start = start + marker.len();
+    while text[argument_start..]
+        .chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+    {
+        argument_start += text[argument_start..].chars().next().unwrap().len_utf8();
+    }
+    if text[argument_start..].starts_with('[') {
+        let Some(optional_end) = text[argument_start + 1..].find(']') else {
+            return (text.to_owned(), None);
+        };
+        argument_start += optional_end + 2;
+        while text[argument_start..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
+            argument_start += text[argument_start..].chars().next().unwrap().len_utf8();
+        }
+    }
+    let Some((value, end)) = balanced_argument(text, argument_start) else {
+        return (text.to_owned(), None);
+    };
+    let mut body = String::with_capacity(text.len() - (end - start));
+    body.push_str(&text[..start]);
+    body.push_str(&text[end..]);
+    (body, Some(value))
+}
+
+fn title_case(value: &str) -> String {
+    let mut characters = value.chars();
+    characters
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
+        .unwrap_or_default()
 }
 
 fn convert_lists(mut text: String) -> String {
@@ -298,6 +485,42 @@ fn convert_images(text: &str) -> String {
             )
         })
         .into_owned()
+}
+
+fn resolve_graphics_paths(mut text: String, graphics_paths: &[String]) -> String {
+    let Some(prefix) = graphics_paths.iter().find_map(|path| {
+        let path = path.trim().replace('\\', "/");
+        let path = path.trim_start_matches("./").trim_matches('/');
+        (!path.is_empty()).then(|| path.to_owned())
+    }) else {
+        return text;
+    };
+    let image = Regex::new(r#"#image\(\"([^\"]+)\""#).unwrap();
+    text = image
+        .replace_all(&text, |capture: &Captures| {
+            let path = capture[1].replace('\\', "/");
+            let has_scheme = path.split_once(':').is_some_and(|(scheme, _)| {
+                scheme
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+            });
+            if path.starts_with('/')
+                || path.starts_with("../")
+                || has_scheme
+                || path == prefix
+                || path.starts_with(&format!("{prefix}/"))
+            {
+                capture[0].to_owned()
+            } else {
+                format!(
+                    "#image(\"{}/{}\"",
+                    escape_string(&prefix),
+                    escape_string(&path)
+                )
+            }
+        })
+        .into_owned();
+    text
 }
 
 fn convert_math(mut text: String) -> String {
@@ -445,6 +668,12 @@ fn escape_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn escape_multiline_string(value: &str) -> String {
+    escape_string(value)
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+}
+
 fn typst_date(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() || matches!(value, "\\today" | "today") {
@@ -494,6 +723,112 @@ This is \textbf{bold} with \href{https://example.com}{a link} and $x \leq y$.
     fn handles_nested_commands() {
         let result = convert_latex_to_typst(r"\textbf{outer \emph{inner}}");
         assert!(result.typst.contains("*outer _inner_*"));
+    }
+
+    #[test]
+    fn converts_structured_figures_tables_and_blocks() {
+        let source = r#"\begin{figure}
+\centering
+\includegraphics[width=0.75\textwidth]{plot.png}
+\caption{Measured \textbf{results}}
+\label{fig:results}
+\end{figure}
+\begin{table}
+\caption{Scores}
+\label{tab:scores}
+\begin{tabular}{lr}
+Name & Score \\
+Ada & 10 \\
+\end{tabular}
+\end{table}
+\begin{quote}A quoted result.\end{quote}
+\begin{theorem}[Pythagoras]For a right triangle.\end{theorem}
+\begin{verbatim}
+#set text(fill: red) % literal comment marker
+\end{verbatim}"#;
+        let result = convert_latex_to_typst(source);
+        assert!(result.typst.contains("#figure("));
+        assert!(result.typst.contains("#image(\"plot.png\", width: 75%)"));
+        assert!(
+            result.typst.contains("caption: [Measured *results*]"),
+            "{}",
+            result.typst
+        );
+        assert!(result.typst.contains("<fig:results>"));
+        assert!(result.typst.contains("#table("));
+        assert!(result.typst.contains("columns: 2"));
+        assert!(result.typst.contains("[Ada]"));
+        assert!(result.typst.contains("[10]"));
+        assert!(result.typst.contains("<tab:scores>"));
+        assert!(result
+            .typst
+            .contains("#quote(block: true)[A quoted result.]"));
+        assert!(result
+            .typst
+            .contains("#block[#strong[Theorem (Pythagoras).] For a right triangle.]"));
+        assert!(result
+            .typst
+            .contains("#raw(\"#set text(fill: red) % literal comment marker\", block: true)"));
+        assert!(!result.typst.contains("\\begin"));
+    }
+
+    #[test]
+    fn structured_conversion_compiles_when_typst_is_available() {
+        let Ok(tool) = crate::backend::typst::TypstTool::detect() else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let project =
+            crate::backend::project::Project::create(directory.path(), "Converted").unwrap();
+        project.create_folder("images").unwrap();
+        project
+            .create_text_file(
+                "images/plot.svg",
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>"#,
+            )
+            .unwrap();
+        let converted = convert_latex_to_typst(
+            r#"\graphicspath{{images/}}
+\begin{document}
+\begin{figure}
+\includegraphics{plot.svg}
+\caption{Plot}
+\end{figure}
+\begin{table}
+\caption{Scores}
+\begin{tabular}{lr}
+Name & Score \\
+Ada & 10 \\
+\end{tabular}
+\end{table}
+\begin{quote}A quoted result.\end{quote}
+\begin{theorem}[Pythagoras]For a right triangle.\end{theorem}
+\begin{verbatim}
+#set text(fill: red)
+\end{verbatim}
+\end{document}"#,
+        );
+        project
+            .write_text_atomic("main.typ", &converted.typst)
+            .unwrap();
+        let output = tool.compile_pdf(&project, "main.typ").unwrap();
+        assert!(output.success(), "{}", output.stderr);
+    }
+
+    #[test]
+    fn applies_the_first_graphics_path_without_double_prefixing() {
+        let result = convert_latex_to_typst(
+            r#"\graphicspath{{images/}{figures/}}
+\includegraphics{plot.png}
+\includegraphics{images/already.png}
+\includegraphics{https://example.test/remote.png}"#,
+        );
+        assert_eq!(result.metadata.graphics_paths, ["images/", "figures/"]);
+        assert!(result.typst.contains("#image(\"images/plot.png\")"));
+        assert!(result.typst.contains("#image(\"images/already.png\")"));
+        assert!(result
+            .typst
+            .contains("#image(\"https://example.test/remote.png\")"));
     }
 
     #[test]

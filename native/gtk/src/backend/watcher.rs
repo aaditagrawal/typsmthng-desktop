@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::backend::error::{BackendError, Result};
-use crate::backend::paths::{is_text_path, relative_path_from_root};
+use crate::backend::paths::relative_path_from_root;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileFingerprint {
@@ -54,6 +54,7 @@ pub enum ExternalEventKind {
 pub struct ExternalEvent {
     pub kind: ExternalEventKind,
     pub path: String,
+    pub renamed_to: Option<String>,
     pub is_directory: bool,
     pub fingerprint: Option<FileFingerprint>,
 }
@@ -113,7 +114,13 @@ impl ExternalWatcher {
                 }
                 _ => continue,
             };
-            for path in event.paths {
+            let rename_destination = (kind == ExternalEventKind::Renamed && event.paths.len() == 2)
+                .then(|| relative_path_from_root(&self.root, &event.paths[1]))
+                .flatten();
+            for (index, path) in event.paths.into_iter().enumerate() {
+                if kind == ExternalEventKind::Renamed && rename_destination.is_some() && index > 0 {
+                    continue;
+                }
                 let Some(relative) = relative_path_from_root(&self.root, &path) else {
                     continue;
                 };
@@ -130,6 +137,7 @@ impl ExternalWatcher {
                 output.push(ExternalEvent {
                     kind,
                     path: relative.clone(),
+                    renamed_to: rename_destination.clone(),
                     is_directory: metadata.as_ref().is_some_and(fs::Metadata::is_dir),
                     fingerprint,
                 });
@@ -161,14 +169,6 @@ fn coalesce(events: Vec<ExternalEvent>) -> Vec<ExternalEvent> {
     events
 }
 
-pub fn text_changed_since(path: impl AsRef<Path>, baseline: &FileFingerprint) -> bool {
-    let path = path.as_ref();
-    is_text_path(&path.to_string_lossy())
-        && FileFingerprint::capture(path)
-            .map(|current| current != *baseline)
-            .unwrap_or(true)
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -192,12 +192,14 @@ mod tests {
             ExternalEvent {
                 kind: ExternalEventKind::Added,
                 path: "a.typ".into(),
+                renamed_to: None,
                 is_directory: false,
                 fingerprint: None,
             },
             ExternalEvent {
                 kind: ExternalEventKind::Changed,
                 path: "a.typ".into(),
+                renamed_to: None,
                 is_directory: false,
                 fingerprint: None,
             },

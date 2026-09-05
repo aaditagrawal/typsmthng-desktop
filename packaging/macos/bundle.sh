@@ -14,7 +14,7 @@ mkdir -p "$contents/MacOS" "$contents/Resources" "$contents/Frameworks"
 install -m755 "$repo_root/target/release/typsmthng" "$contents/MacOS/typsmthng"
 if command -v typst >/dev/null 2>&1; then install -m755 "$(command -v typst)" "$contents/MacOS/typst"; fi
 sed "s/@VERSION@/$version/g" "$repo_root/packaging/macos/Info.plist.in" > "$contents/Info.plist"
-cp "$repo_root/assets/icon.png" "$contents/Resources/icon.png"
+iconutil -c icns "$repo_root/icon.iconset" -o "$contents/Resources/typsmthng.icns"
 mkdir -p "$contents/Resources/language-specs"
 cp "$repo_root/native/gtk/data/language-specs/typst.lang" "$contents/Resources/language-specs/"
 

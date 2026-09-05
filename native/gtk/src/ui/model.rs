@@ -33,7 +33,7 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
-            theme: Theme::System,
+            theme: Theme::Dark,
             font_size: 15,
             auto_compile: true,
             compile_delay_ms: 100,
@@ -255,7 +255,9 @@ pub fn resolve_startup_path(path: impl AsRef<Path>) -> (PathBuf, Option<PathBuf>
         let root = immediate
             .ancestors()
             .find(|candidate| {
-                candidate.join("main.typ").is_file() || candidate.join(".typsmthng").exists()
+                candidate.join("typst.toml").is_file()
+                    || candidate.join("main.typ").is_file()
+                    || candidate.join(".typsmthng").exists()
             })
             .map(Path::to_path_buf)
             .unwrap_or(immediate);
@@ -306,6 +308,22 @@ mod tests {
     fn nested_typ_file_resolves_to_nearest_project_marker() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("main.typ"), "Main").unwrap();
+        let chapter = directory.path().join("chapters/one.typ");
+        std::fs::create_dir_all(chapter.parent().unwrap()).unwrap();
+        std::fs::write(&chapter, "Chapter").unwrap();
+        assert_eq!(
+            resolve_startup_path(&chapter),
+            (
+                directory.path().to_path_buf(),
+                Some(PathBuf::from("chapters/one.typ"))
+            )
+        );
+    }
+
+    #[test]
+    fn nested_typ_file_resolves_to_typst_manifest_root() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("typst.toml"), "[package]").unwrap();
         let chapter = directory.path().join("chapters/one.typ");
         std::fs::create_dir_all(chapter.parent().unwrap()).unwrap();
         std::fs::write(&chapter, "Chapter").unwrap();

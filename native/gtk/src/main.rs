@@ -1,19 +1,15 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions), not(feature = "console")),
+    windows_subsystem = "windows"
+)]
+
 mod ui;
 
 use std::path::PathBuf;
 use std::process::Command;
 
-// Keep the binary explicitly linked to the headless backend. The GTK widgets
-// call these APIs through ui::app; no web runtime or WebView is involved.
-use typsmthng_gtk::backend::{Project, StateStore, TypstTool};
-
 fn main() -> glib::ExitCode {
     configure_packaged_runtime();
-    let _backend_types = (
-        std::any::type_name::<Project>(),
-        std::any::type_name::<StateStore>(),
-        std::any::type_name::<TypstTool>(),
-    );
     let mut options = ui::LaunchOptions::default();
     for argument in std::env::args_os().skip(1) {
         if argument == "--smoke-test" {

@@ -64,9 +64,22 @@ impl StateStore {
         let path = self.metadata_path();
         match fs::read(&path) {
             Ok(bytes) => {
-                let parsed = serde_json::from_slice::<AppMetadata>(&bytes)
+                let raw =
+                    serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|source| {
+                        BackendError::Json {
+                            path: path.clone(),
+                            source,
+                        }
+                    })?;
+                let used_previous_field_names =
+                    raw.get("recentVaults").is_some() || raw.get("reopenLastVaultPath").is_some();
+                let parsed = serde_json::from_value::<AppMetadata>(raw)
                     .map_err(|source| BackendError::Json { path, source })?;
-                Ok(normalize_metadata(parsed))
+                let normalized = normalize_metadata(parsed);
+                if used_previous_field_names {
+                    self.save_metadata(&normalized)?;
+                }
+                Ok(normalized)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let metadata = AppMetadata::default();
@@ -419,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_legacy_electrobun_metadata_names() {
+    fn migrates_previous_metadata_field_names_once() {
         let directory = tempdir().unwrap();
         let store = StateStore::new(directory.path());
         fs::write(
@@ -428,6 +441,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(store.load_metadata().unwrap().window_state.width, 800);
+        let migrated = fs::read_to_string(store.metadata_path()).unwrap();
+        assert!(migrated.contains("recentProjects"));
+        assert!(!migrated.contains("recentVaults"));
+        assert!(!migrated.contains("reopenLastVaultPath"));
     }
 
     #[test]
