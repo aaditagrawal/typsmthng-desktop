@@ -3,7 +3,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
 use semver::Version;
@@ -18,6 +19,17 @@ use crate::backend::project::Project;
 
 pub const REQUIRED_TYPST_VERSION: &str = "0.15.1";
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+
+// Probe once per executable revision, while still respecting environment/PATH
+// changes and a compiler replaced in place during the app session.
+struct CachedTypstTool {
+    path: PathBuf,
+    size: u64,
+    modified: Option<SystemTime>,
+    tool: TypstTool,
+}
+
+static DETECTED_TOOL: LazyLock<Mutex<Option<CachedTypstTool>>> = LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone)]
 pub struct TypstTool {
@@ -76,8 +88,37 @@ impl TypstTool {
             if !candidate.is_file() {
                 continue;
             }
-            match Self::probe(candidate) {
-                Ok(tool) if tool.is_required_version() => return Ok(tool),
+            let metadata = fs::metadata(&candidate).ok();
+            let stamp = metadata
+                .as_ref()
+                .map(|metadata| (metadata.len(), metadata.modified().ok()));
+            if let Some((size, modified)) = stamp {
+                let cache = DETECTED_TOOL
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if let Some(cached) = cache.as_ref() {
+                    if cached.path == candidate
+                        && cached.size == size
+                        && cached.modified == modified
+                    {
+                        return Ok(cached.tool.clone());
+                    }
+                }
+            }
+            match Self::probe(candidate.clone()) {
+                Ok(tool) if tool.is_required_version() => {
+                    if let Some((size, modified)) = stamp {
+                        *DETECTED_TOOL
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()) = Some(CachedTypstTool {
+                            path: candidate,
+                            size,
+                            modified,
+                            tool: tool.clone(),
+                        });
+                    }
+                    return Ok(tool);
+                }
                 Ok(tool) => incompatible = Some(tool.version.to_string()),
                 Err(_) => continue,
             }
@@ -472,11 +513,14 @@ fn parse_version(output: &str) -> Option<Version> {
 }
 
 pub fn parse_diagnostics(stderr: &str, root: &Path) -> Vec<Diagnostic> {
-    let positioned = Regex::new(r"^(.*):(\d+):(\d+):\s*(error|warning|hint):\s*(.+)$").unwrap();
-    let unpositioned = Regex::new(r"^(error|warning|hint):\s*(.+)$").unwrap();
+    static POSITIONED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(.*):(\d+):(\d+):\s*(error|warning|hint):\s*(.+)$").unwrap()
+    });
+    static UNPOSITIONED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(error|warning|hint):\s*(.+)$").unwrap());
     let mut diagnostics = Vec::new();
     for line in stderr.lines().filter(|line| !line.trim().is_empty()) {
-        if let Some(captures) = positioned.captures(line) {
+        if let Some(captures) = POSITIONED.captures(line) {
             let raw_path = PathBuf::from(captures.get(1).unwrap().as_str());
             let path = normalize_diagnostic_path(&raw_path, root);
             diagnostics.push(Diagnostic {
@@ -490,7 +534,7 @@ pub fn parse_diagnostics(stderr: &str, root: &Path) -> Vec<Diagnostic> {
                     .and_then(|value| value.as_str().parse().ok()),
                 message: captures.get(5).unwrap().as_str().trim().into(),
             });
-        } else if let Some(captures) = unpositioned.captures(line) {
+        } else if let Some(captures) = UNPOSITIONED.captures(line) {
             diagnostics.push(Diagnostic {
                 severity: severity(captures.get(1).unwrap().as_str()),
                 path: None,
@@ -533,16 +577,21 @@ fn page_number(path: &Path) -> Option<usize> {
 }
 
 fn svg_dimensions(svg: &str) -> (Option<f64>, Option<f64>) {
-    let dimension = |name: &str| {
-        Regex::new(&format!(r#"\b{name}="([0-9.]+)(?:pt)?""#))
-            .ok()?
-            .captures(svg)?
-            .get(1)?
-            .as_str()
-            .parse()
-            .ok()
+    static WIDTH: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"\bwidth="([0-9.]+)(?:pt)?""#).unwrap());
+    static HEIGHT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"\bheight="([0-9.]+)(?:pt)?""#).unwrap());
+    // Only inspect the root element. Descendant image/rectangle dimensions are
+    // unrelated, and a page can contain megabytes of paths after this header.
+    let Some(start) = svg.find("<svg") else {
+        return (None, None);
     };
-    (dimension("width"), dimension("height"))
+    let Some(end) = svg[start..].find('>') else {
+        return (None, None);
+    };
+    let header = &svg[start..start + end];
+    let dimension = |pattern: &Regex| pattern.captures(header)?.get(1)?.as_str().parse().ok();
+    (dimension(&WIDTH), dimension(&HEIGHT))
 }
 
 #[cfg(test)]
@@ -552,6 +601,73 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    #[ignore = "manual performance measurement requiring Typst 0.15.1"]
+    fn benchmark_typst_preview() {
+        let tool = TypstTool::detect().expect("Typst 0.15.1 required for preview benchmark");
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "benchmark").unwrap();
+        fs::write(
+            project.root().join("main.typ"),
+            ["= A page\nHello from the preview."; 10].join("\n#pagebreak()\n"),
+        )
+        .unwrap();
+        let mut timings = Vec::new();
+        for _ in 0..10 {
+            let started = Instant::now();
+            let output = tool.compile_svg(&project, "main.typ").unwrap();
+            assert!(output.success(), "{}", output.stderr);
+            assert_eq!(output.artifact.unwrap().len(), 10);
+            timings.push(started.elapsed());
+        }
+        timings.sort();
+        eprintln!(
+            "10-page SVG compile, 10 runs: median {:?}, max {:?}",
+            timings[5], timings[9]
+        );
+    }
+
+    #[test]
+    fn svg_dimensions_belong_to_the_page_not_its_children() {
+        assert_eq!(
+            svg_dimensions(
+                r#"<svg width="595.28pt" height="841.89pt"><rect width="10" height="20"/></svg>"#
+            ),
+            (Some(595.28), Some(841.89))
+        );
+        assert_eq!(
+            svg_dimensions(r#"<svg viewBox="0 0 100 200"><rect width="10" height="20"/></svg>"#),
+            (None, None)
+        );
+        assert_eq!(svg_dimensions("not SVG"), (None, None));
+    }
+
+    #[test]
+    #[ignore = "manual performance measurement"]
+    fn benchmark_svg_page_headers() {
+        let svg = format!(
+            "<svg width=\"595pt\" height=\"842pt\">{}</svg>",
+            "<path d=\"M 0 0\"/>".repeat(100_000)
+        );
+        svg_dimensions(&svg);
+        let started = Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(svg_dimensions(std::hint::black_box(&svg)));
+        }
+        eprintln!("1000 large SVG page headers: {:?}", started.elapsed());
+        let started = Instant::now();
+        for _ in 0..1000 {
+            for name in ["width", "height"] {
+                let pattern = Regex::new(&format!(r#"\b{name}="([0-9.]+)(?:pt)?""#)).unwrap();
+                std::hint::black_box(pattern.captures(std::hint::black_box(&svg)));
+            }
+        }
+        eprintln!(
+            "1000 previous per-page regex builds: {:?}",
+            started.elapsed()
+        );
+    }
 
     #[test]
     fn parses_versions_and_windows_diagnostic_paths() {

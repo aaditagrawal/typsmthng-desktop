@@ -129,21 +129,27 @@ impl ExternalWatcher {
                 }) {
                     continue;
                 }
-                let metadata = fs::metadata(&path).ok();
-                let fingerprint = FileFingerprint::capture(&path).ok();
-                if self.is_suppressed(&relative, fingerprint.as_ref()) {
-                    continue;
-                }
                 output.push(ExternalEvent {
                     kind,
                     path: relative.clone(),
                     renamed_to: rename_destination.clone(),
-                    is_directory: metadata.as_ref().is_some_and(fs::Metadata::is_dir),
-                    fingerprint,
+                    is_directory: false,
+                    fingerprint: None,
                 });
             }
         }
-        Ok(coalesce(output))
+        // Coalesce before touching disk: a save can produce many notifications,
+        // but each changed file needs only one content hash of its final state.
+        let output = coalesce(output)
+            .into_iter()
+            .filter_map(|mut event| {
+                let path = self.root.join(&event.path);
+                event.is_directory = path.is_dir();
+                event.fingerprint = FileFingerprint::capture(&path).ok();
+                (!self.is_suppressed(&event.path, event.fingerprint.as_ref())).then_some(event)
+            })
+            .collect();
+        Ok(output)
     }
 
     pub fn root(&self) -> &Path {
@@ -174,6 +180,44 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn repeated_save_notifications_preserve_external_change_detection() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("main.typ");
+        fs::write(&path, "original").unwrap();
+        let path = path.canonicalize().unwrap();
+        let mut watcher = ExternalWatcher::new(directory.path()).unwrap();
+        // Use a deterministic notification stream rather than platform watcher timing.
+        let (sender, receiver) = mpsc::channel();
+        watcher.events = receiver;
+        watcher
+            .suppress_own_write("main.typ", Duration::from_secs(2))
+            .unwrap();
+        for _ in 0..100 {
+            sender
+                .send(Ok(
+                    notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.clone())
+                ))
+                .unwrap();
+        }
+        assert!(watcher.drain().unwrap().is_empty());
+        fs::write(&path, "external").unwrap();
+        for _ in 0..100 {
+            sender
+                .send(Ok(
+                    notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.clone())
+                ))
+                .unwrap();
+        }
+        let events = watcher.drain().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].path, "main.typ");
+        assert_eq!(
+            events[0].fingerprint,
+            Some(FileFingerprint::capture(&path).unwrap())
+        );
+    }
 
     #[test]
     fn fingerprint_notices_same_length_rewrites() {

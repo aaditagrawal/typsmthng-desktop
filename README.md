@@ -34,7 +34,7 @@ Packaged releases include the pinned Typst compiler. AppImage, macOS, and Window
 Install development packages on macOS:
 
 ```bash
-brew install rust gtk4 gtksourceview5 typst
+brew install rust gtk4 gtksourceview5 adwaita-icon-theme typst
 ```
 
 Install development packages on Ubuntu 24.04 or a compatible Debian system:

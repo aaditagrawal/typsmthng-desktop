@@ -73,7 +73,15 @@ impl Project {
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
-            .follow_links(false);
+            .follow_links(false)
+            // Prune excluded trees before walking their contents, including outside Git repos.
+            .filter_entry(|entry| {
+                entry.depth() == 0
+                    || !matches!(
+                        entry.file_name().to_str(),
+                        Some(".git" | ".svn" | ".hg" | "node_modules" | "dist" | "build")
+                    )
+            });
 
         let mut entries = Vec::new();
         for result in builder.build() {
@@ -507,6 +515,35 @@ mod tests {
             .create_text_file("chapters/one.typ", "= One\nneedle here")
             .unwrap();
         (temporary, project)
+    }
+
+    #[test]
+    fn excluded_trees_are_pruned_even_outside_git_repositories() {
+        let (temporary, project) = fixture();
+        for directory in [
+            "node_modules",
+            "dist",
+            "build",
+            ".git",
+            "chapters/node_modules",
+        ] {
+            fs::create_dir_all(project.root().join(directory).join("nested")).unwrap();
+            fs::write(
+                project.root().join(directory).join("nested/secret.typ"),
+                "hidden needle",
+            )
+            .unwrap();
+        }
+        let entries = project.entries(true).unwrap();
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.path.contains("secret") || entry.path.contains("node_modules")));
+        assert!(project
+            .search_text("hidden needle", 10, true)
+            .unwrap()
+            .0
+            .is_empty());
+        drop(temporary);
     }
 
     #[test]

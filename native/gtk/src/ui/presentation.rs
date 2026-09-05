@@ -1075,8 +1075,12 @@ impl PresentationController {
     }
 
     fn build_toolbar(&self, parent: &gtk::ApplicationWindow, role: PresentationRole) -> gtk::Box {
-        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        let toolbar = gtk::Box::new(gtk::Orientation::Vertical, 6);
         toolbar.add_css_class("presentation-toolbar");
+        let session_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let tools_row = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        toolbar.append(&session_row);
+        toolbar.append(&tools_row);
         let previous = tool_button("go-previous-symbolic", "Previous slide");
         let next = tool_button("go-next-symbolic", "Next slide");
         let slide = gtk::Label::new(Some("1 / 1"));
@@ -1118,14 +1122,49 @@ impl PresentationController {
         displays.set_tooltip_text(Some("Audience display"));
         let exit = gtk::Button::with_label("End show");
         exit.add_css_class("destructive-action");
+        // Keep session controls and drawing tools in separate compact rows.
+        // The former single line forced presenter windows wider than a laptop display.
         for widget in [
-            previous.upcast_ref::<gtk::Widget>(),
-            next.upcast_ref(),
-            slide.upcast_ref(),
-            timer.upcast_ref(),
+            timer.upcast_ref::<gtk::Widget>(),
             clock.upcast_ref(),
             timer_toggle.upcast_ref(),
             timer_reset.upcast_ref(),
+        ] {
+            session_row.append(widget);
+        }
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        session_row.append(&spacer);
+        for widget in [
+            audience_toggle.upcast_ref::<gtk::Widget>(),
+            displays.upcast_ref(),
+            exit.upcast_ref(),
+        ] {
+            session_row.append(widget);
+        }
+        for (button, icon, hint) in [
+            (
+                &pointer,
+                "input-mouse-symbolic",
+                "Pointer: click to advance",
+            ),
+            (&laser, "find-location-symbolic", "Laser pointer (L)"),
+            (&pen, "document-edit-symbolic", "Pen (D)"),
+            (&highlighter, "edit-select-all-symbolic", "Highlighter (H)"),
+            (&eraser, "edit-clear-symbolic", "Eraser (E)"),
+            (&black, "weather-clear-night-symbolic", "Black screen (B)"),
+            (&white, "weather-clear-symbolic", "White screen (W)"),
+        ] {
+            button.set_icon_name(icon);
+            button.set_tooltip_text(Some(hint));
+        }
+        slide.set_width_chars(9);
+        timer.set_tooltip_text(Some("Elapsed time"));
+        clock.set_tooltip_text(Some("Local time"));
+        for widget in [
+            previous.upcast_ref::<gtk::Widget>(),
+            slide.upcast_ref(),
+            next.upcast_ref(),
             pointer.upcast_ref(),
             laser.upcast_ref(),
             pen.upcast_ref(),
@@ -1137,11 +1176,8 @@ impl PresentationController {
             white.upcast_ref(),
             grid.upcast_ref(),
             notes.upcast_ref(),
-            audience_toggle.upcast_ref(),
-            displays.upcast_ref(),
-            exit.upcast_ref(),
         ] {
-            toolbar.append(widget);
+            tools_row.append(widget);
         }
         previous.connect_clicked({
             let controller = self.clone();

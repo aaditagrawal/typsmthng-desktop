@@ -31,6 +31,7 @@ pub struct LaunchOptions {
     pub startup_path: Option<PathBuf>,
     pub smoke_test: bool,
     pub presentation_smoke_test: bool,
+    pub interaction_smoke_test: bool,
 }
 
 pub fn launch(options: LaunchOptions) -> glib::ExitCode {
@@ -82,6 +83,7 @@ struct AppController {
     window: gtk::ApplicationWindow,
     stack: gtk::Stack,
     state_store: Option<StateStore>,
+    _smoke_state: Option<tempfile::TempDir>,
     project: RefCell<Option<Project>>,
     current_file: RefCell<Option<String>>,
     disk_baseline: RefCell<Option<(String, String)>>,
@@ -97,18 +99,41 @@ struct AppController {
     compile_generation: Cell<u64>,
     compile_in_flight: Cell<bool>,
     pending_compile_source: RefCell<Option<String>>,
+    search_in_flight: Cell<bool>,
+    pending_search: RefCell<Option<PendingSearch>>,
+}
+
+type SearchReply = Rc<dyn Fn(Vec<SearchResultRow>)>;
+struct PendingSearch {
+    mode: SearchMode,
+    query: String,
+    reply: SearchReply,
 }
 
 struct CompileFinished {
     generation: u64,
     main: String,
-    result: Result<(CompileOutput<Vec<SvgPage>>, Vec<InlineNote>), String>,
+    result: Result<(CompileOutput<PreparedPreview>, Vec<InlineNote>), String>,
+}
+
+struct PreparedPreview {
+    cache: tempfile::TempDir,
+    paths: Vec<PathBuf>,
+    rendered_notes: Vec<Option<PathBuf>>,
+    source_line_count: usize,
 }
 
 impl AppController {
     fn build(application: &gtk::Application, options: LaunchOptions) -> Rc<Self> {
+        let started = std::time::Instant::now();
         let mut startup_errors = Vec::new();
-        let state_store = match StateStore::discover() {
+        let smoke =
+            options.smoke_test || options.presentation_smoke_test || options.interaction_smoke_test;
+        let smoke_state = smoke.then(|| tempfile::tempdir().expect("smoke state directory"));
+        let discovered_store = smoke_state
+            .as_ref()
+            .map_or_else(StateStore::discover, |dir| Ok(StateStore::new(dir.path())));
+        let state_store = match discovered_store {
             Ok(store) => Some(store),
             Err(error) => {
                 startup_errors.push(format!("State storage: {error}"));
@@ -131,7 +156,15 @@ impl AppController {
             }
             None => BackendWindowState::default(),
         };
-        let settings = settings_from_backend(&backend_settings);
+        let mut settings = settings_from_backend(&backend_settings);
+        if smoke {
+            match std::env::var("TYPSMTHNG_SMOKE_THEME").as_deref() {
+                Ok("light") => settings.theme = Theme::Light,
+                Ok("dark") => settings.theme = Theme::Dark,
+                _ => {}
+            }
+            settings.google_fonts = false;
+        }
         let system_prefers_dark = gtk::Settings::default().is_some_and(|gtk_settings| {
             gtk_settings.is_gtk_application_prefer_dark_theme()
                 || gtk_settings
@@ -141,10 +174,18 @@ impl AppController {
         let window = gtk::ApplicationWindow::builder()
             .application(application)
             .title("typsmthng")
-            .default_width(window_state.width)
+            .default_width(if smoke {
+                std::env::var("TYPSMTHNG_SMOKE_WIDTH")
+                    .ok()
+                    .and_then(|width| width.parse().ok())
+                    .unwrap_or(window_state.width)
+            } else {
+                window_state.width
+            })
             .default_height(window_state.height)
             .build();
         window.set_size_request(760, 520);
+        window.add_css_class("typsmthng");
         let stack = gtk::Stack::new();
         stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         stack.set_transition_duration(120);
@@ -156,6 +197,7 @@ impl AppController {
             window,
             stack,
             state_store,
+            _smoke_state: smoke_state,
             project: RefCell::new(None),
             current_file: RefCell::new(None),
             disk_baseline: RefCell::new(None),
@@ -171,11 +213,38 @@ impl AppController {
             compile_generation: Cell::new(0),
             compile_in_flight: Cell::new(false),
             pending_compile_source: RefCell::new(None),
+            search_in_flight: Cell::new(false),
+            pending_search: RefCell::new(None),
         });
         controller.self_weak.replace(Rc::downgrade(&controller));
 
         controller.install_views();
         controller.install_actions();
+        if smoke {
+            let count = std::env::var("TYPSMTHNG_SMOKE_PROJECTS")
+                .ok()
+                .and_then(|count| count.parse::<usize>().ok())
+                .unwrap_or(0)
+                .min(8);
+            if let (Some(directory), Some(store)) =
+                (&controller._smoke_state, &controller.state_store)
+            {
+                for index in 1..=count {
+                    let project =
+                        Project::create(directory.path(), &format!("Sample project {index}"))
+                            .expect("create visual-review project");
+                    store
+                        .upsert_recent(
+                            project.root(),
+                            project.name(),
+                            1,
+                            Some("main.typ".into()),
+                            false,
+                        )
+                        .expect("record visual-review project");
+                }
+            }
+        }
         controller.refresh_recents();
         controller
             .workspace
@@ -223,7 +292,7 @@ impl AppController {
             controller.show_home();
         }
 
-        if !options.smoke_test && !options.presentation_smoke_test {
+        if !smoke {
             let weak = Rc::downgrade(&controller);
             glib::timeout_add_local_once(Duration::from_secs(2), move || {
                 if let Some(this) = weak.upgrade() {
@@ -231,7 +300,9 @@ impl AppController {
                 }
             });
         }
-        if options.presentation_smoke_test {
+        if options.interaction_smoke_test {
+            controller.run_interaction_smoke();
+        } else if options.presentation_smoke_test {
             let weak = Rc::downgrade(&controller);
             let application = application.clone();
             let attempts = Rc::new(Cell::new(0_u16));
@@ -254,6 +325,7 @@ impl AppController {
                     let _ = std::io::stdout().flush();
                     let application = application.clone();
                     glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                        super::smoke::capture_windows(&application);
                         application.quit()
                     });
                     glib::ControlFlow::Break
@@ -265,17 +337,100 @@ impl AppController {
                 }
             });
         } else if options.smoke_test {
+            match std::env::var("TYPSMTHNG_SMOKE_VIEW").as_deref() {
+                Ok("settings") => controller.show_settings(),
+                Ok("search") => {
+                    if let Some(workspace) = controller.workspace.borrow().as_ref() {
+                        workspace.present_search();
+                    }
+                }
+                _ => {}
+            }
             let application = application.clone();
             glib::idle_add_local_once(move || {
-                println!("TYPESMTHNG_SMOKE_READY {{\"gtk\":true,\"window\":true}}");
+                println!(
+                    "TYPESMTHNG_SMOKE_READY {{\"gtk\":true,\"window\":true,\"startup_ms\":{}}}",
+                    started.elapsed().as_millis()
+                );
                 let _ = std::io::stdout().flush();
                 glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                    super::smoke::capture_windows(&application);
                     application.quit()
                 });
             });
         }
         CONTROLLERS.with(|controllers| controllers.borrow_mut().push(controller.clone()));
         controller
+    }
+
+    fn run_interaction_smoke(self: &Rc<Self>) {
+        let project = Project::create(self._smoke_state.as_ref().unwrap().path(), "interaction")
+            .expect("create isolated interaction fixture");
+        project
+            .write_text_atomic(
+                "main.typ",
+                include_str!("../../tests/fixtures/demo/main.typ"),
+            )
+            .expect("write interaction fixture");
+        project
+            .create_binary_file("asset.bin", &[0, 255, 1, 128])
+            .expect("write binary fixture");
+        self.open_project(project.root(), Some("main.typ".into()));
+        let weak = self.weak();
+        let mut step = 0_u32;
+        let mut last_tick = std::time::Instant::now();
+        let mut max_tick = Duration::ZERO;
+        let began = last_tick;
+        glib::timeout_add_local(Duration::from_millis(25), move || {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            max_tick = max_tick.max(last_tick.elapsed());
+            last_tick = std::time::Instant::now();
+            let workspace = this.workspace.borrow().as_ref().unwrap().clone();
+            step += 1;
+            if step <= 12 {
+                let buffer = workspace.editor.buffer();
+                buffer.insert(
+                    &mut buffer.end_iter(),
+                    &format!("\n// interaction {step}: café λ"),
+                );
+                workspace.request_compile();
+                if step == 12 {
+                    // A queued compile must read the live buffer, not replay the
+                    // older snapshot and mark these newer edits as saved.
+                    buffer.insert(&mut buffer.end_iter(), "\n// unscheduled final edit");
+                }
+            } else if step == 13 {
+                // Exercise file switching while a previous compile is queued.
+                this.select_file("asset.bin".into());
+            } else if step == 18 {
+                assert_eq!(
+                    std::fs::read(project.root().join("asset.bin")).unwrap(),
+                    [0, 255, 1, 128]
+                );
+                this.select_file("main.typ".into());
+            } else if step > 18
+                && !this.compile_in_flight.get()
+                && this.pending_compile_source.borrow().is_none()
+            {
+                assert!(workspace.source_text().contains("interaction 12: café λ"));
+                assert!(workspace.source_text().contains("unscheduled final edit"));
+                assert!(std::fs::read_to_string(project.root().join("main.typ"))
+                    .unwrap()
+                    .contains("interaction 12: café λ"));
+                assert_eq!(this.presentation.borrow().as_ref().unwrap().page_count(), 3);
+                println!("TYPESMTHNG_INTERACTION_READY {{\"edits\":12,\"asset_preserved\":true,\"pages\":3,\"elapsed_ms\":{},\"max_tick_ms\":{}}}", began.elapsed().as_millis(), max_tick.as_millis());
+                super::smoke::capture_windows(&this.application);
+                this.application.quit();
+                return glib::ControlFlow::Break;
+            }
+            assert!(
+                began.elapsed() < Duration::from_secs(20),
+                "interaction smoke timed out"
+            );
+            glib::ControlFlow::Continue
+        });
     }
 
     fn install_views(self: &Rc<Self>) {
@@ -332,10 +487,12 @@ impl AppController {
                 refresh_compile: callback1(&weak, Self::compile),
                 search: {
                     let weak = weak.clone();
-                    Rc::new(move |mode, query| {
-                        weak.upgrade()
-                            .map(|this| this.search(mode, &query))
-                            .unwrap_or_default()
+                    Rc::new(move |mode, query, reply| {
+                        if let Some(this) = weak.upgrade() {
+                            this.search(mode, query, reply);
+                        } else {
+                            reply(Vec::new());
+                        }
                     })
                 },
                 settings_changed: callback1(&weak, Self::settings_changed),
@@ -685,6 +842,11 @@ impl AppController {
         }
         match project.read_file(&path) {
             Ok(file) => {
+                // A queued source belongs to the previous buffer. In particular,
+                // opening an asset must never save that source over the asset.
+                self.pending_compile_source.replace(None);
+                self.compile_generation
+                    .set(self.compile_generation.get().wrapping_add(1));
                 self.current_file.replace(Some(path.clone()));
                 if let Some(store) = &self.state_store {
                     if let Err(error) = store.persist_last_file(project.root(), Some(path.clone()))
@@ -779,6 +941,16 @@ impl AppController {
             }
             return false;
         }
+        // Autosave may already have persisted this exact buffer. Avoid another
+        // atomic rename, fsync, and watcher event on every preview request.
+        if disk_source.as_deref() == Some(source) {
+            self.disk_baseline
+                .replace(Some((path.to_string(), source.to_string())));
+            if let Some(workspace) = self.workspace.borrow().as_ref() {
+                workspace.mark_saved();
+            }
+            return true;
+        }
         match project.write_text_atomic(path, source) {
             Ok(_) => {
                 self.disk_baseline
@@ -832,6 +1004,7 @@ impl AppController {
         workspace.set_compiling();
         let options = self.compile_options();
         let google_fonts = self.settings.borrow().google_fonts;
+        let notes_layout = self.settings.borrow().presentation_notes_layout.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn({
             let main = main.clone();
@@ -853,6 +1026,7 @@ impl AppController {
                         } else {
                             Vec::new()
                         };
+                        let output = prepare_preview(output, &notes_layout, &project, &main)?;
                         Ok((output, notes))
                     })
                     .map_err(|error| error.to_string());
@@ -870,14 +1044,32 @@ impl AppController {
                     if let Some(this) = weak.upgrade() {
                         this.compile_in_flight.set(false);
                         this.apply_compile_result(finished);
-                        if let Some(source) = this.pending_compile_source.borrow_mut().take() {
-                            this.compile(source);
+                        let pending = this.pending_compile_source.borrow_mut().take();
+                        if pending.is_some() {
+                            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                                workspace.request_compile();
+                            }
                         }
                     }
                     glib::ControlFlow::Break
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if let Some(this) = weak.upgrade() {
+                        this.compile_in_flight.set(false);
+                        let pending = this.pending_compile_source.borrow_mut().take();
+                        if pending.is_some() {
+                            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                                workspace.request_compile();
+                            }
+                        } else if let Some(workspace) = this.workspace.borrow().as_ref() {
+                            workspace.set_compile_status(
+                                "Compiler worker stopped. Compile again to retry.",
+                            );
+                        }
+                    }
+                    glib::ControlFlow::Break
+                }
             }
         });
     }
@@ -954,7 +1146,7 @@ impl AppController {
             })
             .collect::<Vec<_>>();
         workspace.set_diagnostics(&diagnostics);
-        let Some(pages) = output.artifact else {
+        let Some(preview) = output.artifact else {
             let detail = if output.stderr.trim().is_empty() {
                 "Typst did not produce pages"
             } else {
@@ -963,60 +1155,12 @@ impl AppController {
             workspace.set_compile_status(&format!("Compile error: {detail}"));
             return;
         };
-        let cache = match tempfile::tempdir() {
-            Ok(cache) => cache,
-            Err(error) => {
-                workspace.set_compile_status(&format!("Preview cache error: {error}"));
-                return;
-            }
-        };
-        let split_notes = match self.settings.borrow().presentation_notes_layout.as_str() {
-            "right-half" => true,
-            "whole" => false,
-            _ => {
-                !pages.is_empty()
-                    && pages.iter().all(|page| {
-                        page.width_points
-                            .zip(page.height_points)
-                            .is_some_and(|(width, height)| height > 0.0 && width / height >= 2.6)
-                    })
-            }
-        };
-        let mut paths = Vec::with_capacity(pages.len());
-        let mut rendered_notes = Vec::with_capacity(pages.len());
-        for page in pages {
-            let path = cache.path().join(format!("page-{:04}.svg", page.page));
-            let (slide_svg, note_svg) = if split_notes {
-                let width = page.width_points.unwrap_or_default();
-                let height = page.height_points.unwrap_or_default();
-                (
-                    crop_svg(&page.svg, 0.0, width / 2.0, height),
-                    Some(crop_svg(&page.svg, width / 2.0, width / 2.0, height)),
-                )
-            } else {
-                (page.svg, None)
-            };
-            if let Err(error) = std::fs::write(&path, slide_svg) {
-                workspace.set_compile_status(&format!("Preview cache error: {error}"));
-                return;
-            }
-            paths.push(path);
-            let note_path = note_svg.and_then(|svg| {
-                let path = cache.path().join(format!("notes-{:04}.svg", page.page));
-                std::fs::write(&path, svg).ok().map(|()| path)
-            });
-            rendered_notes.push(note_path);
-        }
-        let source_line_count = self
-            .project
-            .borrow()
-            .as_ref()
-            .and_then(|project| project.read_file(&finished.main).ok())
-            .and_then(|file| match file.content {
-                FileContent::Text(source) => Some(source.lines().count().max(1)),
-                FileContent::Binary(_) => None,
-            })
-            .unwrap_or(1);
+        let PreparedPreview {
+            cache,
+            paths,
+            rendered_notes,
+            source_line_count,
+        } = preview;
         self.render_cache.replace(Some(cache));
         self.compiled_main.replace(Some(finished.main.clone()));
         workspace.set_compiled_preview(&paths, &finished.main, source_line_count);
@@ -1279,9 +1423,9 @@ impl AppController {
         }
     }
 
-    fn search(&self, mode: SearchMode, query: &str) -> Vec<SearchResultRow> {
+    fn search(&self, mode: SearchMode, query: String, reply: SearchReply) {
         if mode == SearchMode::Commands {
-            return [
+            let rows = [
                 ("Compile document", "Ctrl+Enter", "compile"),
                 ("Export PDF", "Ctrl+Shift+E", "export"),
                 ("Present here", "F5", "present"),
@@ -1299,41 +1443,43 @@ impl AppController {
                 column: None,
             })
             .collect();
+            reply(rows);
+            return;
+        }
+        if self.search_in_flight.get() {
+            self.pending_search
+                .replace(Some(PendingSearch { mode, query, reply }));
+            return;
         }
         let Some(project) = self.project.borrow().clone() else {
-            return Vec::new();
+            reply(Vec::new());
+            return;
         };
-        match mode {
-            SearchMode::Files => project
-                .search_paths(query, 80, *self.hidden_files.borrow())
-                .map(|(rows, _)| {
-                    rows.into_iter()
-                        .map(|row| SearchResultRow {
-                            primary: row.entry.name,
-                            secondary: row.entry.path.clone(),
-                            path: Some(row.entry.path),
-                            line: None,
-                            column: None,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            SearchMode::Contents => project
-                .search_text(query, 80, *self.hidden_files.borrow())
-                .map(|(rows, _)| {
-                    rows.into_iter()
-                        .map(|row| SearchResultRow {
-                            primary: format!("{}:{}:{}", row.path, row.line, row.column),
-                            secondary: row.preview,
-                            path: Some(row.path),
-                            line: Some(row.line),
-                            column: Some(row.column),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            SearchMode::Commands => unreachable!(),
-        }
+        self.search_in_flight.set(true);
+        let hidden = *self.hidden_files.borrow();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rows = search_project(&project, mode, &query, hidden);
+            let _ = sender.send(rows);
+        });
+        let weak = self.weak();
+        glib::timeout_add_local(Duration::from_millis(20), move || {
+            let rows = match receiver.try_recv() {
+                Ok(rows) => rows,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+            };
+            if let Some(this) = weak.upgrade() {
+                this.search_in_flight.set(false);
+                let pending = this.pending_search.borrow_mut().take();
+                if let Some(pending) = pending {
+                    this.search(pending.mode, pending.query, pending.reply);
+                } else {
+                    reply(rows);
+                }
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     fn prompt_create_file(&self) {
@@ -1965,12 +2111,29 @@ impl AppController {
     }
 
     fn apply_theme(&self, theme: Theme) {
+        let dark = match theme {
+            Theme::Dark => true,
+            Theme::Light => false,
+            Theme::System => self.system_prefers_dark,
+        };
+        if dark {
+            self.window.add_css_class("dark");
+        } else {
+            self.window.remove_css_class("dark");
+        }
         if let Some(gtk_settings) = gtk::Settings::default() {
-            gtk_settings.set_gtk_application_prefer_dark_theme(match theme {
-                Theme::Dark => true,
-                Theme::Light => false,
-                Theme::System => self.system_prefers_dark,
-            });
+            gtk_settings.set_gtk_application_prefer_dark_theme(dark);
+        }
+        for widget in gtk::Window::list_toplevels() {
+            if let Ok(window) = widget.downcast::<gtk::Window>() {
+                if window.transient_for().is_some() {
+                    if dark {
+                        window.add_css_class("dark");
+                    } else {
+                        window.remove_css_class("dark");
+                    }
+                }
+            }
         }
     }
 
@@ -2947,7 +3110,7 @@ impl AppController {
                 path: project.root_path.to_string_lossy().into_owned(),
                 detail: project
                     .file_count
-                    .map(|count| format!("{count} files"))
+                    .map(|count| format!("{count} {}", if count == 1 { "file" } else { "files" }))
                     .unwrap_or_else(|| "Recent".into()),
                 favorite: project.favorite,
             })
@@ -2991,6 +3154,126 @@ impl AppController {
 
     fn weak(&self) -> Weak<Self> {
         self.self_weak.borrow().clone()
+    }
+}
+
+fn prepare_preview(
+    output: CompileOutput<Vec<SvgPage>>,
+    notes_layout: &str,
+    project: &Project,
+    main: &str,
+) -> typsmthng_gtk::backend::Result<CompileOutput<PreparedPreview>> {
+    let artifact = output
+        .artifact
+        .map(|pages| -> typsmthng_gtk::backend::Result<PreparedPreview> {
+            let cache = tempfile::tempdir().map_err(|error| BackendError::Io {
+                path: std::env::temp_dir(),
+                source: error,
+            })?;
+            let split_notes = match notes_layout {
+                "right-half" => true,
+                "whole" => false,
+                _ => {
+                    !pages.is_empty()
+                        && pages.iter().all(|page| {
+                            page.width_points.zip(page.height_points).is_some_and(
+                                |(width, height)| height > 0.0 && width / height >= 2.6,
+                            )
+                        })
+                }
+            };
+            let mut paths = Vec::with_capacity(pages.len());
+            let mut rendered_notes = Vec::with_capacity(pages.len());
+            for page in pages {
+                let path = cache.path().join(format!("page-{:04}.svg", page.page));
+                let valid_dimensions =
+                    page.width_points
+                        .zip(page.height_points)
+                        .is_some_and(|(width, height)| {
+                            width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0
+                        });
+                let (slide_svg, note_svg) = if split_notes && valid_dimensions {
+                    let width = page.width_points.unwrap_or_default();
+                    let height = page.height_points.unwrap_or_default();
+                    (
+                        crop_svg(&page.svg, 0.0, width / 2.0, height),
+                        Some(crop_svg(&page.svg, width / 2.0, width / 2.0, height)),
+                    )
+                } else {
+                    (page.svg, None)
+                };
+                std::fs::write(&path, slide_svg).map_err(|error| BackendError::Io {
+                    path: path.clone(),
+                    source: error,
+                })?;
+                paths.push(path);
+                let note_path = note_svg.and_then(|svg| {
+                    let path = cache.path().join(format!("notes-{:04}.svg", page.page));
+                    std::fs::write(&path, svg).ok().map(|()| path)
+                });
+                rendered_notes.push(note_path);
+            }
+            let source_line_count = project
+                .read_file(main)
+                .ok()
+                .and_then(|file| match file.content {
+                    FileContent::Text(source) => Some(source.lines().count().max(1)),
+                    FileContent::Binary(_) => None,
+                })
+                .unwrap_or(1);
+            Ok(PreparedPreview {
+                cache,
+                paths,
+                rendered_notes,
+                source_line_count,
+            })
+        })
+        .transpose()?;
+    Ok(CompileOutput {
+        artifact,
+        diagnostics: output.diagnostics,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        elapsed: output.elapsed,
+    })
+}
+
+fn search_project(
+    project: &Project,
+    mode: SearchMode,
+    query: &str,
+    hidden: bool,
+) -> Vec<SearchResultRow> {
+    match mode {
+        SearchMode::Files => project
+            .search_paths(query, 80, hidden)
+            .map(|(rows, _)| {
+                rows.into_iter()
+                    .map(|row| SearchResultRow {
+                        primary: row.entry.name,
+                        secondary: row.entry.path.clone(),
+                        path: Some(row.entry.path),
+                        line: None,
+                        column: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        SearchMode::Contents => project
+            .search_text(query, 80, hidden)
+            .map(|(rows, _)| {
+                rows.into_iter()
+                    .map(|row| SearchResultRow {
+                        primary: format!("{}:{}:{}", row.path, row.line, row.column),
+                        secondary: row.preview,
+                        path: Some(row.path),
+                        line: Some(row.line),
+                        column: Some(row.column),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        SearchMode::Commands => unreachable!(),
     }
 }
 
@@ -3450,6 +3733,127 @@ mod tests {
         import_latex_sources, parse_note_sections, project_layout_locked, serialize_note_sections,
         sidecar_slide_heading, write_template_metadata,
     };
+
+    fn preview_output(dimensions: &[(f64, f64)]) -> super::CompileOutput<Vec<super::SvgPage>> {
+        super::CompileOutput {
+            artifact: Some(dimensions.iter().enumerate().map(|(index, &(width, height))| {
+                super::SvgPage {
+                    page: index + 1,
+                    svg: format!(r#"<svg width="{width}pt" height="{height}pt" viewBox="0 0 {width} {height}"><text>slide</text></svg>"#),
+                    width_points: Some(width),
+                    height_points: Some(height),
+                }
+            }).collect()),
+            diagnostics: Vec::new(),
+            stdout: "compiler output".into(),
+            stderr: String::new(),
+            elapsed: std::time::Duration::from_millis(12),
+        }
+    }
+
+    #[test]
+    fn prepared_preview_splits_ultrawide_notes_and_owns_cache_lifetime() {
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "preview").unwrap();
+        project
+            .write_text_atomic("main.typ", "one\ntwo\nthree")
+            .unwrap();
+        let result = super::prepare_preview(
+            preview_output(&[(1200.0, 400.0)]),
+            "auto",
+            &project,
+            "main.typ",
+        )
+        .unwrap();
+        assert_eq!(result.stdout, "compiler output");
+        assert_eq!(result.elapsed.as_millis(), 12);
+        let preview = result.artifact.unwrap();
+        assert_eq!(preview.source_line_count, 3);
+        let slide = fs::read_to_string(&preview.paths[0]).unwrap();
+        assert!(slide.contains(r#"viewBox="0.000 0 600.000 400.000""#));
+        let notes = fs::read_to_string(preview.rendered_notes[0].as_ref().unwrap()).unwrap();
+        assert!(notes.contains(r#"viewBox="600.000 0 600.000 400.000""#));
+        let cache_path = preview.cache.path().to_path_buf();
+        assert!(cache_path.is_dir());
+        drop(preview);
+        assert!(!cache_path.exists());
+    }
+
+    #[test]
+    fn prepared_preview_respects_mixed_pages_and_layout_overrides() {
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "preview").unwrap();
+        for (layout, dimensions, split) in [
+            ("auto", vec![(1200.0, 400.0), (600.0, 800.0)], false),
+            ("whole", vec![(1200.0, 400.0)], false),
+            ("right-half", vec![(1200.0, 800.0)], true),
+        ] {
+            let preview =
+                super::prepare_preview(preview_output(&dimensions), layout, &project, "main.typ")
+                    .unwrap()
+                    .artifact
+                    .unwrap();
+            assert_eq!(preview.paths.len(), dimensions.len());
+            assert!(preview
+                .rendered_notes
+                .iter()
+                .all(|path| path.is_some() == split));
+        }
+        let mut failed = preview_output(&[]);
+        failed.artifact = None;
+        failed.stderr = "compile failure".into();
+        let result = super::prepare_preview(failed, "auto", &project, "main.typ").unwrap();
+        assert!(result.artifact.is_none());
+        assert_eq!(result.stderr, "compile failure");
+    }
+
+    #[test]
+    fn forced_notes_split_preserves_pages_without_valid_dimensions() {
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "preview").unwrap();
+        for dimensions in [
+            (None, Some(400.0)),
+            (Some(1200.0), None),
+            (Some(0.0), Some(400.0)),
+            (Some(f64::NAN), Some(400.0)),
+        ] {
+            let mut output = preview_output(&[(1200.0, 400.0)]);
+            let page = &mut output.artifact.as_mut().unwrap()[0];
+            page.width_points = dimensions.0;
+            page.height_points = dimensions.1;
+            let original = page.svg.clone();
+            let preview = super::prepare_preview(output, "right-half", &project, "main.typ")
+                .unwrap()
+                .artifact
+                .unwrap();
+            assert_eq!(fs::read_to_string(&preview.paths[0]).unwrap(), original);
+            assert!(preview.rendered_notes[0].is_none());
+        }
+    }
+
+    #[test]
+    fn background_search_keeps_file_and_content_modes_distinct() {
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "search").unwrap();
+        project
+            .write_text_atomic("chapter.typ", "first\nneedle café")
+            .unwrap();
+        project
+            .write_text_atomic("needle.typ", "unrelated")
+            .unwrap();
+        project.write_text_atomic(".secret.typ", "needle").unwrap();
+        let files = super::search_project(&project, super::SearchMode::Files, "needle", false);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.as_deref(), Some("needle.typ"));
+        assert_eq!(files[0].line, None);
+        let contents =
+            super::search_project(&project, super::SearchMode::Contents, "needle", false);
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0].path.as_deref(), Some("chapter.typ"));
+        assert_eq!((contents[0].line, contents[0].column), (Some(2), Some(1)));
+        let hidden = super::search_project(&project, super::SearchMode::Contents, "needle", true);
+        assert_eq!(hidden.len(), 2);
+    }
 
     #[test]
     fn sidecar_headings_accept_legacy_and_current_forms() {

@@ -14,6 +14,8 @@ fn main() -> glib::ExitCode {
     for argument in std::env::args_os().skip(1) {
         if argument == "--smoke-test" {
             options.smoke_test = true;
+        } else if argument == "--interaction-smoke-test" {
+            options.interaction_smoke_test = true;
         } else if argument == "--presentation-smoke-test" {
             options.presentation_smoke_test = true;
         } else if argument != "--" && options.startup_path.is_none() {

@@ -48,6 +48,7 @@ jobs:
           cargo build --locked --manifest-path native/gtk/Cargo.toml
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 20s target/debug/typsmthng --smoke-test
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 30s target/debug/typsmthng --interaction-smoke-test
 
   platform-build:
     name: Build ${{ matrix.name }}
@@ -70,7 +71,7 @@ jobs:
           workspaces: .
       - name: macOS GTK dependencies
         if: runner.os == 'macOS'
-        run: brew install gtk4 gtksourceview5
+        run: brew install gtk4 gtksourceview5 adwaita-icon-theme
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:

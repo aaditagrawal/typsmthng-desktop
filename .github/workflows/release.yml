@@ -98,7 +98,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - run: |
-          brew install gtk4 gtksourceview5 dylibbundler create-dmg
+          brew install gtk4 gtksourceview5 adwaita-icon-theme dylibbundler create-dmg
           machine="$(uname -m)"
           [[ "$machine" == "arm64" ]] && machine="aarch64"
           curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v0.15.1/typst-${machine}-apple-darwin.tar.xz"
