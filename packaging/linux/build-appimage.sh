@@ -19,7 +19,7 @@ cp -R "$(pkg-config --variable=prefix gtksourceview-5)/share/gtksourceview-5" "$
 mkdir -p "$appdir/usr/share/icons/hicolor/512x512/apps"
 cp -R /usr/share/icons/Adwaita "$appdir/usr/share/icons/"
 icon="$appdir/usr/share/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png"
-install -m644 "$repo_root/assets/icon.png" "$icon"
+install -m644 "$repo_root/icon.iconset/icon_512x512.png" "$icon"
 query_loaders="$(pkg-config --variable=gdk_pixbuf_binarydir gdk-pixbuf-2.0)/../gdk-pixbuf-query-loaders"
 install -m755 "$query_loaders" "$appdir/usr/bin/gdk-pixbuf-query-loaders"
 output_dir="$repo_root/build/appimage-output"
