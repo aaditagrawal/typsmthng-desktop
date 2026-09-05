@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use directories::BaseDirs;
 use regex::Regex;
@@ -29,6 +30,16 @@ pub struct GoogleFontCache {
     directory: PathBuf,
 }
 
+/// Result of background font discovery. Only changes to actual font files
+/// require another preview; manifest writes alone do not affect rendering.
+#[derive(Debug, Clone)]
+pub struct FontPreparation {
+    pub directory: Option<PathBuf>,
+    pub changed: bool,
+}
+
+type FontRevision = Vec<(OsString, u64, Option<SystemTime>)>;
+
 impl Default for GoogleFontCache {
     fn default() -> Self {
         let directory = BaseDirs::new()
@@ -39,6 +50,56 @@ impl Default for GoogleFontCache {
 }
 
 impl GoogleFontCache {
+    /// Returns an existing cache without discovery, network access, or directory creation.
+    pub fn cached_directory(&self) -> Option<PathBuf> {
+        self.directory.is_dir().then(|| self.directory.clone())
+    }
+
+    /// Run on a worker thread; schedule a fresh preview only when `changed` is true.
+    pub fn prepare_project_report(
+        &self,
+        project: &Project,
+        current_source: &str,
+    ) -> Result<FontPreparation> {
+        let before = self.font_revision()?;
+        self.prepare_project(project, current_source)?;
+        let after = self.font_revision()?;
+        Ok(FontPreparation {
+            directory: self.cached_directory(),
+            changed: before != after,
+        })
+    }
+
+    fn font_revision(&self) -> Result<FontRevision> {
+        let entries = match fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(BackendError::io(&self.directory, error)),
+        };
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| BackendError::io(&self.directory, error))?;
+            let path = entry.path();
+            if !path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("ttf") || extension.eq_ignore_ascii_case("otf")
+                })
+            {
+                continue;
+            }
+            let metadata = entry
+                .metadata()
+                .map_err(|error| BackendError::io(&path, error))?;
+            if metadata.is_file() {
+                files.push((entry.file_name(), metadata.len(), metadata.modified().ok()));
+            }
+        }
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(files)
+    }
+
     pub fn prepare_project(
         &self,
         project: &Project,
@@ -62,9 +123,16 @@ impl GoogleFontCache {
         }
         fs::create_dir_all(&self.directory)
             .map_err(|error| BackendError::io(&self.directory, error))?;
-        for family in families.into_iter().take(12) {
-            self.prepare_family(&family, || self.download_family(&family));
-        }
+        let missing = families
+            .into_iter()
+            .take(12)
+            .filter(|family| !self.family_is_cached(&self.family_manifest(family)))
+            .collect::<Vec<_>>();
+        // Network misses are independent. Keep concurrency bounded and wait for
+        // whole families before compiling so font selection remains deterministic.
+        prepare_in_parallel(&missing, |family| {
+            self.prepare_family(family, || self.download_family(family));
+        });
         Ok(Some(self.directory.clone()))
     }
 
@@ -183,6 +251,30 @@ impl GoogleFontCache {
     }
 }
 
+fn prepare_in_parallel(families: &[String], prepare: impl Fn(&str) + Sync) {
+    if families.len() <= 1 {
+        for family in families {
+            prepare(family);
+        }
+        return;
+    }
+    const MAX_WORKERS: usize = 4;
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..families.len().min(MAX_WORKERS) {
+            let prepare = &prepare;
+            let next = &next;
+            scope.spawn(move || {
+                while let Some(family) =
+                    families.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                {
+                    prepare(family);
+                }
+            });
+        }
+    });
+}
+
 pub fn extract_typst_font_families(source: &str) -> Vec<String> {
     static FONT: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"font\s*:\s*(?:\([^)]*\)|\[[^]]*\]|[^,\n;]+)"#).unwrap());
@@ -214,6 +306,73 @@ pub fn extract_typst_font_families(source: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_lookup_and_report_are_read_only_without_font_requests() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = GoogleFontCache {
+            directory: directory.path().join("cache"),
+        };
+        let project = Project::create(directory.path(), "project").unwrap();
+        assert!(cache.cached_directory().is_none());
+        let report = cache
+            .prepare_project_report(&project, "Plain text")
+            .unwrap();
+        assert!(!report.changed);
+        assert!(report.directory.is_none());
+        assert!(!cache.directory.exists());
+    }
+
+    #[test]
+    fn font_revision_tracks_fonts_but_not_manifests_or_partial_downloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = GoogleFontCache {
+            directory: directory.path().to_path_buf(),
+        };
+        let initial = cache.font_revision().unwrap();
+        fs::write(directory.path().join(".family-example.json"), "[]").unwrap();
+        fs::write(directory.path().join(".tmp-download"), "bytes").unwrap();
+        assert_eq!(initial, cache.font_revision().unwrap());
+        let font = directory.path().join("example.ttf");
+        fs::write(&font, "font").unwrap();
+        let added = cache.font_revision().unwrap();
+        assert_ne!(initial, added);
+        assert_eq!(cache.cached_directory().as_deref(), Some(directory.path()));
+        fs::write(&font, "longer-font").unwrap();
+        let resized = cache.font_revision().unwrap();
+        assert_ne!(added, resized);
+        filetime::set_file_mtime(&font, filetime::FileTime::from_unix_time(1, 0)).unwrap();
+        assert_ne!(resized, cache.font_revision().unwrap());
+        fs::rename(&font, directory.path().join("renamed.otf")).unwrap();
+        assert_ne!(resized, cache.font_revision().unwrap());
+        fs::remove_file(directory.path().join("renamed.otf")).unwrap();
+        assert_eq!(initial, cache.font_revision().unwrap());
+    }
+
+    #[test]
+    fn cold_font_families_use_four_workers_and_finish_before_returning() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let families = (0..12).map(|index| index.to_string()).collect::<Vec<_>>();
+        let completed = AtomicUsize::new(0);
+        let started = AtomicUsize::new(0);
+        let active = AtomicUsize::new(0);
+        let maximum = AtomicUsize::new(0);
+        prepare_in_parallel(&families, |_| {
+            maximum.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+            let position = started.fetch_add(1, Ordering::SeqCst);
+            if position < 4 {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while started.load(Ordering::SeqCst) < 4 {
+                    assert!(Instant::now() < deadline, "font requests were serialized");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+            completed.fetch_add(1, Ordering::SeqCst);
+            active.fetch_sub(1, Ordering::SeqCst);
+        });
+        assert_eq!(maximum.load(Ordering::SeqCst), 4);
+        assert_eq!(completed.load(Ordering::SeqCst), families.len());
+    }
 
     #[test]
     fn warm_family_skips_download_and_missing_fonts_invalidate_manifest() {

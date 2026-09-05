@@ -3,7 +3,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, LazyLock, Mutex,
+};
 use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
@@ -45,6 +48,7 @@ pub struct CompileOptions {
     pub package_path: Option<PathBuf>,
     pub package_cache_path: Option<PathBuf>,
     pub creation_timestamp: Option<u64>,
+    pub cancellation: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -211,7 +215,11 @@ impl TypstTool {
         let (entrypoint, _wrapper) = compile_entry(project, &main, options)?;
         command.arg(entrypoint).arg(&output_pattern);
         let started = Instant::now();
-        let process = run_command(&mut command, PROCESS_TIMEOUT)?;
+        let process = run_command_cancellable(
+            &mut command,
+            PROCESS_TIMEOUT,
+            options.cancellation.as_deref(),
+        )?;
         let elapsed = started.elapsed();
         let diagnostics = parse_diagnostics(&process.stderr, project.root());
         let artifact = if process.status == Some(0) {
@@ -278,7 +286,11 @@ impl TypstTool {
         let (entrypoint, _wrapper) = compile_entry(project, &main, options)?;
         command.arg(entrypoint).arg(&output);
         let started = Instant::now();
-        let process = run_command(&mut command, PROCESS_TIMEOUT)?;
+        let process = run_command_cancellable(
+            &mut command,
+            PROCESS_TIMEOUT,
+            options.cancellation.as_deref(),
+        )?;
         let elapsed = started.elapsed();
         let diagnostics = parse_diagnostics(&process.stderr, project.root());
         let artifact = if process.status == Some(0) {
@@ -436,6 +448,17 @@ struct ProcessOutput {
 }
 
 fn run_command(command: &mut Command, timeout: Duration) -> Result<ProcessOutput> {
+    run_command_cancellable(command, timeout, None)
+}
+
+fn run_command_cancellable(
+    command: &mut Command,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<ProcessOutput> {
+    if cancellation.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        return Err(BackendError::Process("Compilation superseded".into()));
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
@@ -452,13 +475,35 @@ fn run_command(command: &mut Command, timeout: Duration) -> Result<ProcessOutput
             pipe.read_to_string(&mut output).map(|_| output)
         })
     });
-    let status = child
-        .wait_timeout(timeout)
-        .map_err(|error| BackendError::Process(error.to_string()))?;
+    let started = Instant::now();
+    let mut failure = None;
+    let status = loop {
+        if cancellation.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            failure = Some(BackendError::Process("Compilation superseded".into()));
+            break None;
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            failure = Some(BackendError::TypstTimeout);
+            break None;
+        }
+        let interval = if cancellation.is_some() {
+            remaining.min(Duration::from_millis(10))
+        } else {
+            remaining
+        };
+        match child.wait_timeout(interval) {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => continue,
+            Err(error) => {
+                failure = Some(BackendError::Process(error.to_string()));
+                break None;
+            }
+        }
+    };
     if status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(BackendError::TypstTimeout);
     }
     let join_output = |reader: Option<std::thread::JoinHandle<std::io::Result<String>>>| {
         reader
@@ -472,6 +517,9 @@ fn run_command(command: &mut Command, timeout: Duration) -> Result<ProcessOutput
     };
     let stdout = join_output(stdout)?;
     let stderr = join_output(stderr)?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
     Ok(ProcessOutput {
         status: status.and_then(|status| status.code()),
         stdout,
@@ -596,6 +644,38 @@ fn svg_dimensions(svg: &str) -> (Option<f64>, Option<f64>) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn superseded_process_is_killed_without_waiting_for_timeout() {
+        let cancellation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = cancellation.clone();
+        let signal = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let result = super::run_command_cancellable(
+            std::process::Command::new("sleep").arg("10"),
+            std::time::Duration::from_secs(15),
+            Some(&cancellation),
+        );
+        signal.join().unwrap();
+        assert!(result.unwrap_err().to_string().contains("superseded"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_command_is_not_spawned() {
+        let cancellation = std::sync::atomic::AtomicBool::new(true);
+        let result = super::run_command_cancellable(
+            &mut std::process::Command::new("nonexistent-compiler-test"),
+            std::time::Duration::from_secs(1),
+            Some(&cancellation),
+        );
+        assert!(result.unwrap_err().to_string().contains("superseded"));
+    }
+
     use std::fs;
 
     use tempfile::tempdir;

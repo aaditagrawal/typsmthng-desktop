@@ -20,7 +20,7 @@ GTK provides native controls, focus, selection, text editing, and layout. The ho
 - Ignored dependency/build directories are pruned before traversal; watcher notifications are coalesced before content hashing.
 - Editor styling reuses one CSS provider. Search/replace uses a single Unicode offset pass.
 
-The compiler still starts a full Typst compilation for each accepted preview request. Inline note queries use a second process. Initial font downloads, large documents, SVG decoding, and filesystem latency can still affect time to preview. These changes do not implement an incremental Typst compiler or establish a universal keystroke-latency guarantee.
+The compiler still starts a full Typst compilation for each accepted preview request, but obsolete processes are cancelled. Inline note queries run only during presentation. Font downloads run separately from preview and trigger a refresh when ready. Large documents, initial SVG decoding, and filesystem latency can still affect time to preview. These changes do not implement an incremental Typst compiler or establish a universal keystroke-latency guarantee.
 
 ## Correctness checks
 
@@ -71,3 +71,9 @@ Measured on this Apple Silicon macOS development machine with Typst 0.15.1. Thes
 The timer interval includes main-loop scheduling and rendering during initial document load and is not a direct input-latency measurement. It shows that occasional UI stalls remain; the app should not be described as maintaining a fixed frame-time budget on all documents.
 
 Validation completed locally: 60 regular tests, three manual benchmarks, Clippy with warnings denied, formatting, release compilation, native light/dark home and workspace snapshots, populated home, settings, search, and presenter/audience windows. No Windows/Linux release artifact was built or signed in this session.
+
+## v0.2.0 follow-up
+
+The release follow-up removes speaker-note queries and font downloads from the editing critical path, cancels obsolete compiler processes, and reuses individual unchanged preview pages. Native surface resize events replace unreliable window-size notifications. Selection deletion, LaTeX verbatim/path conversion, boundary-crossing renames, and partial project export are corrected.
+
+Validation includes 70 regular tests, native wide/narrow/wide resizing, a presenter assertion for metadata notes loaded on demand, and a compiler-wrapper check proving ordinary editing invokes no query process while presentation invokes one. Full cross-platform package builds are release gates. macOS artifacts are explicitly unsigned by Developer ID and not notarized, as selected for v0.2.0.

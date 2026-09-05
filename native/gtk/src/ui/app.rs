@@ -2,6 +2,10 @@ use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use gtk::prelude::*;
@@ -98,6 +102,11 @@ struct AppController {
     watcher: RefCell<Option<ExternalWatcher>>,
     compile_generation: Cell<u64>,
     compile_in_flight: Cell<bool>,
+    compile_cancellation: RefCell<Option<Arc<AtomicBool>>>,
+    font_in_flight: Cell<bool>,
+    pending_fonts: RefCell<Option<(Project, String)>>,
+    notes_in_flight: Cell<bool>,
+    notes_generation: Cell<Option<u64>>,
     pending_compile_source: RefCell<Option<String>>,
     search_in_flight: Cell<bool>,
     pending_search: RefCell<Option<PendingSearch>>,
@@ -212,6 +221,11 @@ impl AppController {
             watcher: RefCell::new(None),
             compile_generation: Cell::new(0),
             compile_in_flight: Cell::new(false),
+            compile_cancellation: RefCell::new(None),
+            font_in_flight: Cell::new(false),
+            pending_fonts: RefCell::new(None),
+            notes_in_flight: Cell::new(false),
+            notes_generation: Cell::new(None),
             pending_compile_source: RefCell::new(None),
             search_in_flight: Cell::new(false),
             pending_search: RefCell::new(None),
@@ -315,12 +329,21 @@ impl AppController {
                 let Some(presentation) = this.presentation.borrow().as_ref().cloned() else {
                     return glib::ControlFlow::Continue;
                 };
-                if presentation.page_count() > 0 {
-                    presentation.start_presenter();
+                if presentation.page_count() > 0 && presentation.window_count() == 0 {
+                    this.present_dual();
+                }
+                if presentation.window_count() > 0
+                    && this.notes_generation.get() == Some(this.compile_generation.get())
+                {
+                    if let Ok(expected) = std::env::var("TYPSMTHNG_SMOKE_EXPECT_NOTE") {
+                        assert!(
+                            presentation.has_inline_note(&expected),
+                            "expected inline speaker note was not loaded"
+                        );
+                    }
                     println!(
-                        "TYPESMTHNG_PRESENTATION_READY {{\"gtk\":true,\"pages\":{},\"windows\":{}}}",
-                        presentation.page_count(),
-                        presentation.window_count()
+                        "TYPESMTHNG_PRESENTATION_READY {{\"gtk\":true,\"pages\":{},\"windows\":{},\"notes_loaded\":true}}",
+                        presentation.page_count(), presentation.window_count()
                     );
                     let _ = std::io::stdout().flush();
                     let application = application.clone();
@@ -421,13 +444,45 @@ impl AppController {
                     .contains("interaction 12: café λ"));
                 assert_eq!(this.presentation.borrow().as_ref().unwrap().page_count(), 3);
                 println!("TYPESMTHNG_INTERACTION_READY {{\"edits\":12,\"asset_preserved\":true,\"pages\":3,\"elapsed_ms\":{},\"max_tick_ms\":{}}}", began.elapsed().as_millis(), max_tick.as_millis());
-                super::smoke::capture_windows(&this.application);
-                this.application.quit();
+                this.run_resize_smoke();
                 return glib::ControlFlow::Break;
             }
             assert!(
                 began.elapsed() < Duration::from_secs(20),
                 "interaction smoke timed out"
+            );
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn run_resize_smoke(&self) {
+        let started = std::time::Instant::now();
+        self.window.set_default_size(760, 800);
+        let weak = self.weak();
+        let mut phase = 0;
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let workspace = this.workspace.borrow().as_ref().unwrap().clone();
+            let sidebar =
+                find_css_widget(workspace.root.upcast_ref(), "sidebar").expect("sidebar widget");
+            if phase == 0 && this.window.width() == 760 && !sidebar.is_visible() {
+                assert!(
+                    workspace.editor.width() >= 300,
+                    "narrow editor is too small"
+                );
+                phase = 1;
+                this.window.set_default_size(1280, 800);
+            } else if phase == 1 && this.window.width() == 1280 && sidebar.is_visible() {
+                println!("TYPESMTHNG_RESIZE_READY {{\"narrow\":760,\"wide\":1280,\"sidebar_restored\":true}}");
+                super::smoke::capture_windows(&this.application);
+                this.application.quit();
+                return glib::ControlFlow::Break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(8),
+                "native resize smoke timed out"
             );
             glib::ControlFlow::Continue
         });
@@ -650,6 +705,9 @@ impl AppController {
         self.compile_generation
             .set(self.compile_generation.get().wrapping_add(1));
         self.pending_compile_source.replace(None);
+        if let Some(cancel) = self.compile_cancellation.borrow().as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         if let Some(workspace) = self.workspace.borrow().as_ref() {
             workspace.cancel_pending_compile();
         }
@@ -681,6 +739,9 @@ impl AppController {
         self.compile_generation
             .set(self.compile_generation.get().wrapping_add(1));
         self.pending_compile_source.replace(None);
+        if let Some(cancel) = self.compile_cancellation.borrow().as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
         match Project::open(root) {
             Ok(project) => {
                 let recent = self
@@ -845,6 +906,9 @@ impl AppController {
                 // A queued source belongs to the previous buffer. In particular,
                 // opening an asset must never save that source over the asset.
                 self.pending_compile_source.replace(None);
+                if let Some(cancel) = self.compile_cancellation.borrow().as_ref() {
+                    cancel.store(true, Ordering::Relaxed);
+                }
                 self.compile_generation
                     .set(self.compile_generation.get().wrapping_add(1));
                 self.current_file.replace(Some(path.clone()));
@@ -996,36 +1060,37 @@ impl AppController {
         let generation = self.compile_generation.get().wrapping_add(1);
         self.compile_generation.set(generation);
         if self.compile_in_flight.get() {
+            if let Some(cancel) = self.compile_cancellation.borrow().as_ref() {
+                cancel.store(true, Ordering::Relaxed);
+            }
             self.pending_compile_source.replace(Some(source));
             workspace.set_compile_status("Compilation queued…");
             return;
         }
         self.compile_in_flight.set(true);
         workspace.set_compiling();
-        let options = self.compile_options();
-        let google_fonts = self.settings.borrow().google_fonts;
+        let mut options = self.compile_options();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.compile_cancellation
+            .replace(Some(cancellation.clone()));
+        options.cancellation = Some(cancellation);
+        if self.settings.borrow().google_fonts {
+            if let Some(path) = GoogleFontCache::default().cached_directory() {
+                options.font_paths.push(path);
+            }
+            self.prepare_project_fonts(project.clone(), source.clone());
+        }
         let notes_layout = self.settings.borrow().presentation_notes_layout.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn({
             let main = main.clone();
             move || {
-                let mut options = options;
-                if google_fonts {
-                    if let Ok(Some(path)) =
-                        GoogleFontCache::default().prepare_project(&project, &source)
-                    {
-                        options.font_paths.push(path);
-                    }
-                }
                 let result = TypstTool::detect()
                     .and_then(|tool| {
                         let output = tool.compile_svg_with_options(&project, &main, &options)?;
-                        let notes = if output.artifact.is_some() {
-                            tool.query_notes(&project, &main, &options)
-                                .unwrap_or_default()
-                        } else {
-                            Vec::new()
-                        };
+                        // Speaker-note queries are loaded only for presentation.
+                        // Ordinary editing runs a single compiler process.
+                        let notes = Vec::new();
                         let output = prepare_preview(output, &notes_layout, &project, &main)?;
                         Ok((output, notes))
                     })
@@ -1170,6 +1235,128 @@ impl AppController {
                 self.load_presentation_notes(paths.len(), &inline_notes);
             presentation.set_deck(paths, inline_notes, sidecar_notes, rendered_notes);
         }
+        self.request_presentation_notes();
+    }
+
+    fn prepare_project_fonts(&self, project: Project, source: String) {
+        if self.font_in_flight.get() {
+            self.pending_fonts.replace(Some((project, source)));
+            return;
+        }
+        self.font_in_flight.set(true);
+        let root = project.root().to_path_buf();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GoogleFontCache::default().prepare_project_report(&project, &source);
+            let _ = sender.send(result);
+        });
+        let weak = self.weak();
+        glib::timeout_add_local(Duration::from_millis(30), move || {
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(BackendError::Process("Font worker stopped".into()))
+                }
+            };
+            if let Some(this) = weak.upgrade() {
+                this.font_in_flight.set(false);
+                let pending = this.pending_fonts.borrow_mut().take();
+                let refresh = result.is_ok_and(|report| report.changed)
+                    && this.settings.borrow().google_fonts
+                    && this
+                        .project
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|project| project.root() == root);
+                if refresh {
+                    if let Some(workspace) = this.workspace.borrow().as_ref() {
+                        workspace.request_compile();
+                    }
+                } else if this.settings.borrow().google_fonts {
+                    if let Some((project, source)) = pending {
+                        if this
+                            .project
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|current| current.root() == project.root())
+                        {
+                            this.prepare_project_fonts(project, source);
+                        }
+                    }
+                }
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn request_presentation_notes(&self) {
+        if self.notes_in_flight.get()
+            || self.compile_in_flight.get()
+            || self.notes_generation.get() == Some(self.compile_generation.get())
+            || self
+                .presentation
+                .borrow()
+                .as_ref()
+                .is_none_or(|view| view.window_count() == 0)
+        {
+            return;
+        }
+        let (Some(project), Some(main)) = (
+            self.project.borrow().clone(),
+            self.compiled_main.borrow().clone(),
+        ) else {
+            return;
+        };
+        let generation = self.compile_generation.get();
+        self.notes_in_flight.set(true);
+        let mut options = self.compile_options();
+        if self.settings.borrow().google_fonts {
+            if let Some(path) = GoogleFontCache::default().cached_directory() {
+                options.font_paths.push(path);
+            }
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result =
+                TypstTool::detect().and_then(|tool| tool.query_notes(&project, &main, &options));
+            let _ = sender.send(result);
+        });
+        let weak = self.weak();
+        glib::timeout_add_local(Duration::from_millis(20), move || {
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(BackendError::Process("Notes worker stopped".into()))
+                }
+            };
+            if let Some(this) = weak.upgrade() {
+                this.notes_in_flight.set(false);
+                if generation == this.compile_generation.get() {
+                    match result {
+                        Ok(notes) => {
+                            this.notes_generation.set(Some(generation));
+                            if let Some(presentation) = this.presentation.borrow().as_ref() {
+                                let (inline, _) =
+                                    this.load_presentation_notes(presentation.page_count(), &notes);
+                                presentation.set_inline_notes(inline);
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                                workspace.set_compile_status(&format!(
+                                    "Speaker notes unavailable: {error}"
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    this.request_presentation_notes();
+                }
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     fn load_presentation_notes(
@@ -1415,12 +1602,14 @@ impl AppController {
         if let Some(presentation) = self.presentation.borrow().as_ref() {
             presentation.start_single();
         }
+        self.request_presentation_notes();
     }
 
     fn present_dual(&self) {
         if let Some(presentation) = self.presentation.borrow().as_ref() {
             presentation.start_presenter();
         }
+        self.request_presentation_notes();
     }
 
     fn search(&self, mode: SearchMode, query: String, reply: SearchReply) {
@@ -2636,7 +2825,7 @@ impl AppController {
                                 Err(error) => failures.push(format!("{path}: {error}")),
                             }
                         }
-                        if failures.is_empty() {
+                        if !projects.is_empty() {
                             if let Err(error) = export_projects(&projects, &destination) {
                                 failures.push(error.to_string());
                             }
@@ -3155,6 +3344,20 @@ impl AppController {
     fn weak(&self) -> Weak<Self> {
         self.self_weak.borrow().clone()
     }
+}
+
+fn find_css_widget(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+    if widget.has_css_class(class) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        if let Some(found) = find_css_widget(&current, class) {
+            return Some(found);
+        }
+        child = current.next_sibling();
+    }
+    None
 }
 
 fn prepare_preview(

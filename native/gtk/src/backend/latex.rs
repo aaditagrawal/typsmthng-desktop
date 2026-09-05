@@ -25,6 +25,7 @@ pub struct ConversionResult {
 
 pub fn convert_latex_to_typst(source: &str) -> ConversionResult {
     let source = strip_comments(source);
+    let (source, verbatim) = protect_verbatim_environments(&source);
     let metadata = metadata(&source);
     let mut warnings = Vec::new();
     let document = Regex::new(r"(?s)\\begin\{document\}(.*?)\\end\{document\}").unwrap();
@@ -32,7 +33,6 @@ pub fn convert_latex_to_typst(source: &str) -> ConversionResult {
         .captures(&source)
         .map(|capture| capture[1].to_owned())
         .unwrap_or_else(|| source.clone());
-    body = convert_verbatim_environments(body);
     body = convert_tabular_environments(body);
     body = convert_float_environments(body);
     body = convert_block_environments(body);
@@ -60,6 +60,9 @@ pub fn convert_latex_to_typst(source: &str) -> ConversionResult {
         .unwrap()
         .replace_all(body.trim(), "\n\n")
         .into_owned();
+    for (marker, raw) in verbatim {
+        body = body.replace(&marker, &raw);
+    }
     let mut header = Vec::new();
     if let Some(title) = &metadata.title {
         header.push(format!(
@@ -178,19 +181,27 @@ fn convert_sections(mut text: String) -> String {
     text
 }
 
-fn convert_verbatim_environments(mut text: String) -> String {
+fn protect_verbatim_environments(text: &str) -> (String, Vec<(String, String)>) {
     let pattern = Regex::new(r"(?s)\\begin\{verbatim\*?\}(.*?)\\end\{verbatim\*?\}").unwrap();
-    while pattern.is_match(&text) {
-        text = pattern
-            .replace_all(&text, |capture: &Captures| {
-                format!(
-                    "#raw(\"{}\", block: true)",
-                    escape_multiline_string(capture[1].trim_matches('\n'))
-                )
-            })
-            .into_owned();
+    // Keep literal content out of every conversion pass, including metadata,
+    // document boundaries, comment/escape handling, and unsupported-command warnings.
+    let mut prefix = "\u{e000}".to_string();
+    while text.contains(&prefix) {
+        prefix.push('\u{e000}');
     }
-    text
+    let mut protected = Vec::new();
+    let body = pattern
+        .replace_all(text, |capture: &Captures| {
+            let marker = format!("{prefix}{}\u{e001}", protected.len());
+            let raw = format!(
+                "#raw(\"{}\", block: true)",
+                escape_multiline_string(capture[1].trim_matches('\n'))
+            );
+            protected.push((marker.clone(), raw));
+            marker
+        })
+        .into_owned();
+    (body, protected)
 }
 
 fn convert_tabular_environments(mut text: String) -> String {
@@ -490,8 +501,13 @@ fn convert_images(text: &str) -> String {
 fn resolve_graphics_paths(mut text: String, graphics_paths: &[String]) -> String {
     let Some(prefix) = graphics_paths.iter().find_map(|path| {
         let path = path.trim().replace('\\', "/");
-        let path = path.trim_start_matches("./").trim_matches('/');
-        (!path.is_empty()).then(|| path.to_owned())
+        let path = path.trim_start_matches("./");
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() && path.starts_with('/') {
+            Some("/".into())
+        } else {
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        }
     }) else {
         return text;
     };
@@ -514,7 +530,7 @@ fn resolve_graphics_paths(mut text: String, graphics_paths: &[String]) -> String
             } else {
                 format!(
                     "#image(\"{}/{}\"",
-                    escape_string(&prefix),
+                    escape_string(prefix.trim_end_matches('/')),
                     escape_string(&path)
                 )
             }
@@ -691,6 +707,50 @@ fn typst_date(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_is_not_interpreted_as_latex_or_document_metadata() {
+        let literal = r"\section{Literal} \textbf{not bold} \custom{unknown}
+\title{Not the title}
+\end{document}
+\includegraphics{do-not-prefix.png}
+\begin{itemize}\item literal\end{itemize}
+\& \% \_ \# \$ ~ $x_1$
+
+
+exact blank lines";
+        let source = format!("\\title{{Actual title}}\n\\graphicspath{{{{images/}}}}\n\\begin{{document}}\n\\begin{{verbatim}}\n{literal}\n\\end{{verbatim}}\n\\section{{After}}\n\\end{{document}}");
+        let result = convert_latex_to_typst(&source);
+        assert!(
+            result.typst.contains(&format!(
+                "#raw(\"{}\", block: true)",
+                escape_multiline_string(literal)
+            )),
+            "{}",
+            result.typst
+        );
+        assert!(result.typst.contains("= After"));
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        assert_eq!(result.metadata.title.as_deref(), Some("Actual title"));
+    }
+
+    #[test]
+    fn graphics_paths_preserve_root_relative_prefixes() {
+        for (prefix, expected) in [
+            ("/assets/", "/assets/plot.png"),
+            ("/", "/plot.png"),
+            ("./images/", "images/plot.png"),
+            ("../images/", "../images/plot.png"),
+        ] {
+            let source = format!("\\graphicspath{{{{{prefix}}}}}\n\\includegraphics{{plot.png}}");
+            let result = convert_latex_to_typst(&source);
+            assert!(
+                result.typst.contains(&format!("#image(\"{expected}\")")),
+                "{}",
+                result.typst
+            );
+        }
+    }
 
     #[test]
     fn converts_common_document_features() {

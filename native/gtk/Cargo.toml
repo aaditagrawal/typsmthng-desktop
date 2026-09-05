@@ -1,6 +1,6 @@
 [package]
 name = "typsmthng-gtk"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Native GTK 4 desktop client for typsmthng"

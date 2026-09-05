@@ -44,8 +44,28 @@ fn preview_identity(
     })
 }
 
+fn reusable_preview_pages(
+    previous: Option<&PreviewIdentity>,
+    next: Option<&PreviewIdentity>,
+) -> Vec<bool> {
+    match (previous, next) {
+        (Some(previous), Some(next))
+            if previous.source == next.source && previous.pages.len() == next.pages.len() =>
+        {
+            previous
+                .pages
+                .iter()
+                .zip(&next.pages)
+                .map(|(old, new)| old == new)
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[derive(Clone)]
 struct PreviewPicture {
+    sheet: gtk::Box,
     widget: gtk::Picture,
     aspect_ratio: f64,
 }
@@ -380,20 +400,12 @@ impl WorkspaceView {
         let work_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         work_paned.set_wide_handle(false);
         work_paned.set_position(470);
-        let initial_split = Rc::new(Cell::new(false));
-        work_paned.add_tick_callback(move |paned, _| {
-            if paned.width() > 0 && !initial_split.replace(true) {
-                paned.set_position(paned.width() / 2);
-                return glib::ControlFlow::Break;
-            }
-            glib::ControlFlow::Continue
-        });
         work_paned.set_shrink_start_child(true);
         work_paned.set_shrink_end_child(true);
         main_paned.set_end_child(Some(&work_paned));
         // Preserve a usable editor and complete preview controls on laptops.
         // Only react when crossing the threshold so manual toggles still work.
-        let narrow_layout = Rc::new(Cell::new(false));
+        let narrow_layout = Rc::new(Cell::new(None::<bool>));
         let restore_sidebar = Rc::new(Cell::new(false));
         let adapt_layout: Rc<dyn Fn(i32)> = Rc::new({
             let sidebar = sidebar.clone();
@@ -403,7 +415,7 @@ impl WorkspaceView {
                     return;
                 }
                 let narrow = width < 1000;
-                if narrow == narrow_layout.replace(narrow) {
+                if Some(narrow) == narrow_layout.replace(Some(narrow)) {
                     return;
                 }
                 if narrow {
@@ -415,17 +427,6 @@ impl WorkspaceView {
                 work_paned.set_position((width - if sidebar.is_visible() { 240 } else { 0 }) / 2);
             }
         });
-        root.add_tick_callback({
-            let adapt = adapt_layout.clone();
-            move |root, _| {
-                if root.width() <= 0 {
-                    return glib::ControlFlow::Continue;
-                }
-                adapt(root.width());
-                glib::ControlFlow::Break
-            }
-        });
-        window.connect_default_width_notify(move |window| adapt_layout(window.default_width()));
 
         let buffer = sourceview5::Buffer::new(None::<&gtk::TextTagTable>);
         let language_manager = sourceview5::LanguageManager::default();
@@ -551,15 +552,57 @@ impl WorkspaceView {
                 }
             })
         };
-        preview_scroll.connect_notify_local(Some("width"), {
-            let fit_to_viewport = fit_to_viewport.clone();
+        // GdkSurface::layout reports actual native resize events. GTK's
+        // default-width is only a requested size, and Widget has no width
+        // property notification. Wait for allocation without an idle frame loop.
+        let layout_pending = Rc::new(Cell::new(false));
+        let refresh_layout: Rc<dyn Fn()> = {
+            let root = root.downgrade();
             let resize = resize_preview.clone();
-            move |_, _| {
-                if fit_to_viewport.get() {
-                    resize();
+            let fit = fit_to_viewport.clone();
+            Rc::new(move || {
+                if let Some(root) = root.upgrade() {
+                    adapt_layout(root.width());
+                    if fit.get() {
+                        resize();
+                    }
+                }
+            })
+        };
+        let schedule_layout: Rc<dyn Fn()> = {
+            let root = root.downgrade();
+            Rc::new(move || {
+                if let Some(root) = root.upgrade() {
+                    schedule_after_allocation(
+                        &root,
+                        layout_pending.clone(),
+                        refresh_layout.clone(),
+                    );
+                }
+            })
+        };
+        root.connect_map({
+            let schedule = schedule_layout.clone();
+            move |_| schedule()
+        });
+        window.connect_realize({
+            let schedule = schedule_layout.clone();
+            move |window| {
+                if let Some(surface) = window.surface() {
+                    let schedule = schedule.clone();
+                    surface.connect_layout(move |_, _, _| schedule());
                 }
             }
         });
+        if let Some(surface) = window.surface() {
+            let schedule = schedule_layout.clone();
+            surface.connect_layout(move |_, _, _| schedule());
+        }
+        for paned in [&main_paned, &work_paned] {
+            let schedule = schedule_layout.clone();
+            paned.connect_position_notify(move |_| schedule());
+        }
+        sidebar.connect_visible_notify(move |_| schedule_layout());
         zoom_out.connect_clicked({
             let zoom = zoom.clone();
             let fit_to_viewport = fit_to_viewport.clone();
@@ -1351,11 +1394,13 @@ impl WorkspaceView {
         if identity.is_some() && *self.preview_identity.borrow() == identity {
             return;
         }
+        let reusable =
+            reusable_preview_pages(self.preview_identity.borrow().as_ref(), identity.as_ref());
         self.preview_identity.replace(identity);
         while let Some(child) = self.preview_pages.first_child() {
             self.preview_pages.remove(&child);
         }
-        self.preview_pictures.borrow_mut().clear();
+        let previous_pictures = std::mem::take(&mut *self.preview_pictures.borrow_mut());
         self.preview_placeholder.set_visible(pages.is_empty());
         self.page_label.set_text(&format!(
             "{} {}",
@@ -1363,6 +1408,13 @@ impl WorkspaceView {
             if pages.len() == 1 { "page" } else { "pages" }
         ));
         for (index, page) in pages.iter().enumerate() {
+            if reusable.get(index) == Some(&true) {
+                if let Some(picture) = previous_pictures.get(index) {
+                    self.preview_pages.append(&picture.sheet);
+                    self.preview_pictures.borrow_mut().push(picture.clone());
+                    continue;
+                }
+            }
             let svg = &contents[index];
             let aspect_ratio = svg
                 .as_deref()
@@ -1470,6 +1522,7 @@ impl WorkspaceView {
                 sheet.append(&links_box);
             }
             self.preview_pictures.borrow_mut().push(PreviewPicture {
+                sheet: sheet.clone(),
                 widget: picture,
                 aspect_ratio,
             });
@@ -1578,6 +1631,23 @@ impl WorkspaceView {
     }
 }
 
+// Tick callbacks run before allocation. The second frame sees the first
+// frame's allocation; always remove the callback after that bounded wait.
+fn schedule_after_allocation(widget: &gtk::Box, pending: Rc<Cell<bool>>, callback: Rc<dyn Fn()>) {
+    if pending.replace(true) {
+        return;
+    }
+    let allocated_once = Cell::new(false);
+    widget.add_tick_callback(move |_, _| {
+        if !allocated_once.replace(true) {
+            return glib::ControlFlow::Continue;
+        }
+        pending.set(false);
+        callback();
+        glib::ControlFlow::Break
+    });
+}
+
 fn buffer_text(buffer: &sourceview5::Buffer) -> String {
     buffer
         .text(&buffer.start_iter(), &buffer.end_iter(), true)
@@ -1605,6 +1675,9 @@ fn install_pair_completion(
 
             let cursor = buffer.iter_at_mark(&buffer.get_insert());
             if key == gtk::gdk::Key::BackSpace {
+                if buffer.has_selection() {
+                    return glib::Propagation::Proceed;
+                }
                 let mut before = cursor;
                 let mut after = cursor;
                 if before.backward_char() && after.forward_char() {
@@ -1625,7 +1698,10 @@ fn install_pair_completion(
             let Some(character) = key.to_unicode() else {
                 return glib::Propagation::Proceed;
             };
-            if matches!(character, ')' | ']' | '}') && cursor.char() == character {
+            if !buffer.has_selection()
+                && matches!(character, ')' | ']' | '}')
+                && cursor.char() == character
+            {
                 let mut next = cursor;
                 next.forward_char();
                 buffer.place_cursor(&next);
@@ -2443,8 +2519,36 @@ fn build_search_dialog(
 mod tests {
     use super::{
         document_match_offsets, document_regex, extract_external_links, preview_dimensions,
-        preview_identity, should_uncomment_lines, source_line_for_page_position, svg_aspect_ratio,
+        preview_identity, reusable_preview_pages, should_uncomment_lines,
+        source_line_for_page_position, svg_aspect_ratio,
     };
+
+    #[test]
+    fn preview_reuses_only_unchanged_pages_with_stable_source_mapping() {
+        let before = preview_identity(
+            &[Some("one".into()), Some("two".into())],
+            Some(("main.typ", 20)),
+        );
+        let after = preview_identity(
+            &[Some("one".into()), Some("changed".into())],
+            Some(("main.typ", 20)),
+        );
+        assert_eq!(
+            reusable_preview_pages(before.as_ref(), after.as_ref()),
+            vec![true, false]
+        );
+        let different_mapping = preview_identity(
+            &[Some("one".into()), Some("two".into())],
+            Some(("main.typ", 21)),
+        );
+        assert!(reusable_preview_pages(before.as_ref(), different_mapping.as_ref()).is_empty());
+        let additional_page = preview_identity(
+            &[Some("one".into()), Some("two".into()), Some("three".into())],
+            Some(("main.typ", 20)),
+        );
+        assert!(reusable_preview_pages(before.as_ref(), additional_page.as_ref()).is_empty());
+        assert!(reusable_preview_pages(None, after.as_ref()).is_empty());
+    }
 
     #[test]
     fn preview_reuse_requires_identical_content_order_and_source_mapping() {

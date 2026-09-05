@@ -114,25 +114,32 @@ impl ExternalWatcher {
                 }
                 _ => continue,
             };
-            let rename_destination = (kind == ExternalEventKind::Renamed && event.paths.len() == 2)
-                .then(|| relative_path_from_root(&self.root, &event.paths[1]))
-                .flatten();
-            for (index, path) in event.paths.into_iter().enumerate() {
-                if kind == ExternalEventKind::Renamed && rename_destination.is_some() && index > 0 {
-                    continue;
-                }
-                let Some(relative) = relative_path_from_root(&self.root, &path) else {
+            if kind == ExternalEventKind::Renamed && event.paths.len() == 2 {
+                let from = visible_relative_path(&self.root, &event.paths[0]);
+                let to = visible_relative_path(&self.root, &event.paths[1]);
+                let (kind, path, renamed_to) = match (from, to) {
+                    (Some(from), Some(to)) => (ExternalEventKind::Renamed, from, Some(to)),
+                    (Some(from), None) => (ExternalEventKind::Removed, from, None),
+                    (None, Some(to)) => (ExternalEventKind::Added, to, None),
+                    (None, None) => continue,
+                };
+                output.push(ExternalEvent {
+                    kind,
+                    path,
+                    renamed_to,
+                    is_directory: false,
+                    fingerprint: None,
+                });
+                continue;
+            }
+            for path in event.paths {
+                let Some(relative) = visible_relative_path(&self.root, &path) else {
                     continue;
                 };
-                if relative.rsplit('/').next().is_some_and(|name| {
-                    name.starts_with(".typsmthng-preview-") && name.ends_with(".typ")
-                }) {
-                    continue;
-                }
                 output.push(ExternalEvent {
                     kind,
                     path: relative.clone(),
-                    renamed_to: rename_destination.clone(),
+                    renamed_to: None,
                     is_directory: false,
                     fingerprint: None,
                 });
@@ -143,10 +150,16 @@ impl ExternalWatcher {
         let output = coalesce(output)
             .into_iter()
             .filter_map(|mut event| {
-                let path = self.root.join(&event.path);
+                let path = self
+                    .root
+                    .join(event.renamed_to.as_deref().unwrap_or(&event.path));
                 event.is_directory = path.is_dir();
                 event.fingerprint = FileFingerprint::capture(&path).ok();
-                (!self.is_suppressed(&event.path, event.fingerprint.as_ref())).then_some(event)
+                let own_write = matches!(
+                    event.kind,
+                    ExternalEventKind::Added | ExternalEventKind::Changed
+                ) && self.is_suppressed(&event.path, event.fingerprint.as_ref());
+                (!own_write).then_some(event)
             })
             .collect();
         Ok(output)
@@ -165,6 +178,15 @@ impl ExternalWatcher {
     }
 }
 
+fn visible_relative_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = relative_path_from_root(root, path)?;
+    let preview_wrapper = relative
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.starts_with(".typsmthng-preview-") && name.ends_with(".typ"));
+    (!preview_wrapper).then_some(relative)
+}
+
 fn coalesce(events: Vec<ExternalEvent>) -> Vec<ExternalEvent> {
     let mut by_path = HashMap::new();
     for event in events {
@@ -180,6 +202,64 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn paired_renames_crossing_project_boundary_are_not_lost() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let outside = directory.path().canonicalize().unwrap().join("outside.typ");
+        let inside = root.join("inside.typ");
+        fs::write(&inside, "imported").unwrap();
+        let mut watcher = ExternalWatcher::new(&root).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        watcher.events = receiver;
+        let rename = |from: PathBuf, to: PathBuf| {
+            notify::Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                .add_path(from)
+                .add_path(to)
+        };
+        sender
+            .send(Ok(rename(outside.clone(), inside.clone())))
+            .unwrap();
+        let added = watcher.drain().unwrap();
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].kind, ExternalEventKind::Added);
+        assert_eq!(added[0].path, "inside.typ");
+        assert!(added[0].fingerprint.is_some());
+        fs::rename(&inside, &outside).unwrap();
+        sender.send(Ok(rename(inside.clone(), outside))).unwrap();
+        let removed = watcher.drain().unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].kind, ExternalEventKind::Removed);
+        assert_eq!(removed[0].path, "inside.typ");
+        assert!(removed[0].renamed_to.is_none());
+        assert!(removed[0].fingerprint.is_none());
+    }
+
+    #[test]
+    fn internal_directory_rename_reads_destination_metadata() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        fs::create_dir(root.join("before")).unwrap();
+        let mut watcher = ExternalWatcher::new(&root).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        watcher.events = receiver;
+        fs::rename(root.join("before"), root.join("after")).unwrap();
+        sender
+            .send(Ok(notify::Event::new(EventKind::Modify(ModifyKind::Name(
+                RenameMode::Both,
+            )))
+            .add_path(root.join("before"))
+            .add_path(root.join("after"))))
+            .unwrap();
+        let events = watcher.drain().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, ExternalEventKind::Renamed);
+        assert_eq!(events[0].renamed_to.as_deref(), Some("after"));
+        assert!(events[0].is_directory);
+    }
 
     #[test]
     fn repeated_save_notifications_preserve_external_change_detection() {
