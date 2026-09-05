@@ -9,6 +9,10 @@ on:
         description: Version without the v prefix
         required: true
         type: string
+      source_ref:
+        description: "Immutable release source tag or commit (for example v0.2.0)"
+        type: string
+        required: false
       macos_signing:
         description: "macOS signing (unsigned uses ad-hoc signatures without notarization)"
         type: choice
@@ -29,8 +33,12 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       macos_signing: ${{ steps.version.outputs.macos_signing }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+      rust_toolchain: ${{ steps.version.outputs.rust_toolchain }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - id: version
         env:
           RAW_VERSION: ${{ inputs.version || github.ref_name }}
@@ -50,13 +58,21 @@ jobs:
           if [[ -z "$REQUESTED_SIGNING" && "$version" == "0.2.0" ]]; then signing=unsigned; fi
           [[ "$signing" == signed || "$signing" == unsigned ]] || exit 1
           echo "macos_signing=$signing" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)"
+          [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "rust_toolchain=$toolchain" >> "$GITHUB_OUTPUT"
 
   linux:
     needs: preflight
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - name: Dependencies
@@ -110,7 +126,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - run: |
@@ -174,8 +194,11 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
           targets: x86_64-pc-windows-gnu
       - uses: msys2/setup-msys2@v2
         id: msys2
@@ -193,7 +216,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - name: Build
+        env:
+          RUSTUP_TOOLCHAIN: ${{ needs.preflight.outputs.rust_toolchain }}
         run: |
+          "$(cygpath -u "$CARGO_HOME")/bin/rustup.exe" target add --toolchain "$RUSTUP_TOOLCHAIN" x86_64-pc-windows-gnu
+          "$(cygpath -u "$CARGO_HOME")/bin/rustc.exe" --version --verbose
+          export RUSTC="$(cygpath -m "$CARGO_HOME")/bin/rustc.exe"
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
           "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
@@ -223,6 +251,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
@@ -257,7 +287,7 @@ jobs:
           if [[ "${{ needs.preflight.outputs.macos_signing }}" == unsigned ]]; then
             printf '\nmacOS builds are unsigned (ad-hoc signed) and are not notarized by Apple.\n' >> "$notes"
           fi
-          flags=(--notes-file "$notes" --title "$title" --target "${{ github.sha }}")
+          flags=(--notes-file "$notes" --title "$title" --target "${{ needs.preflight.outputs.source_sha }}")
           if [[ "${{ needs.preflight.outputs.prerelease }}" == "true" ]]; then
             flags+=(--prerelease)
           else
