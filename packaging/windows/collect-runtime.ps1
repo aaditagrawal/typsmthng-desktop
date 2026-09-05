@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
 $Stage = Join-Path $RepoRoot "build\windows"
+$Bin = Join-Path $Stage "bin"
 $Msys = if ($env:MSYSTEM_PREFIX) { $env:MSYSTEM_PREFIX } else { "C:\msys64\mingw64" }
 $Release = Join-Path $RepoRoot "target\x86_64-pc-windows-gnu\release"
 $Binary = Join-Path $Release "typsmthng.exe"
@@ -10,8 +11,9 @@ if (!(Test-Path $Binary)) { throw "Missing GNU target application binary: $Binar
 if (!(Test-Path $Typst)) { throw "Missing bundled Typst 0.15.1 binary: $Typst" }
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force $Stage | Out-Null
-Copy-Item $Binary $Stage
-Copy-Item $Typst $Stage
+New-Item -ItemType Directory -Force $Bin | Out-Null
+Copy-Item $Binary $Bin
+Copy-Item $Typst $Bin
 
 # Walk the PE import graph with the same MinGW objdump that supplied GTK.
 $Objdump = Join-Path $Msys "bin\objdump.exe"
@@ -20,7 +22,7 @@ $Seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer
 $Queue.Enqueue($Binary)
 $QueryLoaders = Join-Path $Msys "bin\gdk-pixbuf-query-loaders.exe"
 if (!(Test-Path $QueryLoaders)) { throw "Missing gdk-pixbuf-query-loaders.exe" }
-Copy-Item $QueryLoaders $Stage
+Copy-Item $QueryLoaders $Bin
 $Queue.Enqueue($QueryLoaders)
 
 $PixbufRoot = Join-Path $Msys "lib\gdk-pixbuf-2.0"
@@ -35,7 +37,7 @@ while ($Queue.Count -gt 0) {
       $Name = $Matches[1]
       $Dependency = Join-Path $Msys "bin\$Name"
       if ((Test-Path $Dependency) -and $Seen.Add($Name)) {
-        Copy-Item $Dependency $Stage
+        Copy-Item $Dependency $Bin
         $Queue.Enqueue($Dependency)
       }
     }

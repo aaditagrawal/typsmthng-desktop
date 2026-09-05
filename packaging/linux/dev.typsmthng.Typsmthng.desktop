@@ -2,7 +2,7 @@
 Type=Application
 Name=typsmthng
 Comment=Native GTK Typst editor and presentation studio
-Exec=typsmthng %F
+Exec=typsmthng %f
 Icon=dev.typsmthng.Typsmthng
 Terminal=false
 Categories=Office;TextEditor;Development;

@@ -173,17 +173,27 @@ fn status_from_release(current: Version, release: GithubRelease) -> Result<Updat
 }
 
 fn choose_asset(assets: Vec<GithubAsset>) -> Option<ReleaseAsset> {
+    #[cfg(target_os = "linux")]
+    let suffix = std::env::var_os("APPIMAGE")
+        .filter(|value| !value.is_empty())
+        .map(|_| ".appimage");
+    #[cfg(target_os = "windows")]
+    let suffix = Some(".exe");
+    #[cfg(target_os = "macos")]
+    let suffix = Some(".dmg");
+
+    choose_asset_with_suffix(assets, suffix)
+}
+
+fn choose_asset_with_suffix(
+    assets: Vec<GithubAsset>,
+    suffix: Option<&str>,
+) -> Option<ReleaseAsset> {
     let checksums_url = assets
         .iter()
         .find(|asset| asset.name.eq_ignore_ascii_case("SHA256SUMS"))
         .map(|asset| asset.browser_download_url.clone());
-    let suffix = if cfg!(target_os = "windows") {
-        ".exe"
-    } else if cfg!(target_os = "macos") {
-        ".dmg"
-    } else {
-        ".appimage"
-    };
+    let suffix = suffix?;
     assets
         .into_iter()
         .filter(|asset| {
@@ -275,7 +285,17 @@ mod tests {
                 browser_download_url: "macos".into(),
             },
         ];
-        let selected = choose_asset(assets).unwrap();
+        let selected = choose_asset_with_suffix(
+            assets,
+            Some(if cfg!(target_os = "windows") {
+                ".exe"
+            } else if cfg!(target_os = "macos") {
+                ".dmg"
+            } else {
+                ".appimage"
+            }),
+        )
+        .unwrap();
         if cfg!(target_os = "windows") {
             assert_eq!(selected.download_url, "windows");
         } else if cfg!(target_os = "macos") {
@@ -284,6 +304,15 @@ mod tests {
             assert_eq!(selected.download_url, "linux");
         }
         assert_eq!(selected.checksums_url.as_deref(), Some("checksums"));
+    }
+
+    #[test]
+    fn system_package_updates_do_not_offer_an_appimage() {
+        let assets = vec![GithubAsset {
+            name: "typsmthng-linux-x86_64.AppImage".into(),
+            browser_download_url: "linux".into(),
+        }];
+        assert!(choose_asset_with_suffix(assets, None).is_none());
     }
 
     #[test]

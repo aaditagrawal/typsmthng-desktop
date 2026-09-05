@@ -13,6 +13,13 @@ use super::model::{
 type RefreshCallback = Rc<dyn Fn()>;
 type RefreshList = Rc<RefCell<Vec<RefreshCallback>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PresentationRole {
+    Single,
+    Audience,
+    Presenter,
+}
+
 #[derive(Clone)]
 pub struct PresentationController {
     application: gtk::Application,
@@ -23,6 +30,9 @@ pub struct PresentationController {
     rendered_notes: Rc<RefCell<Vec<Option<PathBuf>>>>,
     state: Rc<RefCell<PresentationState>>,
     windows: Rc<RefCell<Vec<gtk::ApplicationWindow>>>,
+    audience_window: Rc<RefCell<Option<gtk::ApplicationWindow>>>,
+    presenter_window: Rc<RefCell<Option<gtk::ApplicationWindow>>>,
+    audience_monitor: Rc<Cell<Option<usize>>>,
     refreshers: RefreshList,
     number_buffer: Rc<RefCell<SlideNumberBuffer>>,
     timers: Rc<RefCell<Vec<glib::SourceId>>>,
@@ -31,8 +41,12 @@ pub struct PresentationController {
     last_scroll_navigation: Rc<Cell<Option<std::time::Instant>>>,
     annotation_color: Rc<Cell<(f64, f64, f64)>>,
     note_font_size: Rc<Cell<u32>>,
+    pending_note_save: Rc<RefCell<Option<glib::SourceId>>>,
+    pending_note_writes: Rc<RefCell<Vec<(usize, String)>>>,
+    hud_timeout: Rc<RefCell<Option<glib::SourceId>>>,
+    audience_cursor_timeout: Rc<RefCell<Option<glib::SourceId>>>,
     save_note_font_size: Rc<dyn Fn(u32)>,
-    save_note: Rc<dyn Fn(usize, String)>,
+    save_note: Rc<dyn Fn(usize, String) -> bool>,
 }
 
 impl PresentationController {
@@ -40,7 +54,7 @@ impl PresentationController {
         application: &gtk::Application,
         owner: &gtk::ApplicationWindow,
         note_font_size: u32,
-        save_note: Rc<dyn Fn(usize, String)>,
+        save_note: Rc<dyn Fn(usize, String) -> bool>,
         save_note_font_size: Rc<dyn Fn(u32)>,
     ) -> Self {
         Self {
@@ -52,6 +66,9 @@ impl PresentationController {
             rendered_notes: Rc::new(RefCell::new(Vec::new())),
             state: Rc::new(RefCell::new(PresentationState::new(0))),
             windows: Rc::new(RefCell::new(Vec::new())),
+            audience_window: Rc::new(RefCell::new(None)),
+            presenter_window: Rc::new(RefCell::new(None)),
+            audience_monitor: Rc::new(Cell::new(None)),
             refreshers: Rc::new(RefCell::new(Vec::new())),
             number_buffer: Rc::new(RefCell::new(SlideNumberBuffer::default())),
             timers: Rc::new(RefCell::new(Vec::new())),
@@ -60,6 +77,10 @@ impl PresentationController {
             last_scroll_navigation: Rc::new(Cell::new(None)),
             annotation_color: Rc::new(Cell::new((1.0, 0.302, 0.0))),
             note_font_size: Rc::new(Cell::new(note_font_size.clamp(12, 34))),
+            pending_note_save: Rc::new(RefCell::new(None)),
+            pending_note_writes: Rc::new(RefCell::new(Vec::new())),
+            hud_timeout: Rc::new(RefCell::new(None)),
+            audience_cursor_timeout: Rc::new(RefCell::new(None)),
             save_note_font_size,
             save_note,
         }
@@ -99,44 +120,69 @@ impl PresentationController {
     }
 
     pub fn start_single(&self) {
-        self.end();
+        if !self.end() {
+            return;
+        }
         self.reset_session();
-        let window = self.build_stage_window("Presentation — typsmthng", false);
+        let available_monitors = monitors();
+        self.audience_monitor
+            .set(owner_monitor_index(&self.owner, &available_monitors));
+        let window = self.build_single_window();
         window.fullscreen();
         window.present();
         self.windows.borrow_mut().push(window);
     }
 
     pub fn start_presenter(&self) {
-        self.end();
+        if !self.end() {
+            return;
+        }
         self.reset_session();
-        let audience = self.build_stage_window("Audience — typsmthng", true);
-        let monitors = monitors();
-        if let Some(monitor) = monitors.get(1).or_else(|| monitors.first()) {
+        self.state.borrow_mut().notes_visible = true;
+        let available_monitors = monitors();
+        let owner_monitor = owner_monitor_index(&self.owner, &available_monitors);
+        let audience_monitor = default_audience_monitor(available_monitors.len(), owner_monitor);
+        self.audience_monitor.set(audience_monitor);
+        let audience = self.build_stage_window("Audience — typsmthng", PresentationRole::Audience);
+        if let Some(monitor) = audience_monitor.and_then(|index| available_monitors.get(index)) {
             audience.fullscreen_on_monitor(monitor);
         } else {
             audience.fullscreen();
         }
         audience.present();
+        self.audience_window.replace(Some(audience.clone()));
 
         let presenter = self.build_presenter_window();
         presenter.present();
+        self.presenter_window.replace(Some(presenter.clone()));
         self.windows.borrow_mut().extend([audience, presenter]);
     }
 
-    pub fn end(&self) {
+    pub fn end(&self) -> bool {
+        if !self.flush_pending_note() {
+            return false;
+        }
         for timer in self.timers.borrow_mut().drain(..) {
             timer.remove();
         }
         if let Some(timeout) = self.number_timeout.borrow_mut().take() {
             timeout.remove();
         }
+        if let Some(timeout) = self.hud_timeout.borrow_mut().take() {
+            timeout.remove();
+        }
+        if let Some(timeout) = self.audience_cursor_timeout.borrow_mut().take() {
+            timeout.remove();
+        }
+        self.audience_window.replace(None);
+        self.presenter_window.replace(None);
+        self.refreshers.borrow_mut().clear();
         let windows = self.windows.borrow_mut().drain(..).collect::<Vec<_>>();
         for window in windows {
             window.close();
         }
-        self.refreshers.borrow_mut().clear();
         self.owner.present();
+        true
     }
 
     fn reset_session(&self) {
@@ -145,6 +191,27 @@ impl PresentationController {
         self.number_buffer.replace(SlideNumberBuffer::default());
         self.scroll_accumulator.set(0.0);
         self.last_scroll_navigation.set(None);
+    }
+
+    fn audience_closed(&self, window: &gtk::ApplicationWindow, stage_refresh: &RefreshCallback) {
+        if self
+            .audience_window
+            .borrow()
+            .as_ref()
+            .is_some_and(|audience| audience == window)
+        {
+            self.audience_window.replace(None);
+        }
+        self.windows
+            .borrow_mut()
+            .retain(|candidate| candidate != window);
+        self.refreshers
+            .borrow_mut()
+            .retain(|refresh| !Rc::ptr_eq(refresh, stage_refresh));
+        if let Some(timeout) = self.audience_cursor_timeout.borrow_mut().take() {
+            timeout.remove();
+        }
+        self.refresh();
     }
 
     pub fn next(&self) {
@@ -163,7 +230,7 @@ impl PresentationController {
         }
     }
 
-    fn build_stage_window(&self, title: &str, minimal: bool) -> gtk::ApplicationWindow {
+    fn build_stage_window(&self, title: &str, role: PresentationRole) -> gtk::ApplicationWindow {
         let window = gtk::ApplicationWindow::builder()
             .application(&self.application)
             .title(title)
@@ -173,19 +240,27 @@ impl PresentationController {
         window.add_css_class("presentation-shell");
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let stage = self.build_slide_stage();
+        let stage_refresh = stage.refresh.clone();
         root.append(&stage.root);
-        if !minimal {
-            root.append(&self.build_toolbar(&window));
-        }
         window.set_child(Some(&root));
-        self.attach_input(&window);
+        self.attach_input(&window, role, None);
         window.connect_close_request({
             let controller = self.clone();
-            move |_| {
-                controller.end();
-                glib::Propagation::Proceed
+            let stage_refresh = stage_refresh.clone();
+            move |window| {
+                if role == PresentationRole::Audience {
+                    controller.audience_closed(window, &stage_refresh);
+                    glib::Propagation::Proceed
+                } else if controller.end() {
+                    glib::Propagation::Proceed
+                } else {
+                    glib::Propagation::Stop
+                }
             }
         });
+        if role == PresentationRole::Audience {
+            self.install_audience_cursor_hide(&window);
+        }
         window
     }
 
@@ -216,18 +291,6 @@ impl PresentationController {
         laser.set_vexpand(true);
         laser.set_can_target(false);
         root.add_overlay(&laser);
-        let note_overlay = gtk::Label::new(None);
-        note_overlay.add_css_class("notes");
-        note_overlay.set_wrap(true);
-        note_overlay.set_halign(gtk::Align::End);
-        note_overlay.set_valign(gtk::Align::End);
-        note_overlay.set_max_width_chars(48);
-        note_overlay.set_margin_bottom(64);
-        note_overlay.set_margin_end(28);
-        note_overlay.set_visible(false);
-        note_overlay.set_can_target(false);
-        root.add_overlay(&note_overlay);
-
         laser.set_draw_func({
             let state = self.state.clone();
             let picture = picture.clone();
@@ -290,18 +353,30 @@ impl PresentationController {
                     return;
                 };
                 for stroke in strokes {
-                    if stroke.points.len() < 2 {
+                    if stroke.points.is_empty() {
                         continue;
                     }
                     let (r, g, b, a) = stroke.color;
                     cr.set_source_rgba(r, g, b, a);
                     cr.set_line_cap(gtk::cairo::LineCap::Round);
                     cr.set_line_join(gtk::cairo::LineJoin::Round);
-                    cr.set_line_width(match stroke.tool {
+                    let line_width = match stroke.tool {
                         PresentationTool::Highlighter => (slide.width * 0.018).max(10.0),
                         _ => (slide.width * 0.004).max(3.0),
-                    });
+                    };
+                    cr.set_line_width(line_width);
                     let first = stroke.points[0];
+                    if stroke.points.len() == 1 {
+                        cr.arc(
+                            slide.x + first.x * slide.width,
+                            slide.y + first.y * slide.height,
+                            line_width / 2.0,
+                            0.0,
+                            std::f64::consts::TAU,
+                        );
+                        let _ = cr.fill();
+                        continue;
+                    }
                     cr.move_to(
                         slide.x + first.x * slide.width,
                         slide.y + first.y * slide.height,
@@ -326,6 +401,7 @@ impl PresentationController {
             let drawing = drawing.clone();
             let picture = picture.clone();
             let annotation_color = self.annotation_color.clone();
+            let controller = self.clone();
             move |_, x, y| {
                 let tool = state.borrow().tool;
                 if matches!(tool, PresentationTool::Pen | PresentationTool::Highlighter) {
@@ -349,6 +425,10 @@ impl PresentationController {
                             points: vec![point],
                         }));
                     }
+                } else if tool == PresentationTool::Eraser
+                    && erase_stroke_at(&state, &picture, &drawing, x, y)
+                {
+                    controller.refresh();
                 }
             }
         });
@@ -356,6 +436,8 @@ impl PresentationController {
             let pending = pending.clone();
             let drawing = drawing.clone();
             let picture = picture.clone();
+            let state = self.state.clone();
+            let controller = self.clone();
             move |gesture, dx, dy| {
                 let Some((start_x, start_y)) = gesture.start_point() else {
                     return;
@@ -368,6 +450,10 @@ impl PresentationController {
                     {
                         stroke.points.push(point);
                     }
+                } else if state.borrow().tool == PresentationTool::Eraser
+                    && erase_stroke_at(&state, &picture, &drawing, start_x + dx, start_y + dy)
+                {
+                    controller.refresh();
                 }
                 drawing.queue_draw();
             }
@@ -387,50 +473,6 @@ impl PresentationController {
             }
         });
         drawing.add_controller(drag);
-        let erase = gtk::GestureClick::new();
-        erase.set_button(1);
-        erase.connect_released({
-            let state = self.state.clone();
-            let controller = self.clone();
-            let picture = picture.clone();
-            let drawing = drawing.clone();
-            move |_, _, x, y| {
-                if state.borrow().tool == PresentationTool::Eraser {
-                    let Some(point) = normalize_to_slide(
-                        &picture,
-                        drawing.width() as f64,
-                        drawing.height() as f64,
-                        x,
-                        y,
-                    ) else {
-                        return;
-                    };
-                    let slide = state.borrow().slide;
-                    if let Some(strokes) = state.borrow_mut().strokes.get_mut(slide) {
-                        if let Some((index, _)) = strokes
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, stroke)| {
-                                stroke
-                                    .points
-                                    .iter()
-                                    .map(|candidate| {
-                                        (candidate.x - point.x).hypot(candidate.y - point.y)
-                                    })
-                                    .reduce(f64::min)
-                                    .map(|distance| (index, distance))
-                            })
-                            .filter(|(_, distance)| *distance <= 0.05)
-                            .min_by(|(_, a), (_, b)| a.total_cmp(b))
-                        {
-                            strokes.remove(index);
-                        }
-                    }
-                    controller.refresh();
-                }
-            }
-        });
-        drawing.add_controller(erase);
 
         let refresh: Rc<dyn Fn()> = {
             let pages = self.pages.clone();
@@ -438,9 +480,6 @@ impl PresentationController {
             let picture = picture.clone();
             let drawing = drawing.clone();
             let blackout = blackout.clone();
-            let inline_notes = self.inline_notes.clone();
-            let sidecar_notes = self.sidecar_notes.clone();
-            let note_overlay = note_overlay.clone();
             let laser = laser.clone();
             Rc::new(move || {
                 let state = state.borrow();
@@ -464,17 +503,249 @@ impl PresentationController {
                 }
                 drawing.queue_draw();
                 laser.queue_draw();
-                note_overlay.set_label(&combined_note(
-                    &inline_notes.borrow(),
-                    &sidecar_notes.borrow(),
-                    state.slide,
+            })
+        };
+        refresh();
+        self.refreshers.borrow_mut().push(refresh.clone());
+        SlideStage { root, refresh }
+    }
+
+    fn build_single_window(&self) -> gtk::ApplicationWindow {
+        let window = gtk::ApplicationWindow::builder()
+            .application(&self.application)
+            .title("Presentation — typsmthng")
+            .default_width(1280)
+            .default_height(720)
+            .build();
+        window.add_css_class("presentation-shell");
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&self.build_slide_stage().root));
+
+        let notes = self.build_single_notes_panel();
+        notes.set_halign(gtk::Align::End);
+        notes.set_valign(gtk::Align::Fill);
+        notes.set_size_request(400, -1);
+        overlay.add_overlay(&notes);
+
+        let hud = gtk::Revealer::new();
+        hud.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+        hud.set_transition_duration(150);
+        hud.set_halign(gtk::Align::Center);
+        hud.set_valign(gtk::Align::End);
+        hud.set_margin_bottom(18);
+        hud.set_margin_start(18);
+        hud.set_margin_end(18);
+        hud.set_child(Some(&self.build_toolbar(&window, PresentationRole::Single)));
+        overlay.add_overlay(&hud);
+        window.set_child(Some(&overlay));
+        self.attach_input(&window, PresentationRole::Single, Some(&hud));
+        window.connect_close_request({
+            let controller = self.clone();
+            move |_| {
+                if controller.end() {
+                    glib::Propagation::Proceed
+                } else {
+                    glib::Propagation::Stop
+                }
+            }
+        });
+
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion({
+            let controller = self.clone();
+            let hud = hud.clone();
+            move |_, _, _| controller.poke_hud(&hud)
+        });
+        overlay.add_controller(motion);
+        let hud_hover = gtk::EventControllerMotion::new();
+        hud_hover.connect_enter({
+            let controller = self.clone();
+            let hud = hud.clone();
+            move |_, _, _| controller.hold_hud(&hud)
+        });
+        hud_hover.connect_leave({
+            let controller = self.clone();
+            let hud = hud.clone();
+            move |_| controller.poke_hud(&hud)
+        });
+        hud.add_controller(hud_hover);
+        self.poke_hud(&hud);
+        window
+    }
+
+    fn build_single_notes_panel(&self) -> gtk::Box {
+        let aside = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        aside.add_css_class("notes");
+        aside.set_margin_top(12);
+        aside.set_margin_bottom(12);
+        aside.set_margin_start(12);
+        aside.set_margin_end(12);
+        let next_label = gtk::Label::new(Some("NEXT"));
+        next_label.add_css_class("eyebrow");
+        next_label.set_halign(gtk::Align::Start);
+        aside.append(&next_label);
+        let next_picture = gtk::Picture::new();
+        next_picture.set_keep_aspect_ratio(true);
+        next_picture.set_size_request(340, 190);
+        aside.append(&next_picture);
+        let notes_header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let notes_label = gtk::Label::new(Some("SPEAKER NOTES"));
+        notes_label.add_css_class("eyebrow");
+        notes_label.set_halign(gtk::Align::Start);
+        notes_label.set_hexpand(true);
+        let notes_smaller = gtk::Button::with_label("−");
+        notes_smaller.set_tooltip_text(Some("Smaller speaker notes"));
+        let notes_size = gtk::Label::new(Some(&self.note_font_size.get().to_string()));
+        notes_size.add_css_class("mono");
+        let notes_larger = gtk::Button::with_label("+");
+        notes_larger.set_tooltip_text(Some("Larger speaker notes"));
+        notes_header.append(&notes_label);
+        notes_header.append(&notes_smaller);
+        notes_header.append(&notes_size);
+        notes_header.append(&notes_larger);
+        aside.append(&notes_header);
+        let inline_note = gtk::Label::new(None);
+        inline_note.set_wrap(true);
+        inline_note.set_halign(gtk::Align::Start);
+        inline_note.add_css_class("muted");
+        inline_note.add_css_class("speaker-notes-text");
+        aside.append(&inline_note);
+        let rendered_note = gtk::Picture::new();
+        rendered_note.set_keep_aspect_ratio(true);
+        rendered_note.set_can_shrink(true);
+        rendered_note.set_size_request(340, 190);
+        rendered_note.set_visible(false);
+        aside.append(&rendered_note);
+        let note_buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+        let note_view = gtk::TextView::with_buffer(&note_buffer);
+        note_view.add_css_class("speaker-notes-text");
+        note_view.set_wrap_mode(gtk::WrapMode::WordChar);
+        note_view.set_top_margin(10);
+        note_view.set_bottom_margin(10);
+        note_view.set_left_margin(10);
+        note_view.set_right_margin(10);
+        let note_scroll = gtk::ScrolledWindow::new();
+        note_scroll.set_vexpand(true);
+        note_scroll.set_child(Some(&note_view));
+        aside.append(&note_scroll);
+
+        let notes_css = gtk::CssProvider::new();
+        let apply_note_size: Rc<dyn Fn()> = {
+            let notes_css = notes_css.clone();
+            let note_font_size = self.note_font_size.clone();
+            Rc::new(move || {
+                notes_css.load_from_data(&format!(
+                    ".speaker-notes-text {{ font-size: {}px; }}",
+                    note_font_size.get()
                 ));
-                note_overlay.set_visible(state.notes_visible);
+            })
+        };
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&aside),
+            &notes_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+        apply_note_size();
+        notes_smaller.connect_clicked({
+            let note_font_size = self.note_font_size.clone();
+            let save = self.save_note_font_size.clone();
+            let apply = apply_note_size.clone();
+            let label = notes_size.clone();
+            move |_| {
+                let size = note_font_size.get().saturating_sub(2).max(12);
+                note_font_size.set(size);
+                label.set_text(&size.to_string());
+                apply();
+                save(size);
+            }
+        });
+        notes_larger.connect_clicked({
+            let note_font_size = self.note_font_size.clone();
+            let save = self.save_note_font_size.clone();
+            let apply = apply_note_size.clone();
+            let label = notes_size.clone();
+            move |_| {
+                let size = (note_font_size.get() + 2).min(34);
+                note_font_size.set(size);
+                label.set_text(&size.to_string());
+                apply();
+                save(size);
+            }
+        });
+
+        let suppress_note_change = Rc::new(Cell::new(false));
+        note_buffer.connect_changed({
+            let suppress_note_change = suppress_note_change.clone();
+            let state = self.state.clone();
+            let sidecar_notes = self.sidecar_notes.clone();
+            let controller = self.clone();
+            move |buffer| {
+                if suppress_note_change.get() {
+                    return;
+                }
+                let text = buffer
+                    .text(&buffer.start_iter(), &buffer.end_iter(), true)
+                    .to_string();
+                let slide = state.borrow().slide;
+                let mut notes = sidecar_notes.borrow_mut();
+                if notes.len() <= slide {
+                    notes.resize(slide + 1, String::new());
+                }
+                notes[slide] = text.clone();
+                drop(notes);
+                controller.schedule_note_save(slide, text);
+            }
+        });
+
+        let refresh: Rc<dyn Fn()> = {
+            let state = self.state.clone();
+            let pages = self.pages.clone();
+            let inline_notes = self.inline_notes.clone();
+            let sidecar_notes = self.sidecar_notes.clone();
+            let rendered_notes = self.rendered_notes.clone();
+            let suppress_note_change = suppress_note_change.clone();
+            let aside = aside.clone();
+            Rc::new(move || {
+                let slide = state.borrow().slide;
+                aside.set_visible(state.borrow().notes_visible);
+                if let Some(path) = pages.borrow().get(slide + 1) {
+                    next_picture.set_filename(Some(path));
+                } else {
+                    next_picture.set_paintable(gtk::gdk::Paintable::NONE);
+                }
+                let note = sidecar_notes
+                    .borrow()
+                    .get(slide)
+                    .cloned()
+                    .unwrap_or_default();
+                let current = note_buffer
+                    .text(&note_buffer.start_iter(), &note_buffer.end_iter(), true)
+                    .to_string();
+                if current != note {
+                    suppress_note_change.set(true);
+                    note_buffer.set_text(&note);
+                    suppress_note_change.set(false);
+                }
+                inline_note.set_label(
+                    inline_notes
+                        .borrow()
+                        .get(slide)
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                );
+                inline_note.set_visible(!inline_note.label().is_empty());
+                if let Some(Some(path)) = rendered_notes.borrow().get(slide) {
+                    rendered_note.set_filename(Some(path));
+                    rendered_note.set_visible(true);
+                } else {
+                    rendered_note.set_paintable(gtk::gdk::Paintable::NONE);
+                    rendered_note.set_visible(false);
+                }
             })
         };
         refresh();
         self.refreshers.borrow_mut().push(refresh);
-        SlideStage { root }
+        aside
     }
 
     fn build_presenter_window(&self) -> gtk::ApplicationWindow {
@@ -591,19 +862,14 @@ impl PresentationController {
         });
 
         let suppress_note_change = Rc::new(Cell::new(false));
-        let pending_note_save = Rc::new(RefCell::new(None::<glib::SourceId>));
         note_buffer.connect_changed({
             let suppress_note_change = suppress_note_change.clone();
-            let pending_note_save = pending_note_save.clone();
             let state = self.state.clone();
             let sidecar_notes = self.sidecar_notes.clone();
-            let save_note = self.save_note.clone();
+            let controller = self.clone();
             move |buffer| {
                 if suppress_note_change.get() {
                     return;
-                }
-                if let Some(source) = pending_note_save.borrow_mut().take() {
-                    source.remove();
                 }
                 let text = buffer
                     .text(&buffer.start_iter(), &buffer.end_iter(), true)
@@ -615,18 +881,24 @@ impl PresentationController {
                 }
                 notes[slide] = text.clone();
                 drop(notes);
-                let save_note = save_note.clone();
-                pending_note_save.replace(Some(glib::timeout_add_local_once(
-                    Duration::from_millis(600),
-                    move || save_note(slide, text),
-                )));
+                controller.schedule_note_save(slide, text);
             }
         });
         console.set_end_child(Some(&aside));
         root.append(&console);
-        root.append(&self.build_toolbar(&window));
+        root.append(&self.build_toolbar(&window, PresentationRole::Presenter));
         window.set_child(Some(&root));
-        self.attach_input(&window);
+        self.attach_input(&window, PresentationRole::Presenter, None);
+        window.connect_close_request({
+            let controller = self.clone();
+            move |_| {
+                if controller.end() {
+                    glib::Propagation::Proceed
+                } else {
+                    glib::Propagation::Stop
+                }
+            }
+        });
 
         let refresh: Rc<dyn Fn()> = {
             let state = self.state.clone();
@@ -635,22 +907,28 @@ impl PresentationController {
             let sidecar_notes = self.sidecar_notes.clone();
             let rendered_notes = self.rendered_notes.clone();
             let suppress_note_change = suppress_note_change.clone();
+            let aside = aside.clone();
             Rc::new(move || {
                 let slide = state.borrow().slide;
+                aside.set_visible(state.borrow().notes_visible);
                 if let Some(path) = pages.borrow().get(slide + 1) {
                     next_picture.set_filename(Some(path));
                 } else {
                     next_picture.set_paintable(gtk::gdk::Paintable::NONE);
                 }
-                suppress_note_change.set(true);
-                note_buffer.set_text(
-                    sidecar_notes
-                        .borrow()
-                        .get(slide)
-                        .map(String::as_str)
-                        .unwrap_or_default(),
-                );
-                suppress_note_change.set(false);
+                let note = sidecar_notes
+                    .borrow()
+                    .get(slide)
+                    .cloned()
+                    .unwrap_or_default();
+                let current = note_buffer
+                    .text(&note_buffer.start_iter(), &note_buffer.end_iter(), true)
+                    .to_string();
+                if current != note {
+                    suppress_note_change.set(true);
+                    note_buffer.set_text(&note);
+                    suppress_note_change.set(false);
+                }
                 inline_note.set_label(
                     inline_notes
                         .borrow()
@@ -673,9 +951,136 @@ impl PresentationController {
         window
     }
 
-    fn build_toolbar(&self, parent: &gtk::ApplicationWindow) -> gtk::Box {
-        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+    fn schedule_note_save(&self, slide: usize, text: String) {
+        if let Some(source) = self.pending_note_save.borrow_mut().take() {
+            source.remove();
+        }
+        let mut pending = self.pending_note_writes.borrow_mut();
+        pending.retain(|(pending_slide, _)| *pending_slide != slide);
+        pending.push((slide, text));
+        drop(pending);
+        let pending_note_save = self.pending_note_save.clone();
+        let pending_note_writes = self.pending_note_writes.clone();
+        let save_note = self.save_note.clone();
+        let source = glib::timeout_add_local_once(Duration::from_millis(600), move || {
+            pending_note_save.borrow_mut().take();
+            let pending = std::mem::take(&mut *pending_note_writes.borrow_mut());
+            let mut failed = Vec::new();
+            for (slide, text) in pending {
+                if !save_note(slide, text.clone()) {
+                    failed.push((slide, text));
+                }
+            }
+            pending_note_writes.borrow_mut().extend(failed);
+        });
+        self.pending_note_save.replace(Some(source));
+    }
+
+    pub fn flush_pending_note(&self) -> bool {
+        if let Some(source) = self.pending_note_save.borrow_mut().take() {
+            source.remove();
+        }
+        let pending = std::mem::take(&mut *self.pending_note_writes.borrow_mut());
+        let mut failed = Vec::new();
+        for (slide, text) in pending {
+            if !(self.save_note)(slide, text.clone()) {
+                failed.push((slide, text));
+            }
+        }
+        let saved_all = failed.is_empty();
+        self.pending_note_writes.borrow_mut().extend(failed);
+        saved_all
+    }
+
+    fn hold_hud(&self, hud: &gtk::Revealer) {
+        if let Some(source) = self.hud_timeout.borrow_mut().take() {
+            source.remove();
+        }
+        hud.set_reveal_child(true);
+    }
+
+    fn poke_hud(&self, hud: &gtk::Revealer) {
+        self.hold_hud(hud);
+        let timeout_slot = self.hud_timeout.clone();
+        let timeout_callback = timeout_slot.clone();
+        let state = self.state.clone();
+        let hud = hud.clone();
+        let source = glib::timeout_add_local_once(Duration::from_millis(2600), move || {
+            timeout_callback.borrow_mut().take();
+            if !state.borrow().notes_visible {
+                hud.set_reveal_child(false);
+            }
+        });
+        timeout_slot.replace(Some(source));
+    }
+
+    fn install_audience_cursor_hide(&self, window: &gtk::ApplicationWindow) {
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion({
+            let controller = self.clone();
+            let window = window.clone();
+            move |_, _, _| controller.poke_audience_cursor(&window)
+        });
+        window.add_controller(motion);
+        self.poke_audience_cursor(window);
+    }
+
+    fn poke_audience_cursor(&self, window: &gtk::ApplicationWindow) {
+        window.set_cursor_from_name(None);
+        if let Some(source) = self.audience_cursor_timeout.borrow_mut().take() {
+            source.remove();
+        }
+        let timeout_slot = self.audience_cursor_timeout.clone();
+        let timeout_callback = timeout_slot.clone();
+        let window = window.clone();
+        let source = glib::timeout_add_local_once(Duration::from_millis(1800), move || {
+            timeout_callback.borrow_mut().take();
+            window.set_cursor_from_name(Some("none"));
+        });
+        timeout_slot.replace(Some(source));
+    }
+
+    fn open_audience_on_monitor(&self, index: usize) {
+        let available = monitors();
+        let Some(monitor) = available.get(index) else {
+            return;
+        };
+        if let Some(window) = self.audience_window.borrow().as_ref() {
+            window.fullscreen_on_monitor(monitor);
+            window.present();
+            self.audience_monitor.set(Some(index));
+            return;
+        }
+        let audience = self.build_stage_window("Audience — typsmthng", PresentationRole::Audience);
+        audience.fullscreen_on_monitor(monitor);
+        audience.present();
+        self.audience_monitor.set(Some(index));
+        self.audience_window.replace(Some(audience.clone()));
+        self.windows.borrow_mut().push(audience);
+        self.refresh();
+    }
+
+    fn close_audience(&self) {
+        let Some(audience) = self.audience_window.borrow_mut().take() else {
+            return;
+        };
+        self.windows
+            .borrow_mut()
+            .retain(|candidate| candidate != &audience);
+        if let Some(timeout) = self.audience_cursor_timeout.borrow_mut().take() {
+            timeout.remove();
+        }
+        audience.close();
+        self.refresh();
+    }
+
+    fn build_toolbar(&self, parent: &gtk::ApplicationWindow, role: PresentationRole) -> gtk::Box {
+        let toolbar = gtk::Box::new(gtk::Orientation::Vertical, 6);
         toolbar.add_css_class("presentation-toolbar");
+        let session_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let tools_row = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        toolbar.append(&session_row);
+        toolbar.append(&tools_row);
         let previous = tool_button("go-previous-symbolic", "Previous slide");
         let next = tool_button("go-next-symbolic", "Next slide");
         let slide = gtk::Label::new(Some("1 / 1"));
@@ -704,18 +1109,62 @@ impl PresentationController {
         let black = gtk::ToggleButton::with_label("Black");
         let white = gtk::ToggleButton::with_label("White");
         let grid = gtk::Button::with_label("Grid");
-        let displays = gtk::DropDown::from_strings(&monitor_labels());
+        let notes = gtk::ToggleButton::with_label("Notes");
+        let audience_toggle = gtk::Button::with_label("Close audience");
+        audience_toggle.set_visible(role == PresentationRole::Presenter);
+        let display_labels = monitor_labels();
+        let display_label_refs = display_labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let displays = gtk::DropDown::from_strings(&display_label_refs);
+        displays.set_selected(self.audience_monitor.get().unwrap_or(0) as u32);
         displays.set_tooltip_text(Some("Audience display"));
         let exit = gtk::Button::with_label("End show");
         exit.add_css_class("destructive-action");
+        // Keep session controls and drawing tools in separate compact rows.
+        // The former single line forced presenter windows wider than a laptop display.
         for widget in [
-            previous.upcast_ref::<gtk::Widget>(),
-            next.upcast_ref(),
-            slide.upcast_ref(),
-            timer.upcast_ref(),
+            timer.upcast_ref::<gtk::Widget>(),
             clock.upcast_ref(),
             timer_toggle.upcast_ref(),
             timer_reset.upcast_ref(),
+        ] {
+            session_row.append(widget);
+        }
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        session_row.append(&spacer);
+        for widget in [
+            audience_toggle.upcast_ref::<gtk::Widget>(),
+            displays.upcast_ref(),
+            exit.upcast_ref(),
+        ] {
+            session_row.append(widget);
+        }
+        for (button, icon, hint) in [
+            (
+                &pointer,
+                "input-mouse-symbolic",
+                "Pointer: click to advance",
+            ),
+            (&laser, "find-location-symbolic", "Laser pointer (L)"),
+            (&pen, "document-edit-symbolic", "Pen (D)"),
+            (&highlighter, "edit-select-all-symbolic", "Highlighter (H)"),
+            (&eraser, "edit-clear-symbolic", "Eraser (E)"),
+            (&black, "weather-clear-night-symbolic", "Black screen (B)"),
+            (&white, "weather-clear-symbolic", "White screen (W)"),
+        ] {
+            button.set_icon_name(icon);
+            button.set_tooltip_text(Some(hint));
+        }
+        slide.set_width_chars(9);
+        timer.set_tooltip_text(Some("Elapsed time"));
+        clock.set_tooltip_text(Some("Local time"));
+        for widget in [
+            previous.upcast_ref::<gtk::Widget>(),
+            slide.upcast_ref(),
+            next.upcast_ref(),
             pointer.upcast_ref(),
             laser.upcast_ref(),
             pen.upcast_ref(),
@@ -726,10 +1175,9 @@ impl PresentationController {
             black.upcast_ref(),
             white.upcast_ref(),
             grid.upcast_ref(),
-            displays.upcast_ref(),
-            exit.upcast_ref(),
+            notes.upcast_ref(),
         ] {
-            toolbar.append(widget);
+            tools_row.append(widget);
         }
         previous.connect_clicked({
             let controller = self.clone();
@@ -739,44 +1187,68 @@ impl PresentationController {
             let controller = self.clone();
             move |_| controller.next()
         });
-        pointer.connect_toggled({
+        pointer.connect_clicked({
             let state = self.state.clone();
-            move |b| {
-                if b.is_active() {
-                    state.borrow_mut().tool = PresentationTool::Pointer;
-                }
+            let controller = self.clone();
+            move |_| {
+                state.borrow_mut().tool = PresentationTool::Pointer;
+                controller.refresh();
             }
         });
-        laser.connect_toggled({
+        laser.connect_clicked({
             let state = self.state.clone();
-            move |b| {
-                if b.is_active() {
-                    state.borrow_mut().tool = PresentationTool::Laser;
-                }
+            let controller = self.clone();
+            move |_| {
+                let mut state = state.borrow_mut();
+                state.tool = if state.tool == PresentationTool::Laser {
+                    PresentationTool::Pointer
+                } else {
+                    PresentationTool::Laser
+                };
+                drop(state);
+                controller.refresh();
             }
         });
-        pen.connect_toggled({
+        pen.connect_clicked({
             let state = self.state.clone();
-            move |b| {
-                if b.is_active() {
-                    state.borrow_mut().tool = PresentationTool::Pen;
-                }
+            let controller = self.clone();
+            move |_| {
+                let mut state = state.borrow_mut();
+                state.tool = if state.tool == PresentationTool::Pen {
+                    PresentationTool::Pointer
+                } else {
+                    PresentationTool::Pen
+                };
+                drop(state);
+                controller.refresh();
             }
         });
-        highlighter.connect_toggled({
+        highlighter.connect_clicked({
             let state = self.state.clone();
-            move |b| {
-                if b.is_active() {
-                    state.borrow_mut().tool = PresentationTool::Highlighter;
-                }
+            let controller = self.clone();
+            move |_| {
+                let mut state = state.borrow_mut();
+                state.tool = if state.tool == PresentationTool::Highlighter {
+                    PresentationTool::Pointer
+                } else {
+                    PresentationTool::Highlighter
+                };
+                drop(state);
+                controller.refresh();
             }
         });
-        eraser.connect_toggled({
+        eraser.connect_clicked({
             let state = self.state.clone();
-            move |b| {
-                if b.is_active() {
-                    state.borrow_mut().tool = PresentationTool::Eraser;
-                }
+            let controller = self.clone();
+            move |_| {
+                let mut state = state.borrow_mut();
+                state.tool = if state.tool == PresentationTool::Eraser {
+                    PresentationTool::Pointer
+                } else {
+                    PresentationTool::Eraser
+                };
+                drop(state);
+                controller.refresh();
             }
         });
         colors.connect_selected_notify({
@@ -804,63 +1276,101 @@ impl PresentationController {
                 controller.refresh();
             }
         });
-        black.connect_toggled({
+        black.connect_clicked({
             let state = self.state.clone();
             let controller = self.clone();
-            move |button| {
-                state.borrow_mut().blackout = if button.is_active() {
-                    Blackout::Black
-                } else {
+            move |_| {
+                let blackout = state.borrow().blackout;
+                state.borrow_mut().blackout = if blackout == Blackout::Black {
                     Blackout::None
+                } else {
+                    Blackout::Black
                 };
                 controller.refresh();
             }
         });
-        white.connect_toggled({
+        white.connect_clicked({
             let state = self.state.clone();
             let controller = self.clone();
-            move |button| {
-                state.borrow_mut().blackout = if button.is_active() {
-                    Blackout::White
-                } else {
+            move |_| {
+                let blackout = state.borrow().blackout;
+                state.borrow_mut().blackout = if blackout == Blackout::White {
                     Blackout::None
+                } else {
+                    Blackout::White
                 };
                 controller.refresh();
             }
         });
         timer_toggle.connect_clicked({
-            let state = self.state.clone();
-            move |_| state.borrow_mut().toggle_timer()
+            let controller = self.clone();
+            move |_| {
+                controller.state.borrow_mut().toggle_timer();
+                controller.refresh();
+            }
         });
         timer_reset.connect_clicked({
-            let state = self.state.clone();
-            move |_| state.borrow_mut().reset_timer()
+            let controller = self.clone();
+            move |_| {
+                controller.state.borrow_mut().reset_timer();
+                controller.refresh();
+            }
         });
         grid.connect_clicked({
             let controller = self.clone();
             let parent = parent.clone();
             move |_| controller.show_grid(&parent)
         });
+        notes.connect_clicked({
+            let controller = self.clone();
+            move |_| {
+                let visible = controller.state.borrow().notes_visible;
+                controller.state.borrow_mut().notes_visible = !visible;
+                controller.refresh();
+            }
+        });
         displays.connect_selected_notify({
-            let windows = self.windows.clone();
+            let controller = self.clone();
+            let parent = parent.clone();
             move |chooser| {
-                if let (Some(window), Some(monitor)) = (
-                    windows.borrow().first(),
-                    monitors().get(chooser.selected() as usize),
-                ) {
-                    window.fullscreen_on_monitor(monitor);
+                let selected = chooser.selected() as usize;
+                let available = monitors();
+                if let Some(monitor) = available.get(selected) {
+                    if role == PresentationRole::Presenter {
+                        if let Some(window) = controller.audience_window.borrow().as_ref() {
+                            window.fullscreen_on_monitor(monitor);
+                            controller.audience_monitor.set(Some(selected));
+                        }
+                    } else {
+                        parent.fullscreen_on_monitor(monitor);
+                        controller.audience_monitor.set(Some(selected));
+                    }
+                }
+            }
+        });
+        audience_toggle.connect_clicked({
+            let controller = self.clone();
+            let displays = displays.clone();
+            move |_| {
+                if controller.audience_window.borrow().is_some() {
+                    controller.close_audience();
+                } else {
+                    controller.open_audience_on_monitor(displays.selected() as usize);
                 }
             }
         });
         exit.connect_clicked({
             let controller = self.clone();
-            move |_| controller.end()
+            move |_| {
+                controller.end();
+            }
         });
 
         let state = self.state.clone();
         let slide_copy = slide.clone();
         let timer_copy = timer.clone();
         let clock_copy = clock.clone();
+        let timer_toggle_copy = timer_toggle.clone();
         let timer_source = glib::timeout_add_local(Duration::from_millis(250), move || {
             let state = state.borrow();
             slide_copy.set_text(&format!(
@@ -869,6 +1379,11 @@ impl PresentationController {
                 state.slide_count
             ));
             timer_copy.set_text(&format_elapsed(state.elapsed()));
+            timer_toggle_copy.set_icon_name(if state.timer_running {
+                "media-playback-pause-symbolic"
+            } else {
+                "media-playback-start-symbolic"
+            });
             clock_copy.set_text(&glib::DateTime::now_local().map_or_else(
                 |_| "--:--".to_string(),
                 |now| {
@@ -879,6 +1394,37 @@ impl PresentationController {
             glib::ControlFlow::Continue
         });
         self.timers.borrow_mut().push(timer_source);
+        let refresh: Rc<dyn Fn()> = {
+            let state = self.state.clone();
+            let pointer = pointer.clone();
+            let laser = laser.clone();
+            let pen = pen.clone();
+            let highlighter = highlighter.clone();
+            let eraser = eraser.clone();
+            let black = black.clone();
+            let white = white.clone();
+            let notes = notes.clone();
+            let audience_toggle = audience_toggle.clone();
+            let audience_window = self.audience_window.clone();
+            Rc::new(move || {
+                let state = state.borrow();
+                pointer.set_active(state.tool == PresentationTool::Pointer);
+                laser.set_active(state.tool == PresentationTool::Laser);
+                pen.set_active(state.tool == PresentationTool::Pen);
+                highlighter.set_active(state.tool == PresentationTool::Highlighter);
+                eraser.set_active(state.tool == PresentationTool::Eraser);
+                black.set_active(state.blackout == Blackout::Black);
+                white.set_active(state.blackout == Blackout::White);
+                notes.set_active(state.notes_visible);
+                audience_toggle.set_label(if audience_window.borrow().is_some() {
+                    "Close audience"
+                } else {
+                    "Open audience"
+                });
+            })
+        };
+        refresh();
+        self.refreshers.borrow_mut().push(refresh);
         toolbar
     }
 
@@ -899,14 +1445,34 @@ impl PresentationController {
         flow.set_margin_bottom(16);
         flow.set_margin_start(16);
         flow.set_margin_end(16);
+        let (current_slide, annotated_slides) = {
+            let state = self.state.borrow();
+            (
+                state.slide,
+                state
+                    .strokes
+                    .iter()
+                    .map(|strokes| !strokes.is_empty())
+                    .collect::<Vec<_>>(),
+            )
+        };
         for (index, page) in self.pages.borrow().iter().enumerate() {
             let button = gtk::Button::new();
+            if index == current_slide {
+                button.add_css_class("annotation-active");
+                button.set_tooltip_text(Some("Current slide"));
+            }
             let cell = gtk::Box::new(gtk::Orientation::Vertical, 5);
             let picture = gtk::Picture::for_filename(page);
             picture.set_keep_aspect_ratio(true);
             picture.set_size_request(210, 118);
             cell.append(&picture);
             cell.append(&gtk::Label::new(Some(&(index + 1).to_string())));
+            if annotated_slides.get(index).copied().unwrap_or(false) {
+                let annotated = gtk::Label::new(Some("ANNOTATED"));
+                annotated.add_css_class("eyebrow");
+                cell.append(&annotated);
+            }
             button.set_child(Some(&cell));
             button.connect_clicked({
                 let controller = self.clone();
@@ -925,14 +1491,24 @@ impl PresentationController {
         window.present();
     }
 
-    fn attach_input(&self, window: &gtk::ApplicationWindow) {
+    fn attach_input(
+        &self,
+        window: &gtk::ApplicationWindow,
+        role: PresentationRole,
+        hud: Option<&gtk::Revealer>,
+    ) {
         let base_title = window.title().unwrap_or_default().to_string();
+        let hud = hud.cloned();
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed({
             let controller = self.clone();
             let window = window.clone();
             let base_title = base_title.clone();
+            let hud = hud.clone();
             move |_, key, _, modifiers| {
+                if let Some(hud) = &hud {
+                    controller.poke_hud(hud);
+                }
                 if modifiers.intersects(
                     gtk::gdk::ModifierType::CONTROL_MASK
                         | gtk::gdk::ModifierType::ALT_MASK
@@ -994,7 +1570,7 @@ impl PresentationController {
                 let Some(command) = presentation_command_for_key(&name) else {
                     return glib::Propagation::Proceed;
                 };
-                controller.apply_command(command, &window);
+                controller.apply_command(command, &window, role);
                 glib::Propagation::Stop
             }
         });
@@ -1003,7 +1579,13 @@ impl PresentationController {
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         scroll.connect_scroll({
             let controller = self.clone();
+            let window = window.clone();
             move |_, _, dy| {
+                if gtk::prelude::GtkWindowExt::focus(&window)
+                    .is_some_and(|widget| widget.is::<gtk::TextView>())
+                {
+                    return glib::Propagation::Proceed;
+                }
                 let now = std::time::Instant::now();
                 if controller
                     .last_scroll_navigation
@@ -1045,7 +1627,12 @@ impl PresentationController {
         window.add_controller(click);
     }
 
-    fn apply_command(&self, command: PresentationCommand, window: &gtk::ApplicationWindow) {
+    fn apply_command(
+        &self,
+        command: PresentationCommand,
+        window: &gtk::ApplicationWindow,
+        role: PresentationRole,
+    ) {
         let mut state = self.state.borrow_mut();
         match command {
             PresentationCommand::Next => state.next(),
@@ -1107,6 +1694,9 @@ impl PresentationController {
             PresentationCommand::ResetTimer => state.reset_timer(),
             PresentationCommand::ToggleFullscreen => {
                 drop(state);
+                if role == PresentationRole::Audience {
+                    return;
+                }
                 if window.is_fullscreen() {
                     window.unfullscreen();
                 } else {
@@ -1117,7 +1707,16 @@ impl PresentationController {
             }
             PresentationCommand::ToggleGrid => {
                 drop(state);
-                self.show_grid(window);
+                let target = if role == PresentationRole::Audience {
+                    self.presenter_window
+                        .borrow()
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| window.clone())
+                } else {
+                    window.clone()
+                };
+                self.show_grid(&target);
                 return;
             }
             PresentationCommand::ToggleNotes => {
@@ -1136,6 +1735,7 @@ impl PresentationController {
 
 struct SlideStage {
     root: gtk::Overlay,
+    refresh: RefreshCallback,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1194,15 +1794,65 @@ fn normalize_to_slide(
     ))
 }
 
-fn combined_note(inline: &[String], sidecar: &[String], slide: usize) -> String {
-    let inline = inline.get(slide).map(String::as_str).unwrap_or_default();
-    let sidecar = sidecar.get(slide).map(String::as_str).unwrap_or_default();
-    match (inline.trim().is_empty(), sidecar.trim().is_empty()) {
-        (true, true) => "No notes for this slide.".into(),
-        (false, true) => inline.into(),
-        (true, false) => sidecar.into(),
-        (false, false) => format!("{inline}\n\n{sidecar}"),
+fn erase_stroke_at(
+    state: &Rc<RefCell<PresentationState>>,
+    picture: &gtk::Picture,
+    drawing: &gtk::DrawingArea,
+    x: f64,
+    y: f64,
+) -> bool {
+    let Some(point) = normalize_to_slide(
+        picture,
+        drawing.width() as f64,
+        drawing.height() as f64,
+        x,
+        y,
+    ) else {
+        return false;
+    };
+    let slide = state.borrow().slide;
+    let mut state = state.borrow_mut();
+    let Some(strokes) = state.strokes.get_mut(slide) else {
+        return false;
+    };
+    let Some((index, _)) = strokes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, stroke)| {
+            stroke
+                .points
+                .iter()
+                .map(|candidate| (candidate.x - point.x).hypot(candidate.y - point.y))
+                .reduce(f64::min)
+                .map(|distance| (index, distance))
+        })
+        .filter(|(_, distance)| *distance <= 0.05)
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+    else {
+        return false;
+    };
+    strokes.remove(index);
+    true
+}
+
+fn owner_monitor_index(
+    owner: &gtk::ApplicationWindow,
+    available: &[gtk::gdk::Monitor],
+) -> Option<usize> {
+    let display = gtk::prelude::WidgetExt::display(owner);
+    let surface = owner.surface()?;
+    let monitor = display.monitor_at_surface(&surface)?;
+    available.iter().position(|candidate| candidate == &monitor)
+}
+
+fn default_audience_monitor(count: usize, owner_monitor: Option<usize>) -> Option<usize> {
+    if count == 0 {
+        return None;
     }
+    let owner_monitor = owner_monitor.unwrap_or(0).min(count - 1);
+    (0..count)
+        .find(|index| *index != owner_monitor)
+        .or(Some(owner_monitor))
 }
 
 fn tool_button(icon: &str, tooltip: &str) -> gtk::Button {
@@ -1221,11 +1871,27 @@ fn monitors() -> Vec<gtk::gdk::Monitor> {
         .collect()
 }
 
-fn monitor_labels() -> Vec<&'static str> {
-    match monitors().len() {
-        0 | 1 => vec!["Primary display"],
-        2 => vec!["Display 1", "Display 2"],
-        3 => vec!["Display 1", "Display 2", "Display 3"],
-        _ => vec!["Display 1", "Display 2", "Display 3", "Display 4"],
+fn monitor_labels() -> Vec<String> {
+    let count = monitors().len();
+    if count <= 1 {
+        vec!["Primary display".into()]
+    } else {
+        (1..=count)
+            .map(|index| format!("Display {index}"))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_audience_monitor;
+
+    #[test]
+    fn audience_monitor_avoids_the_presenter_display() {
+        assert_eq!(default_audience_monitor(0, None), None);
+        assert_eq!(default_audience_monitor(1, Some(0)), Some(0));
+        assert_eq!(default_audience_monitor(2, Some(0)), Some(1));
+        assert_eq!(default_audience_monitor(2, Some(1)), Some(0));
+        assert_eq!(default_audience_monitor(5, Some(3)), Some(0));
     }
 }

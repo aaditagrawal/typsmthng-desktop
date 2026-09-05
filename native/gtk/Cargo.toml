@@ -4,6 +4,11 @@ version = "0.1.4"
 edition = "2021"
 license = "MIT"
 description = "Native GTK 4 desktop client for typsmthng"
+publish = false
+
+[features]
+default = []
+console = []
 
 [lib]
 name = "typsmthng_gtk"

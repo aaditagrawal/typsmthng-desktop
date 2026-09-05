@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,8 +8,7 @@ use tempfile::NamedTempFile;
 
 use crate::backend::error::{BackendError, Result};
 use crate::backend::model::{
-    CompileBundle, EntryKind, FileContent, PathSearchResult, ProjectEntry, ProjectFile,
-    TextSearchResult,
+    EntryKind, FileContent, PathSearchResult, ProjectEntry, ProjectFile, TextSearchResult,
 };
 use crate::backend::paths::{
     basename, canonical_project_root, extension, is_hidden, is_text_path, normalize_relative_path,
@@ -75,7 +73,15 @@ impl Project {
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
-            .follow_links(false);
+            .follow_links(false)
+            // Prune excluded trees before walking their contents, including outside Git repos.
+            .filter_entry(|entry| {
+                entry.depth() == 0
+                    || !matches!(
+                        entry.file_name().to_str(),
+                        Some(".git" | ".svn" | ".hg" | "node_modules" | "dist" | "build")
+                    )
+            });
 
         let mut entries = Vec::new();
         for result in builder.build() {
@@ -109,29 +115,8 @@ impl Project {
                 break;
             }
         }
-        entries.sort_by(|left, right| {
-            left.parent_path
-                .cmp(&right.parent_path)
-                .then_with(|| match (left.kind, right.kind) {
-                    (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
-                    (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
-                    _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
-                })
-        });
+        entries.sort_by(compare_entries_preorder);
         Ok(entries)
-    }
-
-    pub fn visible_file_count(&self) -> Result<usize> {
-        Ok(self
-            .entries(false)?
-            .iter()
-            .filter(|entry| {
-                entry.kind == EntryKind::File
-                    && entry.path != ".folder"
-                    && !entry.path.ends_with("/.folder")
-                    && !entry.path.starts_with(".typsmthng/")
-            })
-            .count())
     }
 
     pub fn read_file(&self, relative: impl AsRef<Path>) -> Result<ProjectFile> {
@@ -439,56 +424,39 @@ impl Project {
             .map(|entry| entry.path.clone())
             .ok_or_else(|| BackendError::NotFound(self.root.join("main.typ")))
     }
+}
 
-    pub fn compile_bundle(
-        &self,
-        current: Option<&str>,
-        live_source: &str,
-    ) -> Result<CompileBundle> {
-        self.compile_bundle_with_overrides(current, live_source, &BTreeMap::new())
-    }
+fn compare_entries_preorder(left: &ProjectEntry, right: &ProjectEntry) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
 
-    pub fn compile_bundle_with_overrides(
-        &self,
-        current: Option<&str>,
-        live_source: &str,
-        overrides: &BTreeMap<String, String>,
-    ) -> Result<CompileBundle> {
-        let main = self.resolve_main_file(current)?;
-        let current = current.map(normalize_relative_path).transpose()?;
-        let mut main_source = None;
-        let mut extra_text_files = Vec::new();
-        let mut extra_binary_files = Vec::new();
-        for entry in self.entries(true)? {
-            if entry.kind != EntryKind::File {
-                continue;
-            }
-            let file = self.read_file(&entry.path)?;
-            match file.content {
-                FileContent::Text(content) => {
-                    let content = if current.as_deref() == Some(entry.path.as_str()) {
-                        live_source.to_owned()
-                    } else {
-                        overrides.get(&entry.path).cloned().unwrap_or(content)
-                    };
-                    if entry.path == main {
-                        main_source = Some(content);
-                    } else {
-                        extra_text_files.push((format!("/{}", entry.path), content));
-                    }
-                }
-                FileContent::Binary(content) => {
-                    extra_binary_files.push((format!("/{}", entry.path), content));
-                }
-            }
+    let left_parts = left.path.split('/').collect::<Vec<_>>();
+    let right_parts = right.path.split('/').collect::<Vec<_>>();
+    for index in 0..left_parts.len().min(right_parts.len()) {
+        if left_parts[index].eq_ignore_ascii_case(right_parts[index]) {
+            continue;
         }
-        Ok(CompileBundle {
-            main_path: format!("/{main}"),
-            main_source: main_source.unwrap_or_else(|| live_source.to_owned()),
-            extra_text_files,
-            extra_binary_files,
-        })
+
+        // A path component with descendants is necessarily a directory even
+        // when the complete entry being compared is a file. This keeps every
+        // directory immediately followed by its subtree while still sorting
+        // directories before files among siblings.
+        let left_is_directory = index + 1 < left_parts.len() || left.kind == EntryKind::Directory;
+        let right_is_directory =
+            index + 1 < right_parts.len() || right.kind == EntryKind::Directory;
+        return match (left_is_directory, right_is_directory) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => left_parts[index]
+                .to_ascii_lowercase()
+                .cmp(&right_parts[index].to_ascii_lowercase())
+                .then_with(|| left_parts[index].cmp(right_parts[index])),
+        };
     }
+
+    left_parts
+        .len()
+        .cmp(&right_parts.len())
+        .then_with(|| left.path.cmp(&right.path))
 }
 
 fn entry_from_metadata(relative: String, kind: EntryKind, metadata: &fs::Metadata) -> ProjectEntry {
@@ -550,7 +518,36 @@ mod tests {
     }
 
     #[test]
-    fn supports_crud_search_and_compile_bundle() {
+    fn excluded_trees_are_pruned_even_outside_git_repositories() {
+        let (temporary, project) = fixture();
+        for directory in [
+            "node_modules",
+            "dist",
+            "build",
+            ".git",
+            "chapters/node_modules",
+        ] {
+            fs::create_dir_all(project.root().join(directory).join("nested")).unwrap();
+            fs::write(
+                project.root().join(directory).join("nested/secret.typ"),
+                "hidden needle",
+            )
+            .unwrap();
+        }
+        let entries = project.entries(true).unwrap();
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.path.contains("secret") || entry.path.contains("node_modules")));
+        assert!(project
+            .search_text("hidden needle", 10, true)
+            .unwrap()
+            .0
+            .is_empty());
+        drop(temporary);
+    }
+
+    #[test]
+    fn supports_crud_and_search() {
         let (_temporary, project) = fixture();
         project
             .duplicate("chapters/one.typ", "chapters/two.typ")
@@ -565,14 +562,6 @@ mod tests {
         assert_eq!(paths[0].entry.path, "chapters/renamed.typ");
         let (text, _) = project.search_text("needle", 10, false).unwrap();
         assert_eq!(text[0].line, 2);
-        let bundle = project
-            .compile_bundle(Some("chapters/one.typ"), "live")
-            .unwrap();
-        assert_eq!(bundle.main_path, "/main.typ");
-        assert!(bundle
-            .extra_text_files
-            .iter()
-            .any(|(path, content)| path == "/chapters/one.typ" && content == "live"));
         project.delete_permanently("chapters/renamed.typ").unwrap();
         assert!(!project.root().join("chapters/renamed.typ").exists());
     }
@@ -591,6 +580,36 @@ mod tests {
             fs::read_to_string(root.join("valuable.txt")).unwrap(),
             "keep"
         );
+    }
+
+    #[test]
+    fn entries_are_sorted_in_hierarchical_preorder() {
+        let (temporary, project) = fixture();
+        project.create_folder("appendix").unwrap();
+        project
+            .create_text_file("appendix/a.typ", "= Appendix")
+            .unwrap();
+        project.create_text_file("z.typ", "= Z").unwrap();
+        let paths = project
+            .entries(false)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>();
+        let appendix = paths.iter().position(|path| path == "appendix").unwrap();
+        let appendix_child = paths
+            .iter()
+            .position(|path| path == "appendix/a.typ")
+            .unwrap();
+        let chapters = paths.iter().position(|path| path == "chapters").unwrap();
+        let chapter_child = paths
+            .iter()
+            .position(|path| path == "chapters/one.typ")
+            .unwrap();
+        assert_eq!(appendix_child, appendix + 1);
+        assert_eq!(chapter_child, chapters + 1);
+        assert!(chapter_child < paths.iter().position(|path| path == "main.typ").unwrap());
+        drop(temporary);
     }
 
     #[cfg(unix)]

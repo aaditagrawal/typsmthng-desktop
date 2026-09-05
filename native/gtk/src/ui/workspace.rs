@@ -6,11 +6,14 @@ use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use sourceview5::prelude::*;
 use url::Url;
 
 use super::home::icon_button;
 use super::model::{SearchMode, Theme, UiSettings};
+
+type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
 
 type DiagnosticLocation = (String, Option<usize>, Option<usize>);
 
@@ -18,13 +21,110 @@ const DEFAULT_PREVIEW_WIDTH: f64 = 560.0;
 const DEFAULT_PREVIEW_ASPECT: f64 = 16.0 / 9.0;
 const PREVIEW_HORIZONTAL_INSET: i32 = 64;
 
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewIdentity {
+    pages: Vec<[u8; 32]>,
+    source: Option<(String, usize)>,
+}
+
+fn preview_identity(
+    pages: &[Option<String>],
+    source: Option<(&str, usize)>,
+) -> Option<PreviewIdentity> {
+    let pages = pages
+        .iter()
+        .map(|page| {
+            page.as_ref()
+                .map(|page| Sha256::digest(page.as_bytes()).into())
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(PreviewIdentity {
+        pages,
+        source: source.map(|(path, lines)| (path.to_string(), lines)),
+    })
+}
+
 #[derive(Clone)]
 struct PreviewPicture {
     widget: gtk::Picture,
     aspect_ratio: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+struct SettingsDialog {
+    window: gtk::Window,
+    font: gtk::SpinButton,
+    line_numbers: gtk::Switch,
+    wrapping: gtk::Switch,
+    vim: gtk::Switch,
+    auto_compile: gtk::Switch,
+    delay: gtk::SpinButton,
+    theme: gtk::DropDown,
+    page_size: gtk::DropDown,
+    notes_layout: gtk::DropDown,
+    system_fonts: gtk::Switch,
+    google_fonts: gtk::Switch,
+    translucent: gtk::Switch,
+}
+
+#[derive(Clone)]
+struct DocumentSearchDialog {
+    window: gtk::Window,
+    find: gtk::Entry,
+}
+
+impl DocumentSearchDialog {
+    fn present(&self, buffer: &sourceview5::Buffer) {
+        if let Some((start, end)) = buffer.selection_bounds() {
+            let selected = buffer.text(&start, &end, true);
+            if !selected.is_empty() && !selected.contains('\n') {
+                self.find.set_text(&selected);
+            }
+        }
+        self.window.present();
+        self.find.grab_focus();
+        self.find.select_region(0, -1);
+    }
+}
+
+impl SettingsDialog {
+    fn sync(&self, settings: &UiSettings) {
+        self.font.set_value(settings.font_size as f64);
+        self.line_numbers.set_active(settings.line_numbers);
+        self.wrapping.set_active(settings.line_wrapping);
+        self.vim.set_active(settings.vim_mode);
+        self.auto_compile.set_active(settings.auto_compile);
+        self.delay.set_value(settings.compile_delay_ms as f64);
+        self.theme.set_selected(match settings.theme {
+            Theme::System => 0,
+            Theme::Light => 1,
+            Theme::Dark => 2,
+        });
+        self.page_size
+            .set_selected(match settings.page_size.as_str() {
+                "a3" => 1,
+                "a4" => 2,
+                "a5" => 3,
+                "a6" => 4,
+                "us-letter" => 5,
+                "us-legal" => 6,
+                "iso-b5" => 7,
+                "presentation-16-9" => 8,
+                _ => 0,
+            });
+        self.notes_layout
+            .set_selected(match settings.presentation_notes_layout.as_str() {
+                "right-half" => 1,
+                "whole" => 2,
+                _ => 0,
+            });
+        self.system_fonts.set_active(settings.system_fonts);
+        self.google_fonts.set_active(settings.google_fonts);
+        self.translucent.set_active(settings.translucent);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRow {
     pub path: String,
     pub name: String,
@@ -60,7 +160,7 @@ pub struct WorkspaceCallbacks {
     pub create_file: Rc<dyn Fn()>,
     pub create_folder: Rc<dyn Fn()>,
     pub import_files: Rc<dyn Fn()>,
-    pub drop_files: Rc<dyn Fn(Vec<PathBuf>)>,
+    pub drop_files: Rc<dyn Fn((Vec<PathBuf>, String))>,
     pub move_path: Rc<dyn Fn((String, String))>,
     pub toggle_hidden: Rc<dyn Fn()>,
     pub rename_path: Rc<dyn Fn(String)>,
@@ -68,13 +168,14 @@ pub struct WorkspaceCallbacks {
     pub trash_path: Rc<dyn Fn(String)>,
     pub reveal_path: Rc<dyn Fn(String)>,
     pub open_external: Rc<dyn Fn(String)>,
+    pub preview_asset: Rc<dyn Fn(String)>,
     pub check_update: Rc<dyn Fn()>,
     pub export_pdf: Rc<dyn Fn()>,
     pub export_project: Rc<dyn Fn()>,
     pub present_single: Rc<dyn Fn()>,
     pub present_dual: Rc<dyn Fn()>,
     pub refresh_compile: Rc<dyn Fn(String)>,
-    pub search: Rc<dyn Fn(SearchMode, String) -> Vec<SearchResultRow>>,
+    pub search: SearchCallback,
     pub settings_changed: Rc<dyn Fn(UiSettings)>,
 }
 
@@ -92,6 +193,7 @@ pub struct WorkspaceView {
     pub root: gtk::Box,
     pub editor: sourceview5::View,
     pub buffer: sourceview5::Buffer,
+    editor_style: gtk::CssProvider,
     sidebar: gtk::Box,
     file_list: gtk::ListBox,
     file_paths: Rc<RefCell<Vec<String>>>,
@@ -99,6 +201,7 @@ pub struct WorkspaceView {
     expanded_directories: Rc<RefCell<HashSet<String>>>,
     known_directories: Rc<RefCell<HashSet<String>>>,
     preview_pages: gtk::Box,
+    preview_identity: Rc<RefCell<Option<PreviewIdentity>>>,
     preview_pictures: Rc<RefCell<Vec<PreviewPicture>>>,
     resize_preview: Rc<dyn Fn()>,
     preview_placeholder: gtk::Box,
@@ -113,6 +216,8 @@ pub struct WorkspaceView {
     compile_label: gtk::Label,
     page_label: gtk::Label,
     settings: Rc<RefCell<UiSettings>>,
+    settings_dialog: SettingsDialog,
+    document_search_dialog: DocumentSearchDialog,
     dirty: Rc<Cell<bool>>,
     suppress_changes: Rc<Cell<bool>>,
     pending_compile: Rc<RefCell<Option<glib::SourceId>>>,
@@ -128,20 +233,29 @@ impl WorkspaceView {
 
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         toolbar.add_css_class("toolbar");
-        let home = icon_button("go-home-symbolic", "Back to vaults");
+        toolbar.add_css_class("workspace-toolbar");
+        let home = gtk::Button::with_label("t.");
+        home.add_css_class("brand-mark");
+        home.set_tooltip_text(Some("Back to projects"));
+        let open_project = icon_button("folder-open-symbolic", "Open project");
         let sidebar_toggle = icon_button("sidebar-show-symbolic", "Toggle file tree (Ctrl+\\)");
         let project_label = gtk::Label::new(Some("Vault"));
-        project_label.add_css_class("section-title");
+        project_label.add_css_class("eyebrow");
+        project_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        project_label.set_hexpand(true);
+        project_label.set_halign(gtk::Align::Start);
         project_label.set_margin_start(6);
         let file_label = gtk::Label::new(Some("No file"));
-        file_label.add_css_class("muted");
+        file_label.add_css_class("file-tab");
         file_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         file_label.set_hexpand(true);
-        file_label.set_halign(gtk::Align::Start);
+        file_label.set_halign(gtk::Align::Fill);
+        file_label.set_max_width_chars(45);
         let search = icon_button(
             "system-search-symbolic",
             "Search files, contents, and commands (Ctrl+K)",
         );
+        let document_search = icon_button("edit-find-symbolic", "Find and replace (Ctrl+F)");
         let compile = icon_button("view-refresh-symbolic", "Compile now (Ctrl+Enter)");
         let export = icon_button("document-save-symbolic", "Export PDF (Ctrl+Shift+E)");
         let export_project = icon_button("package-x-generic-symbolic", "Export project ZIP");
@@ -149,19 +263,32 @@ impl WorkspaceView {
         present.set_icon_name("media-playback-start-symbolic");
         present.set_tooltip_text(Some("Present (F5)"));
         let settings_button = icon_button("preferences-system-symbolic", "Settings (Ctrl+,)");
+        let theme_button = icon_button(
+            "weather-clear-night-symbolic",
+            "Cycle system, light, and dark theme",
+        );
         let update_button = icon_button("software-update-available-symbolic", "Check for updates");
         toolbar.append(&home);
         toolbar.append(&sidebar_toggle);
-        toolbar.append(&project_label);
-        toolbar.append(&gtk::Label::new(Some("/")));
-        toolbar.append(&file_label);
-        toolbar.append(&search);
-        toolbar.append(&compile);
-        toolbar.append(&export);
-        toolbar.append(&export_project);
-        toolbar.append(&present);
+        toolbar.append(&open_project);
         toolbar.append(&settings_button);
-        toolbar.append(&update_button);
+        toolbar.append(&theme_button);
+        toolbar.append(&search);
+        toolbar.append(&file_label);
+        toolbar.append(&export);
+        toolbar.append(&present);
+        let more = gtk::MenuButton::new();
+        more.set_icon_name("view-more-symbolic");
+        more.set_tooltip_text(Some("More actions"));
+        let more_popover = gtk::Popover::new();
+        let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        more_actions.append(&document_search);
+        more_actions.append(&compile);
+        more_actions.append(&export_project);
+        more_actions.append(&update_button);
+        more_popover.set_child(Some(&more_actions));
+        more.set_popover(Some(&more_popover));
+        toolbar.append(&more);
         root.append(&toolbar);
 
         let present_popover = gtk::Popover::new();
@@ -202,7 +329,8 @@ impl WorkspaceView {
         let main_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         main_paned.set_vexpand(true);
         main_paned.set_hexpand(true);
-        main_paned.set_position(238);
+        main_paned.set_position(240);
+        main_paned.set_resize_start_child(false);
         main_paned.set_shrink_start_child(false);
         root.append(&main_paned);
 
@@ -214,9 +342,10 @@ impl WorkspaceView {
         sidebar_header.set_margin_bottom(7);
         sidebar_header.set_margin_start(10);
         sidebar_header.set_margin_end(8);
-        let files_title = gtk::Label::new(Some("FILES"));
+        let files_title = project_label.clone();
         files_title.add_css_class("eyebrow");
-        files_title.set_halign(gtk::Align::Start);
+        files_title.set_halign(gtk::Align::Fill);
+        files_title.set_xalign(0.0);
         files_title.set_hexpand(true);
         let new_file = icon_button("document-new-symbolic", "New file");
         let new_folder = icon_button("folder-new-symbolic", "New folder");
@@ -225,10 +354,20 @@ impl WorkspaceView {
         sidebar_header.append(&files_title);
         sidebar_header.append(&new_file);
         sidebar_header.append(&new_folder);
-        sidebar_header.append(&import_files);
-        sidebar_header.append(&hidden);
+        let file_more = gtk::MenuButton::new();
+        file_more.set_icon_name("view-more-symbolic");
+        file_more.set_tooltip_text(Some("Import and hidden-file options"));
+        file_more.add_css_class("flat");
+        let file_options = gtk::Popover::new();
+        let file_option_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        file_option_actions.append(&import_files);
+        file_option_actions.append(&hidden);
+        file_options.set_child(Some(&file_option_actions));
+        file_more.set_popover(Some(&file_options));
+        sidebar_header.append(&file_more);
         sidebar.append(&sidebar_header);
         let file_list = gtk::ListBox::new();
+        file_list.add_css_class("file-tree");
         file_list.set_selection_mode(gtk::SelectionMode::Single);
         file_list.set_activate_on_single_click(true);
         let file_scroll = gtk::ScrolledWindow::new();
@@ -240,10 +379,53 @@ impl WorkspaceView {
 
         let work_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         work_paned.set_wide_handle(false);
-        work_paned.set_position(590);
-        work_paned.set_shrink_start_child(false);
-        work_paned.set_shrink_end_child(false);
+        work_paned.set_position(470);
+        let initial_split = Rc::new(Cell::new(false));
+        work_paned.add_tick_callback(move |paned, _| {
+            if paned.width() > 0 && !initial_split.replace(true) {
+                paned.set_position(paned.width() / 2);
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+        work_paned.set_shrink_start_child(true);
+        work_paned.set_shrink_end_child(true);
         main_paned.set_end_child(Some(&work_paned));
+        // Preserve a usable editor and complete preview controls on laptops.
+        // Only react when crossing the threshold so manual toggles still work.
+        let narrow_layout = Rc::new(Cell::new(false));
+        let restore_sidebar = Rc::new(Cell::new(false));
+        let adapt_layout: Rc<dyn Fn(i32)> = Rc::new({
+            let sidebar = sidebar.clone();
+            let work_paned = work_paned.clone();
+            move |width| {
+                if width <= 0 {
+                    return;
+                }
+                let narrow = width < 1000;
+                if narrow == narrow_layout.replace(narrow) {
+                    return;
+                }
+                if narrow {
+                    restore_sidebar.set(sidebar.is_visible());
+                    sidebar.set_visible(false);
+                } else if restore_sidebar.replace(false) {
+                    sidebar.set_visible(true);
+                }
+                work_paned.set_position((width - if sidebar.is_visible() { 240 } else { 0 }) / 2);
+            }
+        });
+        root.add_tick_callback({
+            let adapt = adapt_layout.clone();
+            move |root, _| {
+                if root.width() <= 0 {
+                    return glib::ControlFlow::Continue;
+                }
+                adapt(root.width());
+                glib::ControlFlow::Break
+            }
+        });
+        window.connect_default_width_notify(move |window| adapt_layout(window.default_width()));
 
         let buffer = sourceview5::Buffer::new(None::<&gtk::TextTagTable>);
         let language_manager = sourceview5::LanguageManager::default();
@@ -269,6 +451,11 @@ impl WorkspaceView {
         editor.set_left_margin(10);
         editor.set_right_margin(10);
         editor.add_css_class("editor-pane");
+        editor.add_css_class("typst-editor");
+        let editor_style = gtk::CssProvider::new();
+        editor
+            .style_context()
+            .add_provider(&editor_style, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         let vim_context = Rc::new(RefCell::new(None::<sourceview5::VimIMContext>));
         let vim_keys = gtk::EventControllerKey::new();
         vim_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -288,6 +475,7 @@ impl WorkspaceView {
             }
         });
         editor.add_controller(vim_keys);
+        install_pair_completion(&editor, &buffer, vim_context.clone());
         let editor_scroll = gtk::ScrolledWindow::new();
         editor_scroll.set_child(Some(&editor));
         editor_scroll.set_hexpand(true);
@@ -323,11 +511,12 @@ impl WorkspaceView {
         preview_overlay.add_overlay(&preview_placeholder);
         let preview_pictures = Rc::new(RefCell::new(Vec::<PreviewPicture>::new()));
         let preview_controls = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        preview_controls.add_css_class("toolbar");
-        preview_controls.set_halign(gtk::Align::End);
-        preview_controls.set_valign(gtk::Align::Start);
-        preview_controls.set_margin_top(8);
-        preview_controls.set_margin_end(10);
+        preview_controls.add_css_class("preview-controls");
+        let preview_heading = gtk::Label::new(Some("PREVIEW"));
+        preview_heading.add_css_class("eyebrow");
+        preview_heading.set_hexpand(true);
+        preview_heading.set_halign(gtk::Align::Start);
+        preview_controls.append(&preview_heading);
         let zoom_out = icon_button("zoom-out-symbolic", "Zoom out");
         let zoom_fit = gtk::Button::with_label("Fit");
         zoom_fit.add_css_class("flat");
@@ -339,7 +528,9 @@ impl WorkspaceView {
         preview_controls.append(&zoom_in);
         preview_controls.append(&prev_page);
         preview_controls.append(&next_page);
-        preview_overlay.add_overlay(&preview_controls);
+        let preview_panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        preview_panel.append(&preview_controls);
+        preview_panel.append(&preview_overlay);
         let zoom = Rc::new(Cell::new(1.0_f64));
         let fit_to_viewport = Rc::new(Cell::new(true));
         let resize_preview: Rc<dyn Fn()> = {
@@ -419,11 +610,12 @@ impl WorkspaceView {
                 );
             }
         });
-        work_paned.set_end_child(Some(&preview_overlay));
+        work_paned.set_end_child(Some(&preview_panel));
 
         let diagnostics_revealer = gtk::Revealer::new();
         diagnostics_revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
         let diagnostics_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        diagnostics_box.add_css_class("diagnostics");
         let diagnostics_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         diagnostics_head.set_margin_top(5);
         diagnostics_head.set_margin_bottom(5);
@@ -457,12 +649,16 @@ impl WorkspaceView {
         let compile_label = gtk::Label::new(Some("No compilation"));
         compile_label.set_halign(gtk::Align::Start);
         compile_label.set_hexpand(true);
+        compile_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let page_label = gtk::Label::new(Some("0 pages"));
         let cursor_label = gtk::Label::new(Some("Ln 1, Col 1"));
         status.append(&save_label);
         status.append(&compile_label);
         status.append(&page_label);
         status.append(&cursor_label);
+        let language_label = gtk::Label::new(Some("TYPST"));
+        language_label.add_css_class("status-language");
+        status.append(&language_label);
         root.append(&status);
 
         let settings = Rc::new(RefCell::new(UiSettings::default()));
@@ -482,6 +678,7 @@ impl WorkspaceView {
             buffer.clone(),
             editor.clone(),
         );
+        let document_search_dialog = build_document_search_dialog(window, &buffer, &editor);
 
         let pending_compile = Rc::new(RefCell::new(None::<glib::SourceId>));
         {
@@ -490,7 +687,7 @@ impl WorkspaceView {
         }
         {
             let callback = callbacks.open_project.clone();
-            project_label.add_controller(click_controller(move || callback()));
+            open_project.connect_clicked(move |_| callback());
         }
         {
             let sidebar = sidebar.clone();
@@ -539,11 +736,33 @@ impl WorkspaceView {
         }
         {
             let dialog = settings_dialog.clone();
-            settings_button.connect_clicked(move |_| dialog.present());
+            let settings = settings.clone();
+            settings_button.connect_clicked(move |_| {
+                dialog.sync(&settings.borrow());
+                dialog.window.present();
+            });
+        }
+        {
+            let settings = settings.clone();
+            let changed = callbacks.settings_changed.clone();
+            theme_button.connect_clicked(move |_| {
+                let mut value = settings.borrow().clone();
+                value.theme = match value.theme {
+                    Theme::System => Theme::Light,
+                    Theme::Light => Theme::Dark,
+                    Theme::Dark => Theme::System,
+                };
+                changed(value);
+            });
         }
         {
             let dialog = search_dialog.clone();
             search.connect_clicked(move |_| dialog.present());
+        }
+        {
+            let dialog = document_search_dialog.clone();
+            let buffer = buffer.clone();
+            document_search.connect_clicked(move |_| dialog.present(&buffer));
         }
         diagnostics_close.connect_clicked({
             let diagnostics_revealer = diagnostics_revealer.clone();
@@ -607,7 +826,7 @@ impl WorkspaceView {
                 if paths.is_empty() {
                     false
                 } else {
-                    callback(paths);
+                    callback((paths, String::new()));
                     true
                 }
             }
@@ -655,9 +874,11 @@ impl WorkspaceView {
                     let buffer = callback_buffer.clone();
                     let callbacks = callbacks.clone();
                     let delay = settings.borrow().compile_delay_ms.max(50) as u64;
+                    let pending_done = pending.clone();
                     let id = glib::timeout_add_local_once(
                         std::time::Duration::from_millis(delay),
                         move || {
+                            pending_done.borrow_mut().take();
                             let text = buffer_text(&buffer);
                             (callbacks.save)(text.clone());
                             if live_compile {
@@ -687,6 +908,7 @@ impl WorkspaceView {
             root,
             editor,
             buffer,
+            editor_style,
             sidebar,
             file_list,
             file_paths,
@@ -694,6 +916,7 @@ impl WorkspaceView {
             expanded_directories,
             known_directories,
             preview_pages,
+            preview_identity: Rc::new(RefCell::new(None)),
             preview_pictures,
             resize_preview,
             preview_placeholder,
@@ -708,6 +931,8 @@ impl WorkspaceView {
             compile_label,
             page_label,
             settings,
+            settings_dialog,
+            document_search_dialog,
             dirty,
             suppress_changes,
             pending_compile,
@@ -718,6 +943,9 @@ impl WorkspaceView {
 
     pub fn set_project(&self, name: &str, files: &[FileRow]) {
         self.project_label.set_text(name);
+        if self.file_rows.borrow().as_slice() == files {
+            return;
+        }
         while let Some(child) = self.file_list.first_child() {
             self.file_list.remove(&child);
         }
@@ -745,6 +973,7 @@ impl WorkspaceView {
         for file in files {
             self.file_paths.borrow_mut().push(file.path.clone());
             let row = gtk::ListBoxRow::new();
+            row.add_css_class("file-row");
             row.set_activatable(!file.is_directory);
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             line.set_margin_top(4);
@@ -801,35 +1030,42 @@ impl WorkspaceView {
             let more = gtk::MenuButton::new();
             more.set_icon_name("view-more-symbolic");
             more.add_css_class("flat");
-            let popover = gtk::Popover::new();
-            let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            menu.set_margin_top(4);
-            menu.set_margin_bottom(4);
-            menu.set_margin_start(4);
-            menu.set_margin_end(4);
-            let mut actions = vec![
-                ("Rename…", self.callbacks.rename_path.clone()),
-                ("Reveal in file manager", self.callbacks.reveal_path.clone()),
-                (
-                    "Open with default app",
-                    self.callbacks.open_external.clone(),
-                ),
-                ("Move to trash", self.callbacks.trash_path.clone()),
-            ];
-            if !file.is_directory {
-                actions.insert(1, ("Duplicate", self.callbacks.duplicate_path.clone()));
-            }
-            for (label, callback) in actions {
-                let button = gtk::Button::with_label(label);
-                if label == "Move to trash" {
-                    button.add_css_class("destructive-action");
+            more.add_css_class("file-actions");
+            more.set_create_popup_func({
+                let callbacks = self.callbacks.clone();
+                let file = file.clone();
+                move |button| {
+                    let popover = gtk::Popover::new();
+                    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                    menu.set_margin_top(4);
+                    menu.set_margin_bottom(4);
+                    menu.set_margin_start(4);
+                    menu.set_margin_end(4);
+                    let mut actions = vec![
+                        ("Rename…", callbacks.rename_path.clone()),
+                        ("Reveal in file manager", callbacks.reveal_path.clone()),
+                        ("Open with default app", callbacks.open_external.clone()),
+                        ("Move to trash", callbacks.trash_path.clone()),
+                    ];
+                    if !file.is_directory {
+                        actions.insert(1, ("Duplicate", callbacks.duplicate_path.clone()));
+                        if file.name.to_ascii_lowercase().ends_with(".svg") {
+                            actions.insert(2, ("Preview image", callbacks.preview_asset.clone()));
+                        }
+                    }
+                    for (label, callback) in actions {
+                        let button = gtk::Button::with_label(label);
+                        if label == "Move to trash" {
+                            button.add_css_class("destructive-action");
+                        }
+                        let path = file.path.clone();
+                        button.connect_clicked(move |_| callback(path.clone()));
+                        menu.append(&button);
+                    }
+                    popover.set_child(Some(&menu));
+                    button.set_popover(Some(&popover));
                 }
-                let path = file.path.clone();
-                button.connect_clicked(move |_| callback(path.clone()));
-                menu.append(&button);
-            }
-            popover.set_child(Some(&menu));
-            more.set_popover(Some(&popover));
+            });
             line.append(&more);
             let drag = gtk::DragSource::new();
             drag.set_actions(gtk::gdk::DragAction::MOVE);
@@ -854,6 +1090,31 @@ impl WorkspaceView {
                     }
                 });
                 line.add_controller(drop);
+                let external_drop = gtk::DropTarget::new(
+                    gtk::gdk::FileList::static_type(),
+                    gtk::gdk::DragAction::COPY,
+                );
+                external_drop.connect_drop({
+                    let target = file.path.clone();
+                    let callback = self.callbacks.drop_files.clone();
+                    move |_, value, _, _| {
+                        let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                            return false;
+                        };
+                        let paths = files
+                            .files()
+                            .into_iter()
+                            .filter_map(|file| file.path())
+                            .collect::<Vec<_>>();
+                        if paths.is_empty() {
+                            false
+                        } else {
+                            callback((paths, target.clone()));
+                            true
+                        }
+                    }
+                });
+                line.add_controller(external_drop);
             }
             row.set_child(Some(&line));
             self.file_list.append(&row);
@@ -900,6 +1161,10 @@ impl WorkspaceView {
         self.save_label.set_text("File removed");
     }
 
+    pub fn set_current_path(&self, path: &str) {
+        self.file_label.set_text(path);
+    }
+
     pub fn source_text(&self) -> String {
         buffer_text(&self.buffer)
     }
@@ -934,21 +1199,19 @@ impl WorkspaceView {
         true
     }
 
-    fn cancel_pending_compile(&self) {
+    pub fn cancel_pending_compile(&self) {
         if let Some(source) = self.pending_compile.borrow_mut().take() {
             source.remove();
         }
     }
 
     pub fn present_settings(&self) {
-        for child in gtk::Window::list_toplevels() {
-            if let Ok(candidate) = child.downcast::<gtk::Window>() {
-                if candidate.title().as_deref() == Some("Settings — typsmthng") {
-                    candidate.present();
-                    break;
-                }
-            }
-        }
+        self.settings_dialog.sync(&self.settings.borrow());
+        self.settings_dialog.window.present();
+    }
+
+    pub fn present_document_search(&self) {
+        self.document_search_dialog.present(&self.buffer);
     }
 
     pub fn present_search(&self) {
@@ -1078,6 +1341,17 @@ impl WorkspaceView {
     }
 
     fn set_preview_content(&self, pages: &[PathBuf], source: Option<(&str, usize)>) {
+        let contents = pages
+            .iter()
+            .map(|page| std::fs::read_to_string(page).ok())
+            .collect::<Vec<_>>();
+        let identity = preview_identity(&contents, source);
+        // Compiler temp paths change on every run. Compare content and source
+        // mapping instead so an unchanged render preserves widgets and scrolling.
+        if identity.is_some() && *self.preview_identity.borrow() == identity {
+            return;
+        }
+        self.preview_identity.replace(identity);
         while let Some(child) = self.preview_pages.first_child() {
             self.preview_pages.remove(&child);
         }
@@ -1089,7 +1363,7 @@ impl WorkspaceView {
             if pages.len() == 1 { "page" } else { "pages" }
         ));
         for (index, page) in pages.iter().enumerate() {
-            let svg = std::fs::read_to_string(page).ok();
+            let svg = &contents[index];
             let aspect_ratio = svg
                 .as_deref()
                 .and_then(svg_aspect_ratio)
@@ -1129,7 +1403,14 @@ impl WorkspaceView {
                 header.append(&edit_source);
                 sheet.append(&header);
             }
-            let picture = gtk::Picture::for_filename(page);
+            let loaded = gtk::Picture::for_filename(page);
+            // Keep the decoded paintable, not a GtkPicture tied to a disposable
+            // compiler filename. Reused pages survive deletion of that cache.
+            let picture = gtk::Picture::new();
+            picture.set_paintable(loaded.paintable().as_ref());
+            if picture.paintable().is_none() {
+                self.preview_identity.replace(None);
+            }
             picture.set_can_shrink(true);
             picture.set_keep_aspect_ratio(true);
             picture.set_tooltip_text(Some(if source.is_some() {
@@ -1259,15 +1540,33 @@ impl WorkspaceView {
         } else {
             gtk::WrapMode::None
         });
-        let provider = gtk::CssProvider::new();
-        provider.load_from_data(&format!(
+        let dark = match settings.theme {
+            Theme::Dark => true,
+            Theme::Light => false,
+            Theme::System => gtk::Settings::default().is_some_and(|settings| {
+                settings.is_gtk_application_prefer_dark_theme()
+                    || settings
+                        .gtk_theme_name()
+                        .is_some_and(|name| name.to_ascii_lowercase().contains("dark"))
+            }),
+        };
+        // GtkSourceView's buffer scheme controls text-node background, syntax,
+        // selection and gutter separately from the surrounding GTK theme.
+        let schemes = sourceview5::StyleSchemeManager::default();
+        let scheme = if dark {
+            schemes
+                .scheme("Adwaita-dark")
+                .or_else(|| schemes.scheme("classic-dark"))
+        } else {
+            schemes
+                .scheme("Adwaita")
+                .or_else(|| schemes.scheme("classic"))
+        };
+        self.buffer.set_style_scheme(scheme.as_ref());
+        self.editor_style.load_from_data(&format!(
             ".typst-editor {{ font-size: {}pt; }}",
             settings.font_size
         ));
-        self.editor.add_css_class("typst-editor");
-        self.editor
-            .style_context()
-            .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         if settings.vim_mode {
             let vim = sourceview5::VimIMContext::new();
             vim.set_client_widget(Some(&self.editor));
@@ -1283,6 +1582,92 @@ fn buffer_text(buffer: &sourceview5::Buffer) -> String {
     buffer
         .text(&buffer.start_iter(), &buffer.end_iter(), true)
         .to_string()
+}
+
+fn install_pair_completion(
+    editor: &sourceview5::View,
+    buffer: &sourceview5::Buffer,
+    vim_context: Rc<RefCell<Option<sourceview5::VimIMContext>>>,
+) {
+    let keys = gtk::EventControllerKey::new();
+    keys.connect_key_pressed({
+        let buffer = buffer.clone();
+        move |_, key, _, modifiers| {
+            if vim_context.borrow().is_some()
+                || modifiers.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::ALT_MASK
+                        | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+            {
+                return glib::Propagation::Proceed;
+            }
+
+            let cursor = buffer.iter_at_mark(&buffer.get_insert());
+            if key == gtk::gdk::Key::BackSpace {
+                let mut before = cursor;
+                let mut after = cursor;
+                if before.backward_char() && after.forward_char() {
+                    let pair = (before.char(), cursor.char());
+                    if matches!(
+                        pair,
+                        ('(', ')') | ('[', ']') | ('{', '}') | ('\'', '\'') | ('"', '"')
+                    ) {
+                        buffer.begin_user_action();
+                        buffer.delete(&mut before, &mut after);
+                        buffer.end_user_action();
+                        return glib::Propagation::Stop;
+                    }
+                }
+                return glib::Propagation::Proceed;
+            }
+
+            let Some(character) = key.to_unicode() else {
+                return glib::Propagation::Proceed;
+            };
+            if matches!(character, ')' | ']' | '}') && cursor.char() == character {
+                let mut next = cursor;
+                next.forward_char();
+                buffer.place_cursor(&next);
+                return glib::Propagation::Stop;
+            }
+            let closing = match character {
+                '(' => ')',
+                '[' => ']',
+                '{' => '}',
+                '\'' => '\'',
+                '"' => '"',
+                _ => return glib::Propagation::Proceed,
+            };
+            let start_offset = buffer
+                .selection_bounds()
+                .map(|(start, _)| start.offset())
+                .unwrap_or_else(|| cursor.offset());
+            let selected = buffer
+                .selection_bounds()
+                .map(|(start, end)| buffer.text(&start, &end, true).to_string())
+                .unwrap_or_default();
+            let replacement = format!("{character}{selected}{closing}");
+            buffer.begin_user_action();
+            if let Some((mut start, mut end)) = buffer.selection_bounds() {
+                buffer.delete(&mut start, &mut end);
+                buffer.insert(&mut start, &replacement);
+            } else {
+                buffer.insert_at_cursor(&replacement);
+            }
+            buffer.end_user_action();
+            let inside_start = buffer.iter_at_offset(start_offset + 1);
+            let inside_end =
+                buffer.iter_at_offset(start_offset + 1 + selected.chars().count() as i32);
+            if selected.is_empty() {
+                buffer.place_cursor(&inside_start);
+            } else {
+                buffer.select_range(&inside_start, &inside_end);
+            }
+            glib::Propagation::Stop
+        }
+    });
+    editor.add_controller(keys);
 }
 
 fn refresh_file_visibility(list: &gtk::ListBox, files: &[FileRow], expanded: &HashSet<String>) {
@@ -1309,12 +1694,6 @@ fn language_search_paths() -> Vec<PathBuf> {
     }
     paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/language-specs"));
     paths
-}
-
-fn click_controller(action: impl Fn() + 'static) -> gtk::GestureClick {
-    let gesture = gtk::GestureClick::new();
-    gesture.connect_released(move |_, _, _, _| action());
-    gesture
 }
 
 fn should_uncomment_lines(lines: &[String]) -> bool {
@@ -1350,6 +1729,9 @@ fn preview_dimensions(
 }
 
 fn svg_aspect_ratio(svg: &str) -> Option<f64> {
+    let root_start = svg.find("<svg")?;
+    let root_end = svg[root_start..].find('>')? + root_start;
+    let svg = &svg[root_start..=root_end];
     static VIEW_BOX: OnceLock<Regex> = OnceLock::new();
     static WIDTH: OnceLock<Regex> = OnceLock::new();
     static HEIGHT: OnceLock<Regex> = OnceLock::new();
@@ -1467,11 +1849,204 @@ fn focus_source_line(
     }
 }
 
+fn build_document_search_dialog(
+    parent: &gtk::ApplicationWindow,
+    buffer: &sourceview5::Buffer,
+    editor: &sourceview5::View,
+) -> DocumentSearchDialog {
+    let window = gtk::Window::builder()
+        .title("Find and replace — typsmthng")
+        .transient_for(parent)
+        .modal(false)
+        .resizable(false)
+        .hide_on_close(true)
+        .default_width(540)
+        .build();
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    root.set_margin_top(14);
+    root.set_margin_bottom(14);
+    root.set_margin_start(14);
+    root.set_margin_end(14);
+
+    let find = gtk::Entry::new();
+    find.set_placeholder_text(Some("Find in current file"));
+    let replace = gtk::Entry::new();
+    replace.set_placeholder_text(Some("Replace with"));
+    let case_sensitive = gtk::CheckButton::with_label("Match case");
+    let status = gtk::Label::new(None);
+    status.add_css_class("muted");
+    status.set_halign(gtk::Align::Start);
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let previous = gtk::Button::with_label("Previous");
+    let next = gtk::Button::with_label("Next");
+    let replace_one = gtk::Button::with_label("Replace");
+    let replace_all = gtk::Button::with_label("Replace all");
+    controls.append(&previous);
+    controls.append(&next);
+    controls.append(&replace_one);
+    controls.append(&replace_all);
+    controls.append(&case_sensitive);
+    root.append(&find);
+    root.append(&replace);
+    root.append(&controls);
+    root.append(&status);
+    window.set_child(Some(&root));
+
+    let select_match: Rc<dyn Fn(bool)> = {
+        let buffer = buffer.clone();
+        let editor = editor.clone();
+        let find = find.clone();
+        let case_sensitive = case_sensitive.clone();
+        let status = status.clone();
+        Rc::new(move |backwards| {
+            let query = find.text();
+            if query.is_empty() {
+                status.set_text("Enter text to find");
+                return;
+            }
+            match select_document_match(&buffer, &query, case_sensitive.is_active(), backwards) {
+                Ok(true) => {
+                    status.set_text("");
+                    editor.grab_focus();
+                }
+                Ok(false) => status.set_text("No matches"),
+                Err(error) => status.set_text(&error),
+            }
+        })
+    };
+    next.connect_clicked({
+        let select_match = select_match.clone();
+        move |_| select_match(false)
+    });
+    previous.connect_clicked({
+        let select_match = select_match.clone();
+        move |_| select_match(true)
+    });
+    find.connect_activate({
+        let select_match = select_match.clone();
+        move |_| select_match(false)
+    });
+    replace_one.connect_clicked({
+        let buffer = buffer.clone();
+        let find = find.clone();
+        let replace = replace.clone();
+        let case_sensitive = case_sensitive.clone();
+        let select_match = select_match.clone();
+        move |_| {
+            if let Some((mut start, mut end)) = buffer.selection_bounds() {
+                let selected = buffer.text(&start, &end, true);
+                if document_regex(&find.text(), case_sensitive.is_active()).is_ok_and(|regex| {
+                    regex
+                        .find(&selected)
+                        .is_some_and(|item| item.range() == (0..selected.len()))
+                }) {
+                    buffer.begin_user_action();
+                    buffer.delete(&mut start, &mut end);
+                    buffer.insert(&mut start, &replace.text());
+                    buffer.end_user_action();
+                }
+            }
+            select_match(false);
+        }
+    });
+    replace_all.connect_clicked({
+        let buffer = buffer.clone();
+        let find = find.clone();
+        let replace = replace.clone();
+        let case_sensitive = case_sensitive.clone();
+        let status = status.clone();
+        move |_| {
+            let query = find.text();
+            let Ok(regex) = document_regex(&query, case_sensitive.is_active()) else {
+                status.set_text("Enter text to find");
+                return;
+            };
+            let source = buffer_text(&buffer);
+            let count = regex.find_iter(&source).count();
+            if count == 0 {
+                status.set_text("No matches");
+                return;
+            }
+            let ranges = document_match_offsets(&regex, &source);
+            buffer.begin_user_action();
+            for (start, end) in ranges.into_iter().rev() {
+                let mut start = buffer.iter_at_offset(start);
+                let mut end = buffer.iter_at_offset(end);
+                buffer.delete(&mut start, &mut end);
+                buffer.insert(&mut start, &replace.text());
+            }
+            buffer.end_user_action();
+            status.set_text(&format!("Replaced {count} match(es)"));
+        }
+    });
+
+    DocumentSearchDialog { window, find }
+}
+
+fn document_regex(query: &str, case_sensitive: bool) -> Result<Regex, String> {
+    if query.is_empty() {
+        return Err("empty search".into());
+    }
+    regex::RegexBuilder::new(&regex::escape(query))
+        .case_insensitive(!case_sensitive)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+// Convert UTF-8 regex ranges to GTK character offsets in one forward pass.
+// Counting every source prefix separately is quadratic for repeated matches.
+fn document_match_offsets(regex: &Regex, source: &str) -> Vec<(i32, i32)> {
+    let mut byte_offset = 0;
+    let mut char_offset = 0_i32;
+    regex
+        .find_iter(source)
+        .map(|item| {
+            char_offset += source[byte_offset..item.start()].chars().count() as i32;
+            let start = char_offset;
+            char_offset += source[item.start()..item.end()].chars().count() as i32;
+            byte_offset = item.end();
+            (start, char_offset)
+        })
+        .collect()
+}
+
+fn select_document_match(
+    buffer: &sourceview5::Buffer,
+    query: &str,
+    case_sensitive: bool,
+    backwards: bool,
+) -> Result<bool, String> {
+    let source = buffer_text(buffer);
+    let regex = document_regex(query, case_sensitive)?;
+    let matches = document_match_offsets(&regex, &source);
+    if matches.is_empty() {
+        return Ok(false);
+    }
+    let cursor = buffer.iter_at_mark(&buffer.get_insert()).offset();
+    let selected = if backwards {
+        matches
+            .iter()
+            .rev()
+            .find(|(_, end)| *end < cursor)
+            .unwrap_or_else(|| matches.last().expect("non-empty matches"))
+    } else {
+        matches
+            .iter()
+            .find(|(start, _)| *start >= cursor)
+            .unwrap_or_else(|| matches.first().expect("non-empty matches"))
+    };
+    let (start_offset, end_offset) = *selected;
+    let start = buffer.iter_at_offset(start_offset);
+    let end = buffer.iter_at_offset(end_offset);
+    buffer.select_range(&start, &end);
+    Ok(true)
+}
+
 fn build_settings_dialog(
     parent: &gtk::ApplicationWindow,
     settings: Rc<RefCell<UiSettings>>,
     on_changed: Rc<dyn Fn(UiSettings)>,
-) -> gtk::Window {
+) -> SettingsDialog {
     let dialog = gtk::Window::builder()
         .title("Settings — typsmthng")
         .transient_for(parent)
@@ -1614,6 +2189,22 @@ fn build_settings_dialog(
     root.append(&scroll);
     dialog.set_child(Some(&root));
 
+    let settings_dialog = SettingsDialog {
+        window: dialog.clone(),
+        font: font.clone(),
+        line_numbers: line_numbers.clone(),
+        wrapping: wrapping.clone(),
+        vim: vim.clone(),
+        auto_compile: auto_compile.clone(),
+        delay: delay.clone(),
+        theme: theme.clone(),
+        page_size: page_size.clone(),
+        notes_layout: notes_layout.clone(),
+        system_fonts: system_fonts.clone(),
+        google_fonts: google_fonts.clone(),
+        translucent: translucent.clone(),
+    };
+
     apply.connect_clicked({
         let dialog = dialog.clone();
         move |_| {
@@ -1657,7 +2248,7 @@ fn build_settings_dialog(
             dialog.set_visible(false);
         }
     });
-    dialog
+    settings_dialog
 }
 
 fn setting_heading(label: &str) -> gtk::Label {
@@ -1686,7 +2277,7 @@ fn setting_row(label: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> gt
 
 fn build_search_dialog(
     parent: &gtk::ApplicationWindow,
-    search: Rc<dyn Fn(SearchMode, String) -> Vec<SearchResultRow>>,
+    search: SearchCallback,
     select: Rc<dyn Fn(String)>,
     buffer: sourceview5::Buffer,
     editor: sourceview5::View,
@@ -1725,17 +2316,17 @@ fn build_search_dialog(
     root.append(&scroll);
     dialog.set_child(Some(&root));
 
+    let generation = Rc::new(Cell::new(0_u64));
     let refresh: Rc<dyn Fn()> = {
         let entry = entry.clone();
         let files = files.clone();
         let contents = contents.clone();
         let results = results.clone();
         let result_paths = result_paths.clone();
+        let generation = generation.clone();
         Rc::new(move || {
-            while let Some(child) = results.first_child() {
-                results.remove(&child);
-            }
-            result_paths.borrow_mut().clear();
+            let request = generation.get().wrapping_add(1);
+            generation.set(request);
             let mode = if files.is_active() {
                 SearchMode::Files
             } else if contents.is_active() {
@@ -1743,43 +2334,74 @@ fn build_search_dialog(
             } else {
                 SearchMode::Commands
             };
-            for result in search(mode, entry.text().to_string()) {
-                result_paths
-                    .borrow_mut()
-                    .push(result.path.map(|path| (path, result.line, result.column)));
-                let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                row.set_margin_top(7);
-                row.set_margin_bottom(7);
-                row.set_margin_start(9);
-                row.set_margin_end(9);
-                let primary = gtk::Label::new(Some(&result.primary));
-                primary.set_halign(gtk::Align::Start);
-                row.append(&primary);
-                let secondary = gtk::Label::new(Some(&result.secondary));
-                secondary.set_halign(gtk::Align::Start);
-                secondary.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                secondary.add_css_class("muted");
-                row.append(&secondary);
-                results.append(&row);
-            }
+            let results = results.clone();
+            let result_paths = result_paths.clone();
+            let generation = generation.clone();
+            search(
+                mode,
+                entry.text().to_string(),
+                Rc::new(move |rows| {
+                    if generation.get() != request {
+                        return;
+                    }
+                    while let Some(child) = results.first_child() {
+                        results.remove(&child);
+                    }
+                    result_paths.borrow_mut().clear();
+                    for result in rows.into_iter().take(200) {
+                        result_paths
+                            .borrow_mut()
+                            .push(result.path.map(|path| (path, result.line, result.column)));
+                        let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                        row.set_margin_top(7);
+                        row.set_margin_bottom(7);
+                        row.set_margin_start(9);
+                        row.set_margin_end(9);
+                        let primary = gtk::Label::new(Some(&result.primary));
+                        primary.set_halign(gtk::Align::Start);
+                        primary.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        row.append(&primary);
+                        let secondary = gtk::Label::new(Some(&result.secondary));
+                        secondary.set_halign(gtk::Align::Start);
+                        secondary.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        secondary.add_css_class("muted");
+                        row.append(&secondary);
+                        results.append(&row);
+                    }
+                }),
+            );
         })
     };
-    entry.connect_search_changed({
+    let pending_search = Rc::new(RefCell::new(None::<glib::SourceId>));
+    entry.connect_changed({
+        let generation = generation.clone();
         let refresh = refresh.clone();
-        move |_| refresh()
+        let pending = pending_search.clone();
+        move |_| {
+            generation.set(generation.get().wrapping_add(1));
+            if let Some(source) = pending.borrow_mut().take() {
+                source.remove();
+            }
+            let refresh = refresh.clone();
+            let pending_done = pending.clone();
+            let source =
+                glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+                    pending_done.borrow_mut().take();
+                    refresh();
+                });
+            pending.replace(Some(source));
+        }
     });
-    files.connect_toggled({
-        let refresh = refresh.clone();
-        move |_| refresh()
-    });
-    contents.connect_toggled({
-        let refresh = refresh.clone();
-        move |_| refresh()
-    });
-    commands.connect_toggled({
-        let refresh = refresh.clone();
-        move |_| refresh()
-    });
+    for toggle in [&files, &contents, &commands] {
+        toggle.connect_toggled({
+            let refresh = refresh.clone();
+            move |button| {
+                if button.is_active() {
+                    refresh();
+                }
+            }
+        });
+    }
     results.connect_row_activated({
         let result_paths = result_paths.clone();
         let dialog = dialog.clone();
@@ -1801,8 +2423,18 @@ fn build_search_dialog(
             }
         }
     });
+    dialog.connect_hide({
+        let generation = generation.clone();
+        move |_| {
+            generation.set(generation.get().wrapping_add(1));
+            if let Some(source) = pending_search.borrow_mut().take() {
+                source.remove();
+            }
+        }
+    });
     dialog.connect_show(move |_| {
         entry.grab_focus();
+        refresh();
     });
     dialog
 }
@@ -1810,9 +2442,39 @@ fn build_search_dialog(
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_external_links, preview_dimensions, should_uncomment_lines,
-        source_line_for_page_position, svg_aspect_ratio,
+        document_match_offsets, document_regex, extract_external_links, preview_dimensions,
+        preview_identity, should_uncomment_lines, source_line_for_page_position, svg_aspect_ratio,
     };
+
+    #[test]
+    fn preview_reuse_requires_identical_content_order_and_source_mapping() {
+        let pages = vec![Some("<svg>one</svg>".into()), Some("<svg>two</svg>".into())];
+        let first = preview_identity(&pages, Some(("main.typ", 20)));
+        assert_eq!(first, preview_identity(&pages, Some(("main.typ", 20))));
+        assert_ne!(first, preview_identity(&pages, Some(("main.typ", 21))));
+        assert_ne!(first, preview_identity(&pages, Some(("other.typ", 20))));
+        assert_ne!(first, preview_identity(&pages, None));
+        let reversed = pages.into_iter().rev().collect::<Vec<_>>();
+        assert_ne!(first, preview_identity(&reversed, Some(("main.typ", 20))));
+        assert!(preview_identity(&[None], None).is_none());
+        assert_eq!(
+            svg_aspect_ratio(r#"<svg><rect width="50" height="100"/></svg>"#),
+            None
+        );
+    }
+
+    #[test]
+    fn document_matches_use_unicode_character_offsets() {
+        let regex = document_regex("é", true).unwrap();
+        assert_eq!(
+            document_match_offsets(&regex, "é🙂 éé"),
+            vec![(0, 1), (3, 4), (4, 5)]
+        );
+        let source = "é ".repeat(10_000);
+        let matches = document_match_offsets(&regex, &source);
+        assert_eq!(matches.len(), 10_000);
+        assert_eq!(matches.last(), Some(&(19_998, 19_999)));
+    }
 
     #[test]
     fn comment_toggle_ignores_blank_lines() {

@@ -35,11 +35,20 @@ jobs:
         run: cargo test --locked --manifest-path native/gtk/Cargo.toml --all-targets
       - name: Clippy
         run: cargo clippy --locked --manifest-path native/gtk/Cargo.toml --all-targets -- -D warnings
+      - name: Dead dependency and migration-artifact audit
+        run: |
+          cargo install cargo-machete --version 0.9.2 --locked
+          cargo machete
+          if git ls-files | grep -E '(^|/)(node_modules|dist|artifacts|src/mainview|src/bun|electrobun|package\.json|bun\.lock|postcss\.config|tailwind\.config)(/|$|\.)'; then
+            echo "Legacy web-runtime artifact is still tracked" >&2
+            exit 1
+          fi
       - name: Debug build and GTK X11 smoke test
         run: |
           cargo build --locked --manifest-path native/gtk/Cargo.toml
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 20s target/debug/typsmthng --smoke-test
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 30s target/debug/typsmthng --interaction-smoke-test
 
   platform-build:
     name: Build ${{ matrix.name }}
@@ -62,7 +71,7 @@ jobs:
           workspaces: .
       - name: macOS GTK dependencies
         if: runner.os == 'macOS'
-        run: brew install gtk4 gtksourceview5
+        run: brew install gtk4 gtksourceview5 adwaita-icon-theme
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
@@ -87,7 +96,7 @@ jobs:
         run: |
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
-          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
       - name: Windows GTK and presentation smoke tests
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -98,3 +107,10 @@ jobs:
           export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
           timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
           timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
+      - name: Compile windowed Windows binary
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml

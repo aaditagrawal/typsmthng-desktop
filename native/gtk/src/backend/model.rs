@@ -75,8 +75,6 @@ pub struct HomeWorkspace {
 pub struct WindowState {
     pub width: i32,
     pub height: i32,
-    pub x: Option<i32>,
-    pub y: Option<i32>,
     #[serde(default)]
     pub maximized: bool,
 }
@@ -86,8 +84,6 @@ impl Default for WindowState {
         Self {
             width: 1440,
             height: 900,
-            x: None,
-            y: None,
             maximized: false,
         }
     }
@@ -162,7 +158,7 @@ impl Default for UserSettings {
             compile_delay_ms: 100,
             line_wrapping: true,
             line_numbers: true,
-            theme: Theme::System,
+            theme: Theme::Dark,
             vim_mode: false,
             page_size: "auto".into(),
             presentation_notes_layout: "auto".into(),
@@ -195,14 +191,6 @@ pub struct TextSearchResult {
     pub line: usize,
     pub column: usize,
     pub preview: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompileBundle {
-    pub main_path: String,
-    pub main_source: String,
-    pub extra_text_files: Vec<(String, String)>,
-    pub extra_binary_files: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

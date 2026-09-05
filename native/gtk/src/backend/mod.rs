@@ -1,7 +1,6 @@
 //! Cross-platform application backend.
 
 pub mod archive;
-pub mod autosave;
 pub mod error;
 pub mod fonts;
 pub mod latex;
@@ -17,7 +16,6 @@ pub mod watcher;
 pub use archive::{
     export_project, export_projects, import_project, import_projects, ArchiveLimits,
 };
-pub use autosave::{AutosaveQueue, PendingWrite};
 pub use error::{BackendError, Result};
 pub use fonts::{extract_typst_font_families, GoogleFontCache};
 pub use latex::{convert_latex_to_typst, ConversionMetadata, ConversionResult, ConversionWarning};
@@ -29,6 +27,4 @@ pub use typst::{
 };
 pub use universe::{UniverseClient, UniverseTemplate};
 pub use update::{ReleaseAsset, UpdateClient, UpdateStatus};
-pub use watcher::{
-    text_changed_since, ExternalEvent, ExternalEventKind, ExternalWatcher, FileFingerprint,
-};
+pub use watcher::{ExternalEvent, ExternalEventKind, ExternalWatcher, FileFingerprint};

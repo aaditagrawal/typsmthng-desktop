@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v6
       - id: version
@@ -32,7 +33,10 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || exit 1
           manifest_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' native/gtk/Cargo.toml | head -1)"
           [[ "$manifest_version" == "$version" ]] || { echo "Cargo version $manifest_version != $version"; exit 1; }
+          prerelease=false
+          [[ "$version" == *-* ]] && prerelease=true
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   linux:
     needs: preflight
@@ -45,11 +49,13 @@ jobs:
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev librsvg2-common ruby-dev rpm libfuse2 flatpak flatpak-builder
+          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev librsvg2-common ruby-dev rpm libfuse2 flatpak flatpak-builder xvfb dbus-x11
           sudo gem install --no-document fpm
-          sudo curl -fsSL -o /usr/local/bin/linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          sudo curl -fsSL -o /usr/local/bin/linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          echo 'c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  /usr/local/bin/linuxdeploy' | sha256sum -c -
           sudo chmod +x /usr/local/bin/linuxdeploy
-          sudo curl -fsSL -o /usr/local/bin/linuxdeploy-plugin-gtk https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          sudo curl -fsSL -o /usr/local/bin/linuxdeploy-plugin-gtk https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/linuxdeploy-plugin-gtk.sh
+          echo 'b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171  /usr/local/bin/linuxdeploy-plugin-gtk' | sha256sum -c -
           sudo chmod +x /usr/local/bin/linuxdeploy-plugin-gtk
       - name: Bundle Typst
         run: |
@@ -61,6 +67,11 @@ jobs:
           cargo test --locked --manifest-path native/gtk/Cargo.toml --all-targets
           packaging/linux/build-system-packages.sh "${{ needs.preflight.outputs.version }}"
           packaging/linux/build-appimage.sh
+          appimage="$(find build/release -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GSK_RENDERER=cairo GTK_A11Y=none timeout 30s "$appimage" --appimage-extract-and-run --smoke-test
+          dpkg-deb --info build/release/*.deb >/dev/null
+          rpm -qip build/release/*.rpm >/dev/null
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48
           flatpak-builder --force-clean --repo=build/flatpak-repo build/flatpak-build packaging/flatpak/dev.typsmthng.Typsmthng.yml
@@ -87,7 +98,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: native/gtk }
       - run: |
-          brew install gtk4 gtksourceview5 dylibbundler create-dmg
+          brew install gtk4 gtksourceview5 adwaita-icon-theme dylibbundler create-dmg
           machine="$(uname -m)"
           [[ "$machine" == "arm64" ]] && machine="aarch64"
           curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v0.15.1/typst-${machine}-apple-darwin.tar.xz"
@@ -112,6 +123,10 @@ jobs:
         env:
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
         run: packaging/macos/bundle.sh "${{ needs.preflight.outputs.version }}" "${{ matrix.arch }}"
+      - name: Verify packaged application
+        run: |
+          build/release/typsmthng.app/Contents/MacOS/typsmthng --smoke-test
+          codesign --verify --deep --strict --verbose=2 build/release/typsmthng.app
       - name: Notarize and staple
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -159,15 +174,29 @@ jobs:
         run: |
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
-          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
           curl -fsSL -o /tmp/typst.zip https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-pc-windows-msvc.zip
           unzip -q /tmp/typst.zip -d /tmp
           cp /tmp/typst-x86_64-pc-windows-msvc/typst.exe target/x86_64-pc-windows-gnu/release/typst.exe
+          export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
+          timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
+          timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
       - name: Collect GTK runtime
         shell: pwsh
         run: packaging/windows/collect-runtime.ps1
       - name: Installer
-        run: makensis packaging/windows/installer.nsi
+        run: makensis -DVERSION="${{ needs.preflight.outputs.version }}" packaging/windows/installer.nsi
+      - name: Verify installed application
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "build/release/typsmthng-windows-x64.exe").Path
+          $process = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+          $binary = Join-Path $env:LOCALAPPDATA "typsmthng/bin/typsmthng.exe"
+          if (!(Test-Path $binary)) { throw "Installed binary is missing" }
+          $smoke = Start-Process -FilePath $binary -ArgumentList "--smoke-test" -PassThru -Wait
+          if ($smoke.ExitCode -ne 0) { throw "Installed smoke test exited with $($smoke.ExitCode)" }
       - uses: actions/upload-artifact@v5
         with:
           name: release-windows-x64
@@ -188,4 +217,11 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v${{ needs.preflight.outputs.version }}" artifacts/* --generate-notes --target "${{ github.sha }}"
+        run: |
+          flags=(--generate-notes --target "${{ github.sha }}")
+          if [[ "${{ needs.preflight.outputs.prerelease }}" == "true" ]]; then
+            flags+=(--prerelease)
+          else
+            flags+=(--latest)
+          fi
+          gh release create "v${{ needs.preflight.outputs.version }}" artifacts/* "${flags[@]}"

@@ -1,45 +1,93 @@
 Unicode true
+!include "MUI2.nsh"
+!include "LogicLib.nsh"
 !include "WinMessages.nsh"
+!include "StrFunc.nsh"
+${StrStr}
+${StrCase}
+${StrRep}
+
+!ifndef VERSION
+  !define VERSION "0.0.0"
+!endif
+
 Name "typsmthng"
 OutFile "..\..\build\release\typsmthng-windows-x64.exe"
-InstallDir "$LOCALAPPDATA\Programs\typsmthng"
+InstallDir "$LOCALAPPDATA\typsmthng"
+InstallDirRegKey HKCU "Software\typsmthng" "InstallDir"
 RequestExecutionLevel user
-Page directory
-Page instfiles
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "English"
 
 Section "Install"
+  ; The application keeps user state outside this directory. Replacing the
+  ; directory prevents files from an older installation surviving an upgrade.
+  RMDir /r "$INSTDIR"
   SetOutPath "$INSTDIR"
   File /r "..\..\build\windows\*"
-  CreateShortcut "$SMPROGRAMS\typsmthng.lnk" "$INSTDIR\typsmthng.exe"
-  ReadRegDWORD $1 HKCU "Software\typsmthng" "InstallInitialized"
-  StrCmp $1 1 association_ready
-    ReadRegStr $0 HKCU "Software\Classes\.typ" ""
-    WriteRegStr HKCU "Software\typsmthng" "PreviousTypProgID" "$0"
-    WriteRegDWORD HKCU "Software\typsmthng" "InstallInitialized" 1
-  association_ready:
+  WriteUninstaller "$INSTDIR\uninstall.exe"
+
+  CreateDirectory "$SMPROGRAMS\typsmthng"
+  CreateShortcut "$SMPROGRAMS\typsmthng\typsmthng.lnk" "$INSTDIR\bin\typsmthng.exe"
+  CreateShortcut "$SMPROGRAMS\typsmthng\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "DisplayName" "typsmthng"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "UninstallString" '$"$INSTDIR\uninstall.exe$"'
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng" "Publisher" "typsmthng"
+  WriteRegStr HKCU "Software\typsmthng" "InstallDir" "$INSTDIR"
+
+  ReadRegStr $0 HKCU "Software\Classes\.typ" ""
+  ${If} $0 != "typsmthng.typ"
+    WriteRegStr HKCU "Software\typsmthng" "PrevTypAssoc" "$0"
+  ${EndIf}
   WriteRegStr HKCU "Software\Classes\.typ" "" "typsmthng.typ"
-  WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\typsmthng.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\typsmthng.typ" "" "Typst Document"
+  WriteRegStr HKCU "Software\Classes\typsmthng.typ\shell\open\command" "" '"$INSTDIR\bin\typsmthng.exe" "%1"'
   WriteRegStr HKCU "Software\Classes\Directory\shell\typsmthng" "" "Open with typsmthng"
-  WriteRegStr HKCU "Software\Classes\Directory\shell\typsmthng\command" "" '"$INSTDIR\typsmthng.exe" "%1"'
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
-  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  WriteRegStr HKCU "Software\Classes\Directory\shell\typsmthng\command" "" '"$INSTDIR\bin\typsmthng.exe" "%1"'
+
+  ReadRegStr $0 HKCU "Environment" "Path"
+  ${If} $0 == ""
+    WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin"
+  ${Else}
+    ${StrCase} $2 ";$0;" "L"
+    ${StrCase} $3 "$INSTDIR\bin" "L"
+    ${StrStr} $1 "$2" ";$3;"
+    ${If} $1 == ""
+      WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR\bin;$0"
+    ${EndIf}
+  ${EndIf}
+  SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
 
 Section "Uninstall"
-  ReadRegStr $1 HKCU "Software\Classes\.typ" ""
-  StrCmp $1 "typsmthng.typ" 0 association_done
-    ReadRegStr $0 HKCU "Software\typsmthng" "PreviousTypProgID"
-    StrCmp $0 "" remove_association
-    StrCmp $0 "typsmthng.typ" remove_association
-      WriteRegStr HKCU "Software\Classes\.typ" "" "$0"
-      Goto association_done
-    remove_association:
+  ReadRegStr $0 HKCU "Software\Classes\.typ" ""
+  ${If} $0 == "typsmthng.typ"
+    ReadRegStr $1 HKCU "Software\typsmthng" "PrevTypAssoc"
+    ${If} $1 != ""
+      WriteRegStr HKCU "Software\Classes\.typ" "" "$1"
+    ${Else}
       DeleteRegValue HKCU "Software\Classes\.typ" ""
-  association_done:
+    ${EndIf}
+  ${EndIf}
   RMDir /r "$INSTDIR"
+  RMDir /r "$SMPROGRAMS\typsmthng"
   Delete "$SMPROGRAMS\typsmthng.lnk"
   DeleteRegKey HKCU "Software\Classes\typsmthng.typ"
   DeleteRegKey HKCU "Software\Classes\Directory\shell\typsmthng"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\typsmthng"
+  ReadRegStr $0 HKCU "Environment" "Path"
+  ${StrRep} $1 "$0" "$INSTDIR\bin;" ""
+  ${StrRep} $1 "$1" ";$INSTDIR\bin" ""
+  ${If} $1 == "$INSTDIR\bin"
+    DeleteRegValue HKCU "Environment" "Path"
+  ${Else}
+    WriteRegExpandStr HKCU "Environment" "Path" "$1"
+  ${EndIf}
   DeleteRegKey HKCU "Software\typsmthng"
-  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  SendMessage ${HWND_BROADCAST} ${WM_WININICHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd

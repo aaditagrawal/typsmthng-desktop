@@ -1,38 +1,100 @@
-@define-color blue_link #3973b9;
-@define-color amber_mark #b97818;
-@define-color danger_mark #c4483a;
+/* Original TYPSMTHNG palette and compact mono chrome, rendered by GTK. */
+@define-color accent #ff4d00;
+@define-color blue_link #ff4d00;
+@define-color amber_mark #d97706;
+@define-color danger_mark #dc2626;
+@define-color window_bg_color #f5f5f5;
 
-window, dialog { background-color: @theme_bg_color; color: @theme_fg_color; }
-headerbar { background-color: @theme_base_color; border-bottom: 1px solid alpha(@theme_fg_color, 0.12); box-shadow: none; }
-button { border-radius: 3px; }
-button.flat { background-color: transparent; }
-.toolbar { background-color: @theme_base_color; border-bottom: 1px solid alpha(@theme_fg_color, 0.12); padding: 4px 8px; }
-.sidebar { background-color: mix(@theme_bg_color, @theme_base_color, 0.45); border-right: 1px solid alpha(@theme_fg_color, 0.12); }
-.statusbar { background-color: @theme_base_color; border-top: 1px solid alpha(@theme_fg_color, 0.12); color: alpha(@theme_fg_color, 0.68); padding: 3px 10px; }
-.home-mark { font-family: monospace; font-size: 26px; font-weight: 700; }
-.eyebrow { font-family: monospace; font-size: 10px; color: alpha(@theme_fg_color, 0.66); }
+window, dialog { background-color: #f5f5f5; color: #0a0a0a; font-family: "Geist Mono", "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+window.dark { background-color: #0a0a0a; color: #fafafa; }
+headerbar, .toolbar, .statusbar, .sidebar, .settings-nav, .editor-pane { background-color: #ffffff; }
+.dark headerbar, .dark .toolbar, .dark .statusbar, .dark .sidebar, .dark .settings-nav, .dark .editor-pane { background-color: #141414; color: #fafafa; }
+headerbar { border-bottom: 1px solid alpha(black, 0.15); box-shadow: none; min-height: 36px; }
+button, dropdown > button, entry, spinbutton, popover > contents { border-radius: 2px; box-shadow: none; }
+button { min-height: 24px; padding: 3px 8px; font-size: 11px; background-image: none; }
+button.flat { background: transparent; border: 1px solid transparent; color: #525252; }
+.dark button.flat { color: #a3a3a3; }
+button.flat:hover { background-color: #ebebeb; border-color: alpha(black, 0.15); color: #0a0a0a; }
+.dark button.flat:hover { background-color: #262626; border-color: alpha(white, 0.15); color: #fafafa; }
+button:disabled { opacity: 0.4; }
+button:focus-visible, entry:focus-within, dropdown:focus-visible, flowboxchild:focus-visible { outline: 2px solid @accent; outline-offset: -2px; }
+button.suggested-action, button.suggested-action:hover { background: @accent; border-color: @accent; color: white; }
+button:checked { color: @accent; border-color: @accent; }
+.toolbar { border-bottom: 1px solid alpha(black, 0.15); padding: 3px 8px; }
+.sidebar { border-right: 1px solid alpha(black, 0.15); }
+.statusbar { border-top: 1px solid alpha(black, 0.15); color: #737373; padding: 3px 10px; font-size: 10px; }
+.dark headerbar, .dark .toolbar, .dark .sidebar, .dark .statusbar { border-color: alpha(white, 0.15); }
+.dark .statusbar { color: #a3a3a3; }
+.eyebrow { font-size: 10px; letter-spacing: 0.8px; color: #737373; }
 .title { font-size: 26px; font-weight: 700; }
 .section-title { font-size: 13px; font-weight: 700; }
-.muted { color: alpha(@theme_fg_color, 0.66); }
-.mono { font-family: monospace; }
-.recent-row { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.14); border-radius: 3px; padding: 10px 12px; }
-.recent-row:hover { background-color: mix(@theme_base_color, @theme_fg_color, 0.04); }
-.document-spine { border-left: 2px solid @blue_link; padding-left: 9px; }
-.editor-pane { background-color: @theme_base_color; }
-.preview-pane { background-color: mix(@theme_bg_color, @theme_fg_color, 0.06); }
-.page-sheet { background-color: white; border: 1px solid alpha(black, 0.16); box-shadow: 0 6px 18px alpha(black, 0.10); }
-.conflict { background-color: mix(@theme_bg_color, @amber_mark, 0.14); border-bottom: 1px solid alpha(@amber_mark, 0.38); padding: 7px 10px; }
+.muted { color: #737373; }
+.dark .muted, .dark .eyebrow { color: #a3a3a3; }
+.caption { font-size: 11px; }
+.mono { font-family: "Geist Mono", "SF Mono", Menlo, Consolas, monospace; }
+.home-titlebar { background: transparent; border: none; min-height: 32px; }
+.dark .home-titlebar { background: transparent; }
+.home-mark { font-size: 17px; font-weight: 700; letter-spacing: 1.36px; }
+.home-icon { min-width: 32px; min-height: 32px; background: @accent; color: white; font-size: 24px; font-weight: 700; border-radius: 2px; }
+.workspace-panel { padding: 10px 12px; border: 1px solid alpha(black, 0.15); border-radius: 2px; background: white; }
+.dark .workspace-panel { border-color: alpha(white, 0.15); background: #141414; }
+.project-grid { background: transparent; padding: 0; }
+.recent-row { background: white; border: 1px solid alpha(black, 0.15); border-radius: 2px; padding: 2px 4px; }
+.recent-row:hover { background: #ebebeb; border-color: alpha(black, 0.25); }
+.dark .recent-row { background: #141414; border-color: alpha(white, 0.15); }
+.dark .recent-row:hover { background: #262626; border-color: alpha(white, 0.25); }
+.recent-row:selected, .dark .recent-row:selected { border-color: @accent; background: alpha(@accent, 0.12); }
+.new-project { min-height: 70px; border: 1px dashed alpha(black, 0.25); background: transparent; color: #737373; font-size: 12px; font-weight: 600; }
+.dark .new-project { border-color: alpha(white, 0.25); color: #a3a3a3; }
+.new-project:hover, .dark .new-project:hover { border-color: @accent; color: @accent; background: alpha(@accent, 0.05); }
+.home-footer { border-top: 1px solid alpha(black, 0.15); padding-top: 16px; margin-top: 8px; }
+.dark .home-footer { border-color: alpha(white, 0.15); }
+.brand-mark { font-weight: 700; font-size: 21px; color: @accent; padding: 0 4px; }
+.file-tab { font-size: 11px; padding: 5px 12px; border-bottom: 2px solid @accent; }
+.file-tree { background: transparent; font-size: 12px; }
+.file-row { padding: 2px 4px; border-left: 2px solid transparent; }
+.file-row:selected { background: alpha(@accent, 0.1); border-left-color: @accent; color: @accent; }
+.file-row:hover { background: alpha(@accent, 0.06); }
+.file-actions { padding: 4px 6px; border-bottom: 1px solid alpha(black, 0.15); }
+.dark .file-actions { border-color: alpha(white, 0.15); }
+.preview-controls { padding: 3px 8px; background: white; border-bottom: 1px solid alpha(black, 0.15); font-size: 10px; }
+.dark .preview-controls { background: #141414; border-color: alpha(white, 0.15); }
+.document-spine { border-left: 2px solid @accent; padding-left: 9px; }
+.preview-pane { background: #ebebeb; }
+.dark .preview-pane { background: #0a0a0a; }
+.page-sheet { background: white; border: 1px solid alpha(black, 0.16); box-shadow: 0 2px 6px alpha(black, 0.12); }
+.conflict { background: alpha(@amber_mark, 0.14); border-bottom: 1px solid alpha(@amber_mark, 0.38); padding: 7px 10px; }
+.diagnostics { border-top: 1px solid alpha(black, 0.15); }
+.dark .diagnostics { border-color: alpha(white, 0.15); }
 .diagnostic-error, .destructive-action { color: @danger_mark; }
+.dark .diagnostic-error, .dark .destructive-action { color: #f87171; }
 .diagnostic-warning { color: @amber_mark; }
-.presentation-shell { background-color: #151513; color: #f4f3ef; }
-.presentation-toolbar { background-color: #1c1c1a; color: white; padding: 6px; }
-.stage { background-color: #111110; }
-.notes { background-color: #23231f; color: #eeeeea; padding: 12px; }
-.annotation-active { background-color: @blue_link; color: white; }
-.blackout { background-color: black; }
-.whiteout { background-color: white; }
-.search-palette { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.14); padding: 10px; }
-.settings-nav { background-color: mix(@theme_bg_color, @theme_base_color, 0.45); }
-.translucent {
-  background-color: alpha(@window_bg_color, 0.94);
+.status-language { color: @accent; }
+.presentation-shell { background: #08080a; color: #f4f4f5; }
+.presentation-toolbar { background: #111113; color: #f4f4f5; padding: 6px; border-bottom: 1px solid alpha(white, 0.09); }
+.presentation-shell button.flat { color: #a1a1aa; }
+.presentation-shell button.flat:hover { color: #f4f4f5; background: #222226; border-color: alpha(white, 0.18); }
+.stage { background: #08080a; }
+.notes { background: #111113; color: #f4f4f5; padding: 12px; }
+.annotation-active { background: @accent; color: white; }
+.blackout { background: black; }
+.whiteout { background: white; }
+.search-palette { background: white; border: 1px solid alpha(black, 0.15); padding: 10px; }
+.dark .search-palette { background: #1e1e1e; border-color: alpha(white, 0.15); }
+.translucent { background-color: alpha(#f5f5f5, 0.94); }
+.dark.translucent { background-color: alpha(#0a0a0a, 0.94); }
+.presentation-shell button, .presentation-shell dropdown > button {
+  background: transparent;
+  border: 1px solid alpha(white, 0.09);
+  color: #a1a1aa;
 }
+.presentation-shell button:hover { background: #222226; color: #f4f4f5; border-color: alpha(white, 0.18); }
+.presentation-shell button:checked { color: @accent; border-color: @accent; background: alpha(@accent, 0.12); }
+.presentation-shell .eyebrow, .presentation-shell .muted { color: #a1a1aa; }
+.presentation-shell textview, .presentation-shell textview text { background: #111113; color: #f4f4f5; }
+.presentation-shell .destructive-action { color: #f87171; }
+
+/* Keep native state affordances in the original accent family. */
+switch:checked { background-color: @accent; border-color: @accent; }
+check:checked, radio:checked { background-color: @accent; border-color: @accent; }
+button:focus-visible, entry:focus-visible, spinbutton:focus-visible { outline-color: @accent; }
