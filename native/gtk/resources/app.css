@@ -1,0 +1,38 @@
+@define-color blue_link #3973b9;
+@define-color amber_mark #b97818;
+@define-color danger_mark #c4483a;
+
+window, dialog { background-color: @theme_bg_color; color: @theme_fg_color; }
+headerbar { background-color: @theme_base_color; border-bottom: 1px solid alpha(@theme_fg_color, 0.12); box-shadow: none; }
+button { border-radius: 3px; }
+button.flat { background-color: transparent; }
+.toolbar { background-color: @theme_base_color; border-bottom: 1px solid alpha(@theme_fg_color, 0.12); padding: 4px 8px; }
+.sidebar { background-color: mix(@theme_bg_color, @theme_base_color, 0.45); border-right: 1px solid alpha(@theme_fg_color, 0.12); }
+.statusbar { background-color: @theme_base_color; border-top: 1px solid alpha(@theme_fg_color, 0.12); color: alpha(@theme_fg_color, 0.68); padding: 3px 10px; }
+.home-mark { font-family: monospace; font-size: 26px; font-weight: 700; }
+.eyebrow { font-family: monospace; font-size: 10px; color: alpha(@theme_fg_color, 0.66); }
+.title { font-size: 26px; font-weight: 700; }
+.section-title { font-size: 13px; font-weight: 700; }
+.muted { color: alpha(@theme_fg_color, 0.66); }
+.mono { font-family: monospace; }
+.recent-row { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.14); border-radius: 3px; padding: 10px 12px; }
+.recent-row:hover { background-color: mix(@theme_base_color, @theme_fg_color, 0.04); }
+.document-spine { border-left: 2px solid @blue_link; padding-left: 9px; }
+.editor-pane { background-color: @theme_base_color; }
+.preview-pane { background-color: mix(@theme_bg_color, @theme_fg_color, 0.06); }
+.page-sheet { background-color: white; border: 1px solid alpha(black, 0.16); box-shadow: 0 6px 18px alpha(black, 0.10); }
+.conflict { background-color: mix(@theme_bg_color, @amber_mark, 0.14); border-bottom: 1px solid alpha(@amber_mark, 0.38); padding: 7px 10px; }
+.diagnostic-error, .destructive-action { color: @danger_mark; }
+.diagnostic-warning { color: @amber_mark; }
+.presentation-shell { background-color: #151513; color: #f4f3ef; }
+.presentation-toolbar { background-color: #1c1c1a; color: white; padding: 6px; }
+.stage { background-color: #111110; }
+.notes { background-color: #23231f; color: #eeeeea; padding: 12px; }
+.annotation-active { background-color: @blue_link; color: white; }
+.blackout { background-color: black; }
+.whiteout { background-color: white; }
+.search-palette { background-color: @theme_base_color; border: 1px solid alpha(@theme_fg_color, 0.14); padding: 10px; }
+.settings-nav { background-color: mix(@theme_bg_color, @theme_base_color, 0.45); }
+.translucent {
+  background-color: alpha(@window_bg_color, 0.94);
+}

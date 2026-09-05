@@ -5,6 +5,7 @@ node_modules/
 build/
 dist/
 artifacts/
+target/
 
 # Compiled native libraries
 *.dylib

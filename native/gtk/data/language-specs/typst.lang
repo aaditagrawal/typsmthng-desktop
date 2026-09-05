@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<language id="typst" name="Typst" version="2.0" _section="Markup">
+  <metadata>
+    <property name="mimetypes">text/x-typst</property>
+    <property name="globs">*.typ</property>
+    <property name="line-comment-start">//</property>
+  </metadata>
+  <styles>
+    <style id="comment" name="Comment" map-to="def:comment"/>
+    <style id="heading" name="Heading" map-to="def:heading"/>
+    <style id="string" name="String" map-to="def:string"/>
+    <style id="keyword" name="Keyword" map-to="def:keyword"/>
+    <style id="function" name="Function" map-to="def:function"/>
+  </styles>
+  <definitions>
+    <context id="typst">
+      <include>
+        <context id="comment" style-ref="comment" end-at-line-end="true">
+          <start>//</start>
+        </context>
+        <context id="string" style-ref="string"><start>"</start><end>"</end></context>
+        <context id="heading" style-ref="heading" end-at-line-end="true"><start>^\s*=+</start></context>
+        <context id="keyword" style-ref="keyword">
+          <keyword>set</keyword><keyword>show</keyword><keyword>let</keyword>
+          <keyword>if</keyword><keyword>else</keyword><keyword>for</keyword>
+          <keyword>while</keyword><keyword>import</keyword><keyword>include</keyword>
+        </context>
+        <context id="function" style-ref="function"><match>#[A-Za-z_][A-Za-z0-9_-]*</match></context>
+        <context ref="def:decimal"/>
+      </include>
+    </context>
+  </definitions>
+</language>
