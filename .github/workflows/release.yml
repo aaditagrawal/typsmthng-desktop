@@ -74,7 +74,7 @@ jobs:
         with:
           toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: native/gtk }
+        with: { workspaces: . }
       - name: Dependencies
         run: |
           sudo apt-get update
@@ -101,13 +101,15 @@ jobs:
           dpkg-deb --info build/release/*.deb >/dev/null
           rpm -qip build/release/*.rpm >/dev/null
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//24.08
+          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48
           flatpak_work="$(mktemp -d)"
           trap 'rm -rf "$flatpak_work"' EXIT
           mkdir -p "$flatpak_work/source"
           git archive HEAD | tar -x -C "$flatpak_work/source"
           flatpak-builder --force-clean --repo="$flatpak_work/repo" "$flatpak_work/build" "$flatpak_work/source/packaging/flatpak/dev.typsmthng.Typsmthng.yml"
           flatpak build-bundle "$flatpak_work/repo" "build/release/typsmthng_${{ needs.preflight.outputs.version }}_linux_x64.flatpak" dev.typsmthng.Typsmthng
+          flatpak install --user --noninteractive --bundle "build/release/typsmthng_${{ needs.preflight.outputs.version }}_linux_x64.flatpak"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' timeout 45s flatpak run --user --env=GSK_RENDERER=cairo --env=GTK_A11Y=none dev.typsmthng.Typsmthng --smoke-test
       - uses: actions/upload-artifact@v5
         with:
           name: release-linux-x64
@@ -132,7 +134,7 @@ jobs:
         with:
           toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: native/gtk }
+        with: { workspaces: . }
       - run: |
           brew install gtk4 gtksourceview5 adwaita-icon-theme dylibbundler
           machine="$(uname -m)"
@@ -214,7 +216,7 @@ jobs:
             mingw-w64-x86_64-nsis
             unzip
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: native/gtk }
+        with: { workspaces: . }
       - name: Build
         env:
           RUSTUP_TOOLCHAIN: ${{ needs.preflight.outputs.rust_toolchain }}
@@ -236,7 +238,9 @@ jobs:
         shell: pwsh
         run: packaging/windows/collect-runtime.ps1
       - name: Installer
-        run: makensis -DVERSION="${{ needs.preflight.outputs.version }}" packaging/windows/installer.nsi
+        run: |
+          mkdir -p build/release
+          makensis -WX -DVERSION="${{ needs.preflight.outputs.version }}" packaging/windows/installer.nsi
       - name: Verify install, upgrade, uninstall, and unrelated file preservation
         shell: pwsh
         run: packaging/windows/test-installer.ps1
