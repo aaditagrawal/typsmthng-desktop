@@ -101,7 +101,7 @@ jobs:
           dpkg-deb --info build/release/*.deb >/dev/null
           rpm -qip build/release/*.rpm >/dev/null
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48
+          sudo flatpak install -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
           flatpak_work="$(mktemp -d)"
           trap 'rm -rf "$flatpak_work"' EXIT
           mkdir -p "$flatpak_work/source"

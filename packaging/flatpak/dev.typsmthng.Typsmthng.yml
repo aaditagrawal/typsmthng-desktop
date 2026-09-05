@@ -1,6 +1,6 @@
 app-id: dev.typsmthng.Typsmthng
 runtime: org.gnome.Platform
-runtime-version: "48"
+runtime-version: "50"
 sdk: org.gnome.Sdk
 command: typsmthng
 finish-args:
@@ -14,6 +14,11 @@ finish-args:
 modules:
   - name: rust-toolchain
     buildsystem: simple
+    # Keep this prebuilt compiler intact: ELF debug extraction can corrupt its
+    # LLVM library. The entire toolchain is removed before shipping the app.
+    build-options:
+      no-debuginfo: true
+      strip: false
     build-commands:
       - ./install.sh --prefix=/app/rust --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu --disable-ldconfig
     cleanup:
@@ -30,6 +35,8 @@ modules:
       env:
         CARGO_HOME: /run/build/typsmthng/cargo
     build-commands:
+      - rustc --version --verbose
+      - cargo --version
       - cargo build --release --locked --manifest-path source/native/gtk/Cargo.toml
       - install -Dm755 source/target/release/typsmthng /app/bin/typsmthng
       - install -Dm755 typst-dist/typst /app/lib/typsmthng/typst
