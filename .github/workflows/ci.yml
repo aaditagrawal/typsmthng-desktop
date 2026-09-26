@@ -1,0 +1,123 @@
+name: Native GTK CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: GTK development libraries
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libadwaita-1-dev librsvg2-common xvfb dbus-x11 flatpak-builder openbox xdotool imagemagick
+      - name: Typst compiler for integration smoke
+        run: |
+          packaging/download-typst.sh x86_64-unknown-linux-musl /tmp/typst-dist
+          sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
+      - name: Validate Flatpak manifest
+        run: flatpak-builder --show-manifest packaging/flatpak/dev.typsmthng.Typsmthng.yml >/dev/null
+      - name: Formatting
+        run: cargo fmt --manifest-path native/gtk/Cargo.toml --all -- --check
+      - name: Tests
+        run: cargo test --locked --manifest-path native/gtk/Cargo.toml --all-targets
+      - name: Clippy
+        run: cargo clippy --locked --manifest-path native/gtk/Cargo.toml --all-targets -- -D warnings
+      - name: Dead dependency and migration-artifact audit
+        run: |
+          cargo install cargo-machete --version 0.9.2 --locked
+          cargo machete
+          if git ls-files | grep -E '(^|/)(node_modules|dist|artifacts|src/mainview|src/bun|electrobun|package\.json|bun\.lock|postcss\.config|tailwind\.config)(/|$|\.)'; then
+            echo "Legacy web-runtime artifact is still tracked" >&2
+            exit 1
+          fi
+      - name: Debug build and GTK X11 smoke test
+        run: |
+          cargo build --locked --manifest-path native/gtk/Cargo.toml
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 20s target/debug/typsmthng --smoke-test
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 30s target/debug/typsmthng --interaction-smoke-test
+
+      - name: Native dialog smoke tests
+        run: |
+          for view in templates import name settings; do
+            dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings TYPSMTHNG_SMOKE_VIEW="$view" timeout 20s target/debug/typsmthng --smoke-test
+          done
+
+      - name: Native keyboard and pointer regression checks
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' env G_DEBUG=fatal-warnings timeout 40s scripts/check-gtk4-interactions.sh
+
+  platform-build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+          - name: macOS x64
+            os: macos-15-intel
+          - name: Windows x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: macOS GTK dependencies
+        if: runner.os == 'macOS'
+        run: brew install gtk4 gtksourceview5 libadwaita adwaita-icon-theme
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            mingw-w64-x86_64-gtksourceview5
+            mingw-w64-x86_64-pkgconf
+            unzip
+      - name: Windows GNU Rust target
+        if: runner.os == 'Windows'
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: Compile native application
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cargo build --locked --release --manifest-path native/gtk/Cargo.toml
+      - name: Compile native application (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+      - name: Windows GTK and presentation smoke tests
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/release
+          export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
+          timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
+          timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
+      - name: Compile windowed Windows binary
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml

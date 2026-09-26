@@ -1,0 +1,43 @@
+/* GTK owns fonts, controls, focus rings, header bars and accent colors.
+ * Application CSS only describes document layout and semantic states. */
+.section-title { font-weight: bold; }
+.eyebrow { font-size: 0.85em; font-weight: bold; }
+.muted, .caption, .eyebrow { opacity: 0.7; }
+.caption { font-size: 0.9em; }
+.mono { font-family: monospace; }
+.home-mark { font-size: 18px; font-weight: bold; letter-spacing: 1px; }
+.workspace-panel { padding: 16px; border: 1px solid @borders; border-radius: 6px; }
+.project-grid { background: transparent; }
+.recent-row { background-color: @view_bg_color; border: 1px solid @borders; border-radius: 6px; padding: 4px; }
+.recent-row:hover { background-color: mix(@view_bg_color, @accent_bg_color, 0.08); }
+.recent-row:selected { background-color: @accent_bg_color; color: @accent_fg_color; }
+.new-project { min-height: 48px; font-weight: bold; }
+.home-footer { border-top: 1px solid @borders; padding-top: 16px; margin-top: 8px; }
+.toolbar { padding: 4px 8px; border-bottom: 1px solid @borders; }
+.sidebar { background-color: @window_bg_color; border-right: 1px solid @borders; }
+.statusbar { border-top: 1px solid @borders; padding: 4px 12px; font-size: 0.9em; }
+.brand-mark { font-weight: bold; font-size: 20px; padding: 0 4px; }
+.file-tab { padding: 8px 12px; border-bottom: 2px solid @accent_bg_color; }
+.file-tree { background: transparent; }
+.file-row { padding: 4px; }
+.file-row:selected { background-color: @accent_bg_color; color: @accent_fg_color; }
+.file-actions { padding: 4px 8px; border-bottom: 1px solid @borders; }
+.preview-controls { padding: 4px 8px; border-bottom: 1px solid @borders; }
+.document-spine { border-left: 2px solid @accent_bg_color; padding-left: 8px; }
+.preview-pane { background-color: shade(@window_bg_color, 0.94); }
+.page-sheet { color: #2e3436; background: white; border: 1px solid @borders; box-shadow: 0 2px 6px alpha(black, 0.12); }
+.page-sheet button { color: #2e3436; }
+.conflict { background-color: alpha(@warning_color, 0.15); padding: 8px 12px; }
+.diagnostics { border-top: 1px solid @borders; }
+.diagnostic-error { color: @error_color; }
+.diagnostic-warning { color: @warning_color; }
+.status-language { color: @accent_bg_color; }
+.search-palette { padding: 12px; }
+/* The projected canvas stays dark independently of desktop appearance. */
+.stage { background-color: #111111; }
+.notes { padding: 12px; background-color: @window_bg_color; color: @window_fg_color; }
+.presentation-toolbar { background-color: @window_bg_color; color: @window_fg_color; padding: 6px; border-bottom: 1px solid @borders; }
+.annotation-active { background-color: @accent_bg_color; color: @accent_fg_color; }
+.blackout { background-color: black; }
+.whiteout { background-color: white; }
+.translucent { background-color: alpha(@window_bg_color, 0.94); }

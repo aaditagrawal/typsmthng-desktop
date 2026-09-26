@@ -1,0 +1,56 @@
+app-id: dev.typsmthng.Typsmthng
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+command: typsmthng
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+  - --filesystem=home
+  - --talk-name=org.freedesktop.FileManager1
+modules:
+  - name: rust-toolchain
+    buildsystem: simple
+    # Keep this prebuilt compiler intact: ELF debug extraction can corrupt its
+    # LLVM library. The entire toolchain is removed before shipping the app.
+    build-options:
+      no-debuginfo: true
+      strip: false
+    build-commands:
+      - ./install.sh --prefix=/app/rust --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu --disable-ldconfig
+    cleanup:
+      - /rust
+    sources:
+      - type: archive
+        url: https://static.rust-lang.org/dist/rust-1.93.1-x86_64-unknown-linux-gnu.tar.xz
+        sha256: 518872275a3648f735471d7add854d39171c5a6b17f423c4d7f931f52120c2af
+  - name: typsmthng
+    buildsystem: simple
+    build-options:
+      build-args: [--share=network]
+      prepend-path: /app/rust/bin
+      env:
+        CARGO_HOME: /run/build/typsmthng/cargo
+    build-commands:
+      - pkg-config --modversion gtk4 gtksourceview-5 libadwaita-1
+      - rustc --version --verbose
+      - cargo --version
+      - cargo build --release --locked --manifest-path source/native/gtk/Cargo.toml
+      - install -Dm755 source/target/release/typsmthng /app/bin/typsmthng
+      - install -Dm755 typst-dist/typst /app/lib/typsmthng/typst
+      - install -Dm644 source/native/gtk/data/language-specs/typst.lang /app/share/typsmthng/language-specs/typst.lang
+      - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.desktop /app/share/applications/dev.typsmthng.Typsmthng.desktop
+      - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.metainfo.xml /app/share/metainfo/dev.typsmthng.Typsmthng.metainfo.xml
+      - install -Dm644 source/icon.iconset/icon_512x512.png /app/share/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png
+      - install -Dm644 source/assets/typst.xml /app/share/mime/packages/typsmthng.xml
+    sources:
+      - type: archive
+        url: https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz
+        sha256: a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
+        dest: typst-dist
+      - type: dir
+        path: ../..
+        dest: source

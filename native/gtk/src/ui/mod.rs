@@ -1,0 +1,38 @@
+mod app;
+mod home;
+pub mod model;
+mod presentation;
+mod smoke;
+mod workspace;
+
+pub use app::{launch, LaunchOptions};
+
+pub fn install_css() {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_string(include_str!("../../resources/app.css"));
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
+/// Keep reusable utility windows alive while allowing Escape to dismiss them.
+pub fn dismiss_on_escape(window: &gtk::Window) {
+    use gtk::prelude::*;
+    let keys = gtk::EventControllerKey::new();
+    let weak = window.downgrade();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::Escape {
+            if let Some(window) = weak.upgrade() {
+                window.close();
+            }
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(keys);
+}

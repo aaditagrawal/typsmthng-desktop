@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.typsmthng.Typsmthng</id>
+  <name>typsmthng</name>
+  <summary>A native GTK editor and presentation studio for Typst</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Edit folder-backed Typst projects, preview and export documents, and present slide decks with notes and annotations.</p>
+  </description>
+  <launchable type="desktop-id">dev.typsmthng.Typsmthng.desktop</launchable>
+  <provides><binary>typsmthng</binary></provides>
+  <content_rating type="oars-1.1" />
+</component>
