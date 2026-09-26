@@ -4,7 +4,19 @@ typsmthng is a native GTK 4 editor and presentation app for Typst. It opens ordi
 
 The project is in beta. Keep backups of important work.
 
-The interface uses libadwaita and follows the system appearance and uses one native header bar. See the [migration notes and screenshot gallery](docs/gtk4-migration.md) for the implementation, validation, and remaining platform checks.
+The interface uses libadwaita, follows the system appearance, and has one native header bar.
+
+## Screenshots
+
+The project home in light mode:
+
+![GTK 4 project home in light mode](docs/screenshots/gtk4/home-light.png)
+
+The editor and live Typst preview in dark mode:
+
+![GTK 4 editor and live Typst preview in dark mode](docs/screenshots/gtk4/editor-dark.png)
+
+See the [full screenshot gallery and migration notes](docs/gtk4-migration.md) for settings, templates, presentation views, narrow layouts, and implementation details.
 
 ## What is included
 
