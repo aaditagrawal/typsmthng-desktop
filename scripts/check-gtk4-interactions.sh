@@ -23,7 +23,19 @@ for attempt in $(seq 1 50); do
   sleep 0.1
 done
 test -n "$main"
-xdotool windowactivate --sync "$main"
+# The app can map its window before Openbox advertises _NET_ACTIVE_WINDOW.
+# Wait for activation support instead of treating that startup race as a failure.
+for attempt in $(seq 1 50); do
+  if xdotool windowactivate --sync "$main" >"$output/window-activation.log" 2>&1; then
+    break
+  fi
+  if ! kill -0 "$wm_pid" 2>/dev/null || [[ "$attempt" -eq 50 ]]; then
+    echo 'Window manager could not activate the application window' >&2
+    cat "$output/window-manager.log" "$output/window-activation.log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
 sleep 1
 xdotool mousemove --window "$main" 400 190 click 1
 xdotool key ctrl+End Return
