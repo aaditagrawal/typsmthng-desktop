@@ -15,7 +15,10 @@ existing CLI backend.
 
 Each successful preview retains its document and a snapshot of the source trees.
 Single clicks use Typst's `jump_from_click` to resolve file, line, and character
-column. This supports formulas, local imports, and transformed frames. Coordinates
+column. When its glyph hit test misses, equation tags and rendered bounds map
+the click to the start of the formula. This covers tall symbols, descenders,
+generated differential glyphs, and gaps inside a formula. It also supports local
+imports and transformed frames, while respecting clipping. Coordinates
 account for zoom, centered image fitting, and presentation-note cropping.
 Unchanged SVG pages retain their GTK widgets while receiving the latest source
 mapping. Editing invalidates navigation until a matching preview arrives.

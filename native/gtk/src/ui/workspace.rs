@@ -2816,7 +2816,7 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let source = format!(
-            "#set page(width: 240pt, height: 180pt, margin: 20pt)\n{}$ a^2 + b^2 = c^2 $",
+            "#set page(width: 240pt, height: 180pt, margin: 20pt)\n{}$ integral_0^1 x dif x $",
             "// comment\n".repeat(25)
         );
         std::fs::write(dir.path().join("main.typ"), &source).unwrap();
@@ -2839,14 +2839,12 @@ mod tests {
         workspace.set_compiled_preview(std::slice::from_ref(&page), "main.typ");
         drive(Duration::from_millis(100));
         let picture = workspace.preview_pictures.borrow()[0].widget.clone();
-        let (x, y, location) = (20..100)
-            .flat_map(|y| (20..220).map(move |x| (x, y)))
-            .find_map(|(x, y)| {
-                map.jump(0, x as f64, y as f64)
-                    .map(|location| (x as f64, y as f64, location))
-            })
-            .expect("clickable formula");
+        // Click the integral below its baseline, where Typst's glyph hit test
+        // misses. This must exercise the enclosing-equation fallback.
+        let (x, y) = (102.0, 42.0);
+        let location = map.jump(0, x, y).expect("clickable integral descender");
         assert_eq!(location.line, 27);
+        assert_eq!(location.column, 1);
         let height = f64::from(picture.height()).min(f64::from(picture.width()) / (240.0 / 180.0));
         let widget_x =
             (f64::from(picture.width()) - height * 240.0 / 180.0) / 2.0 + x * height / 180.0;
