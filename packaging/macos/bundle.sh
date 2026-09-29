@@ -12,6 +12,7 @@ rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources" "$contents/Frameworks"
 "$repo_root/scripts/build-gtk.sh"
 install -m755 "$repo_root/target/release/typsmthng" "$contents/MacOS/typsmthng"
+install -m755 "$repo_root/target/release/typsmthng-updater" "$contents/MacOS/typsmthng-updater"
 command -v typst >/dev/null 2>&1 || { echo "Typst 0.15.1 is required for packaging" >&2; exit 1; }
 install -m755 "$(command -v typst)" "$contents/MacOS/typst"
 minimum_system_version="$(sw_vers -productVersion | cut -d. -f1).0"

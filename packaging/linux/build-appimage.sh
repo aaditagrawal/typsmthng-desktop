@@ -10,6 +10,7 @@ rm -rf "$appdir"
 mkdir -p "$appdir/usr/bin" "$repo_root/build/release"
 "$repo_root/scripts/build-gtk.sh"
 install -m755 "$repo_root/target/release/typsmthng" "$appdir/usr/bin/typsmthng"
+install -m755 "$repo_root/target/release/typsmthng-updater" "$appdir/usr/bin/typsmthng-updater"
 command -v typst >/dev/null 2>&1 || { echo "Typst 0.15.1 is required for packaging" >&2; exit 1; }
 install -Dm644 "$repo_root/native/gtk/data/language-specs/typst.lang" "$appdir/usr/share/typsmthng/language-specs/typst.lang"
 install -Dm644 "$repo_root/assets/typst.xml" "$appdir/usr/share/mime/packages/typsmthng.xml"

@@ -89,6 +89,10 @@ struct AppController {
     application: gtk::Application,
     window: gtk::ApplicationWindow,
     stack: gtk::Stack,
+    update_button: gtk::Button,
+    update_busy: Cell<bool>,
+    available_update: RefCell<Option<UpdateStatus>>,
+    downloaded_update: RefCell<Option<(tempfile::TempDir, PathBuf, String)>>,
     state_store: Option<StateStore>,
     _smoke_state: Option<tempfile::TempDir>,
     project: RefCell<Option<Project>>,
@@ -208,6 +212,10 @@ impl AppController {
             .sync_create()
             .build();
         header.set_title_widget(Some(&title));
+        let update_button = gtk::Button::with_label("Update available");
+        update_button.add_css_class("suggested-action");
+        update_button.set_visible(false);
+        header.pack_end(&update_button);
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&stack));
         native_window.set_content(Some(&toolbar));
@@ -217,6 +225,10 @@ impl AppController {
             application: application.clone(),
             window,
             stack,
+            update_button,
+            update_busy: Cell::new(false),
+            available_update: RefCell::new(None),
+            downloaded_update: RefCell::new(None),
             state_store,
             _smoke_state: smoke_state,
             project: RefCell::new(None),
@@ -244,6 +256,14 @@ impl AppController {
         });
         controller.self_weak.replace(Rc::downgrade(&controller));
 
+        controller.update_button.connect_clicked({
+            let weak = Rc::downgrade(&controller);
+            move |_| {
+                if let Some(this) = weak.upgrade() {
+                    this.activate_update();
+                }
+            }
+        });
         controller.install_views();
         controller.install_actions();
         if smoke {
@@ -329,10 +349,42 @@ impl AppController {
         }
 
         if !smoke {
+            if let Some(cache) = directories::ProjectDirs::from("dev", "typsmthng", "typsmthng") {
+                if let Ok(entries) = std::fs::read_dir(cache.cache_dir().join("updates")) {
+                    for entry in entries.flatten() {
+                        let error_path = entry.path().join("install-error.txt");
+                        if let Ok(error) = std::fs::read_to_string(&error_path) {
+                            controller.show_error("Update could not be installed", &error);
+                            let _ = std::fs::remove_file(error_path);
+                        }
+                        // Retain recent installer logs, then reclaim old artifacts.
+                        if entry.file_name().to_string_lossy().starts_with("update-")
+                            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+                            && entry
+                                .metadata()
+                                .and_then(|metadata| metadata.modified())
+                                .ok()
+                                .and_then(|modified| modified.elapsed().ok())
+                                .is_some_and(|age| age > Duration::from_secs(7 * 24 * 60 * 60))
+                        {
+                            let _ = std::fs::remove_dir_all(entry.path());
+                        }
+                    }
+                }
+            }
             let weak = Rc::downgrade(&controller);
             glib::timeout_add_local_once(Duration::from_secs(2), move || {
                 if let Some(this) = weak.upgrade() {
                     this.check_update_with_feedback(false);
+                }
+            });
+            let weak = Rc::downgrade(&controller);
+            glib::timeout_add_local(Duration::from_secs(6 * 60 * 60), move || {
+                if let Some(this) = weak.upgrade() {
+                    this.check_update_with_feedback(false);
+                    glib::ControlFlow::Continue
+                } else {
+                    glib::ControlFlow::Break
                 }
             });
         }
@@ -2001,158 +2053,218 @@ impl AppController {
     }
 
     fn check_update_with_feedback(&self, announce_current: bool) {
-        let progress = announce_current.then(|| {
-            let dialog = adw::AlertDialog::builder()
-                .heading("Checking for updates…")
-                .body("Contacting the stable GitHub release channel.")
-                .build();
-            dialog.present(Some(&self.window));
-            dialog
-        });
+        if self.downloaded_update.borrow().is_some() || self.update_busy.replace(true) {
+            return;
+        }
+        if announce_current {
+            self.update_button.set_label("Checking for updates…");
+            self.update_button.set_visible(true);
+        }
+        self.update_button.set_sensitive(false);
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = sender.send(UpdateClient::default().check(env!("CARGO_PKG_VERSION")));
         });
         let weak = self.weak();
-        glib::timeout_add_local(Duration::from_millis(25), move || {
-            match receiver.try_recv() {
-                Ok(result) => {
-                    if let Some(progress) = &progress {
-                        progress.close();
-                    }
-                    if let Some(this) = weak.upgrade() {
-                        this.show_update_result(result, announce_current);
-                    }
-                    glib::ControlFlow::Break
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(BackendError::Network("Update worker stopped".into()))
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
-            }
-        });
-    }
-
-    fn show_update_result(
-        &self,
-        result: typsmthng_gtk::backend::Result<UpdateStatus>,
-        announce_current: bool,
-    ) {
-        match result {
-            Ok(UpdateStatus::UpToDate { current }) if announce_current => {
-                let dialog = adw::AlertDialog::builder()
-                    .heading(format!("typsmthng {current} is current"))
-                    .body("No newer stable release is available.")
-                    .build();
-                dialog.add_response("close", "Close");
-
-                dialog.present(Some(&self.window));
-            }
-            Ok(UpdateStatus::UpToDate { .. }) => {}
-            Ok(UpdateStatus::Available {
-                latest,
-                release_url,
-                asset,
-                ..
-            }) => {
-                let dialog = adw::AlertDialog::builder()
-                    .heading(format!("typsmthng {latest} is available"))
-                    .body("Review the release or download the installer for this system.")
-                    .build();
-                dialog.add_response("cancel", "Later");
-                dialog.add_response("other", "Release notes");
-                if asset.is_some() {
-                    dialog.add_response("accept", "Download…");
-                }
-                let weak = self.weak();
-                dialog.connect_response(None, move |_dialog, response| {
-                    if let Some(this) = weak.upgrade() {
-                        if response == "other" {
-                            let _ = gio::AppInfo::launch_default_for_uri(
-                                &release_url,
-                                None::<&gio::AppLaunchContext>,
-                            );
-                        } else if response == "accept" {
-                            if let Some(asset) = asset.clone() {
-                                this.choose_update_destination(asset);
-                            }
+            };
+            if let Some(this) = weak.upgrade() {
+                this.update_busy.set(false);
+                this.update_button.set_sensitive(true);
+                match result {
+                    Ok(status @ UpdateStatus::Available { .. }) => {
+                        if let UpdateStatus::Available { latest, asset, .. } = &status {
+                            this.update_button.set_tooltip_text(Some(&if asset.is_some() {
+                                format!("Download typsmthng {latest}")
+                            } else { format!("typsmthng {latest} is available. Update through your package manager.") }));
+                        }
+                        this.available_update.replace(Some(status));
+                        this.update_button.set_label("Update available");
+                        this.update_button.set_visible(true);
+                    }
+                    Ok(UpdateStatus::UpToDate { current }) => {
+                        this.available_update.replace(None);
+                        this.update_button.set_visible(false);
+                        if announce_current {
+                            let dialog = adw::AlertDialog::builder()
+                                .heading(format!("typsmthng {current} is current"))
+                                .body("No newer stable release is available.")
+                                .build();
+                            dialog.add_response("close", "Close");
+                            dialog.present(Some(&this.window));
                         }
                     }
-                });
-                dialog.present(Some(&self.window));
-            }
-            Err(error) if announce_current => {
-                self.show_error("Update check failed", &error.to_string())
-            }
-            Err(_) => {}
-        }
-    }
-
-    fn choose_update_destination(&self, asset: typsmthng_gtk::backend::ReleaseAsset) {
-        let chooser = gtk::FileDialog::builder()
-            .title("Download typsmthng update")
-            .accept_label("Download")
-            .build();
-        chooser.set_initial_name(Some(&asset.name));
-        chooser.save(Some(&self.window), None::<&gio::Cancellable>, {
-            let weak = self.weak();
-            move |result| {
-                if result.is_ok() {
-                    if let (Some(this), Some(path)) = (
-                        weak.upgrade(),
-                        result.as_ref().ok().and_then(|file| file.path()),
-                    ) {
-                        this.download_update(asset.clone(), path);
+                    Err(error) => {
+                        this.update_button.set_label("Update available");
+                        this.update_button
+                            .set_visible(this.available_update.borrow().is_some());
+                        if announce_current {
+                            this.show_error("Update check failed", &error.to_string());
+                        }
                     }
                 }
             }
+            glib::ControlFlow::Break
         });
     }
 
-    fn download_update(&self, asset: typsmthng_gtk::backend::ReleaseAsset, path: PathBuf) {
-        let progress = adw::AlertDialog::builder()
-            .heading("Downloading update…")
-            .body(&asset.name)
-            .build();
-        progress.present(Some(&self.window));
+    fn activate_update(&self) {
+        if self.update_busy.get() {
+            return;
+        }
+        if self.downloaded_update.borrow().is_some() {
+            self.install_downloaded_update();
+            return;
+        }
+        let Some(UpdateStatus::Available {
+            asset, release_url, ..
+        }) = self.available_update.borrow().clone()
+        else {
+            return;
+        };
+        let Some(asset) = asset else {
+            let dialog = adw::AlertDialog::builder().heading("Update available")
+                .body("This installation is managed by your package manager. Use it to update typsmthng, or view the release for installation instructions.").build();
+            dialog.add_response("close", "Later");
+            dialog.add_response("notes", "View release");
+            dialog.connect_response(None, move |_, response| {
+                if response == "notes" {
+                    let _ = gio::AppInfo::launch_default_for_uri(
+                        &release_url,
+                        None::<&gio::AppLaunchContext>,
+                    );
+                }
+            });
+            dialog.present(Some(&self.window));
+            return;
+        };
+        if let Err(error) = typsmthng_gtk::backend::update_install::installed_target() {
+            self.show_error("Cannot update this installation", &error.to_string());
+            return;
+        }
+        self.update_busy.set(true);
+        self.update_button.set_label("Downloading…");
+        self.update_button.set_sensitive(false);
+        let progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_progress = progress.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(UpdateClient::default().download(&asset, path));
+            let result = (|| -> Result<_, String> {
+                let cache = directories::ProjectDirs::from("dev", "typsmthng", "typsmthng")
+                    .ok_or_else(|| "Cannot locate update cache".to_string())?;
+                let root = cache.cache_dir().join("updates");
+                std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+                let directory = tempfile::Builder::new()
+                    .prefix("update-")
+                    .tempdir_in(root)
+                    .map_err(|error| error.to_string())?;
+                let path = UpdateClient::default()
+                    .download_with_progress(
+                        &asset,
+                        directory.path().join(&asset.name),
+                        |bytes, _| {
+                            worker_progress.store(bytes, Ordering::Relaxed);
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                let hash = typsmthng_gtk::backend::update_install::hash_file(&path)
+                    .map_err(|error| error.to_string())?;
+                Ok((directory, path, hash))
+            })();
+            let _ = sender.send(result);
         });
         let weak = self.weak();
-        glib::timeout_add_local(Duration::from_millis(25), move || {
-            match receiver.try_recv() {
-                Ok(result) => {
-                    progress.close();
-                    if let Some(this) = weak.upgrade() {
-                        match result {
-                            Ok(path) => {
-                                let dialog = adw::AlertDialog::builder()
-                                    .heading("Update downloaded")
-                                    .body(path.to_string_lossy())
-                                    .build();
-                                dialog.add_response("close", "Close");
-                                dialog.add_response("accept", "Open installer");
-                                dialog.connect_response(None, move |_dialog, response| {
-                                    if response == "accept" {
-                                        let uri = gio::File::for_path(&path).uri();
-                                        let _ = gio::AppInfo::launch_default_for_uri(
-                                            &uri,
-                                            None::<&gio::AppLaunchContext>,
-                                        );
-                                    }
-                                });
-                                dialog.present(Some(&this.window));
-                            }
-                            Err(error) => {
-                                this.show_error("Update download failed", &error.to_string())
-                            }
-                        }
-                    }
-                    glib::ControlFlow::Break
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let mib = progress.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
+                    this.update_button
+                        .set_label(&format!("Downloading… {mib:.1} MB"));
+                    return glib::ControlFlow::Continue;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("Update worker stopped".into())
+                }
+            };
+            this.update_busy.set(false);
+            this.update_button.set_sensitive(true);
+            match result {
+                Ok(downloaded) => {
+                    this.downloaded_update.replace(Some(downloaded));
+                    this.update_button.set_label("Restart to update");
+                    this.update_button.set_tooltip_text(Some(
+                        "Save your work, install the downloaded update, and restart typsmthng",
+                    ));
+                }
+                Err(error) => {
+                    this.update_button.set_label("Retry update");
+                    this.show_error("Update download failed", &error);
+                }
             }
+            glib::ControlFlow::Break
         });
+    }
+
+    fn install_downloaded_update(&self) {
+        use typsmthng_gtk::backend::update_install::{handoff, installed_target, InstallJob};
+        if self
+            .workspace
+            .borrow()
+            .as_ref()
+            .is_some_and(|workspace| !workspace.save_before_navigation())
+        {
+            return;
+        }
+        if self
+            .presentation
+            .borrow()
+            .as_ref()
+            .is_some_and(|presentation| !presentation.end())
+        {
+            return;
+        }
+        let target = match installed_target() {
+            Ok(target) => target,
+            Err(error) => {
+                self.show_error("Update failed", &error.to_string());
+                return;
+            }
+        };
+        let downloaded = self.downloaded_update.borrow();
+        let Some((_, path, sha256)) = downloaded.as_ref() else {
+            return;
+        };
+        let job = InstallJob {
+            artifact: path.clone(),
+            target,
+            sha256: sha256.clone(),
+        };
+        if let Err(error) = handoff(&job) {
+            self.show_error("Could not start updater", &error.to_string());
+            return;
+        }
+        drop(downloaded);
+        if let Some((directory, _, _)) = self.downloaded_update.borrow_mut().take() {
+            let _ = directory.keep(); // The helper owns these files after the app exits.
+        }
+        if let Some(store) = &self.state_store {
+            let _ = store.save_window_state(BackendWindowState {
+                width: self.window.width(),
+                height: self.window.height(),
+                maximized: self.window.is_maximized(),
+            });
+        }
+        self.application.quit();
     }
 
     fn refresh_project_files(&self) {
@@ -3173,7 +3285,7 @@ impl AppController {
         guide_section(
             &content,
             "EXPORTING AND UPDATES",
-            "Export the current document as PDF or package one, selected, or all projects as portable archives. Template metadata is retained but private .typsmthng state is excluded. Update checks use signed release-channel artifacts and verify SHA-256 before an installer can be opened; Linux system packages update through their package manager.",
+            "Export the current document as PDF or package one, selected, or all projects as portable archives. Template metadata is retained but private .typsmthng state is excluded. Update checks show a button when a stable release is available. Click to download, then restart to install. Downloads are verified against the release SHA-256 checksums. Linux system packages update through their package manager.",
         );
         guide_section(
             &content,
@@ -3869,6 +3981,118 @@ mod tests {
         import_latex_sources, parse_note_sections, project_layout_locked, serialize_note_sections,
         sidecar_slide_heading, write_template_metadata,
     };
+
+    #[test]
+    #[ignore = "requires a display; run under Xvfb"]
+    #[cfg(target_os = "linux")]
+    fn native_update_button_downloads_only_after_click() {
+        use adw::prelude::*;
+        use std::io::{Read, Write};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        adw::init().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let server_requests = requests.clone();
+        let body = b"example update";
+        use sha2::Digest;
+        let checksum = format!("{:x}", sha2::Sha256::digest(body));
+        let metadata = serde_json::json!({"tag_name": "v99.0.0", "html_url": base,
+        "assets": [
+            {"name": "typsmthng-linux-x64.AppImage", "browser_download_url": format!("{base}/app")},
+            {"name": "SHA256SUMS", "browser_download_url": format!("{base}/sums")}
+        ]})
+        .to_string();
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            while server_requests.load(Ordering::SeqCst) < 3 && std::time::Instant::now() < deadline
+            {
+                let Ok((mut socket, _)) = listener.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                };
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let response = if request.starts_with("GET /app ") {
+                    body.to_vec()
+                } else if request.starts_with("GET /sums ") {
+                    format!("{checksum}  typsmthng-linux-x64.AppImage\n").into_bytes()
+                } else {
+                    metadata.as_bytes().to_vec()
+                };
+                server_requests.fetch_add(1, Ordering::SeqCst);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.len()
+                )
+                .unwrap();
+                socket.write_all(&response).unwrap();
+            }
+        });
+        let installed = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("APPIMAGE", installed.path());
+        std::env::set_var("TYPSMTHNG_UPDATE_API_URL", &base);
+        let app: gtk::Application = adw::Application::builder()
+            .application_id("dev.typsmthng.UpdateTest")
+            .build()
+            .upcast();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let controller = super::AppController::build(
+            &app,
+            super::LaunchOptions {
+                smoke_test: true,
+                ..Default::default()
+            },
+        );
+        controller.check_update_with_feedback(false);
+        controller.check_update_with_feedback(false); // Single-flight check.
+        let pump_until = |condition: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !condition() && std::time::Instant::now() < deadline {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(condition(), "update UI timed out");
+        };
+        pump_until(&|| !controller.update_busy.get());
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "background check downloaded an artifact"
+        );
+        assert!(controller.update_button.is_visible());
+        assert_eq!(
+            controller.update_button.label().as_deref(),
+            Some("Update available")
+        );
+        controller.update_button.emit_clicked();
+        pump_until(&|| controller.downloaded_update.borrow().is_some());
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            controller.update_button.label().as_deref(),
+            Some("Restart to update")
+        );
+        assert_eq!(
+            std::fs::read(installed.path()).unwrap(),
+            b"",
+            "download installed without restart click"
+        );
+        server.join().unwrap();
+        controller.window.close();
+        std::env::remove_var("APPIMAGE");
+        std::env::remove_var("TYPSMTHNG_UPDATE_API_URL");
+    }
 
     fn preview_output(dimensions: &[(f64, f64)]) -> super::CompileOutput<Vec<super::SvgPage>> {
         super::CompileOutput {

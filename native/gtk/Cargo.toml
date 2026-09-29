@@ -1,6 +1,7 @@
 [package]
 name = "typsmthng-gtk"
-version = "0.1.1"
+default-run = "typsmthng"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Native GTK 4 desktop client for typsmthng"
@@ -51,3 +52,7 @@ libc = "0.2"
 
 [dev-dependencies]
 filetime = "0.2"
+
+[[bin]]
+name = "typsmthng-updater"
+path = "src/updater.rs"

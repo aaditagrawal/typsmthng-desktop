@@ -12,6 +12,7 @@ pub mod project;
 pub mod typst;
 pub mod universe;
 pub mod update;
+pub mod update_install;
 pub mod watcher;
 
 pub use archive::{

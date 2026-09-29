@@ -40,6 +40,10 @@ pub struct UpdateClient {
 #[derive(Debug, Deserialize)]
 struct GithubRelease {
     tag_name: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
     html_url: String,
     #[serde(default)]
     assets: Vec<GithubAsset>,
@@ -64,7 +68,8 @@ impl UpdateClient {
     pub fn check(&self, current: &str) -> Result<UpdateStatus> {
         let current = Version::parse(current)
             .map_err(|error| BackendError::Network(format!("invalid app version: {error}")))?;
-        let mut response = ureq::get(&self.endpoint)
+        let mut response = http_agent(30)
+            .get(&self.endpoint)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "typsmthng-gtk")
             .call()
@@ -79,9 +84,28 @@ impl UpdateClient {
     }
 
     pub fn download(&self, asset: &ReleaseAsset, destination: impl AsRef<Path>) -> Result<PathBuf> {
+        self.download_with_progress(asset, destination, |_, _| {})
+    }
+
+    pub fn download_with_progress(
+        &self,
+        asset: &ReleaseAsset,
+        destination: impl AsRef<Path>,
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<PathBuf> {
+        if Path::new(&asset.name)
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some(&asset.name)
+            || asset.name.contains(['/', '\\'])
+            || asset.name == ".."
+        {
+            return Err(BackendError::Network("invalid release asset name".into()));
+        }
         let destination = destination.as_ref();
         let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-        let mut response = ureq::get(&asset.download_url)
+        let mut response = http_agent(900)
+            .get(&asset.download_url)
             .header("Accept", "application/octet-stream")
             .header("User-Agent", "typsmthng-gtk")
             .call()
@@ -89,6 +113,12 @@ impl UpdateClient {
         let mut output =
             NamedTempFile::new_in(parent).map_err(|error| BackendError::io(parent, error))?;
         let mut digest = Sha256::new();
+        let total = response
+            .headers()
+            .get("content-length")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok());
+        let mut received = 0_u64;
         let mut reader = response.body_mut().as_reader();
         let mut buffer = [0_u8; 64 * 1024];
         loop {
@@ -98,6 +128,11 @@ impl UpdateClient {
             if read == 0 {
                 break;
             }
+            received += read as u64;
+            if received > 512 * 1024 * 1024 {
+                return Err(BackendError::Network("update exceeds 512 MiB".into()));
+            }
+            progress(received, total);
             output
                 .write_all(&buffer[..read])
                 .map_err(|error| BackendError::io(output.path(), error))?;
@@ -108,7 +143,8 @@ impl UpdateClient {
             .checksums_url
             .as_deref()
             .ok_or_else(|| BackendError::Network("release does not publish SHA256SUMS".into()))?;
-        let mut checksums_response = ureq::get(checksums_url)
+        let mut checksums_response = http_agent(30)
+            .get(checksums_url)
             .header("Accept", "application/octet-stream")
             .header("User-Agent", "typsmthng-gtk")
             .call()
@@ -153,6 +189,14 @@ impl UpdateClient {
     }
 }
 
+fn http_agent(seconds: u64) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(seconds)))
+        .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        .build()
+        .into()
+}
+
 fn status_from_release(current: Version, release: GithubRelease) -> Result<UpdateStatus> {
     let latest_text = release.tag_name.trim_start_matches('v');
     let latest = Version::parse(latest_text).map_err(|error| {
@@ -161,7 +205,7 @@ fn status_from_release(current: Version, release: GithubRelease) -> Result<Updat
             release.tag_name
         ))
     })?;
-    if latest <= current {
+    if release.draft || release.prerelease || !latest.pre.is_empty() || latest <= current {
         return Ok(UpdateStatus::UpToDate { current });
     }
     Ok(UpdateStatus::Available {
@@ -241,6 +285,8 @@ mod tests {
     fn release(version: &str, assets: &[&str]) -> GithubRelease {
         GithubRelease {
             tag_name: version.to_string(),
+            draft: false,
+            prerelease: false,
             html_url: "https://example.test/release".to_string(),
             assets: assets
                 .iter()
@@ -263,6 +309,64 @@ mod tests {
             status_from_release(Version::new(1, 3, 0), release("1.3.0", &[])).unwrap(),
             UpdateStatus::UpToDate { .. }
         ));
+    }
+
+    #[test]
+    fn stable_channel_ignores_prereleases_and_drafts() {
+        for mut candidate in [release("v2.0.0-beta.1", &[]), release("v2.0.0", &[])] {
+            if candidate.tag_name == "v2.0.0" {
+                candidate.draft = true;
+            }
+            assert!(matches!(
+                status_from_release(Version::new(1, 0, 0), candidate).unwrap(),
+                UpdateStatus::UpToDate { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn checksum_failure_preserves_existing_destination() {
+        use std::net::TcpListener;
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", server.local_addr().unwrap());
+        let asset = ReleaseAsset {
+            name: "app.exe".into(),
+            download_url: format!("{base}/app"),
+            checksums_url: Some(format!("{base}/sums")),
+        };
+        let worker = std::thread::spawn(move || {
+            for body in [
+                b"corrupt update".to_vec(),
+                format!("{}  app.exe\n", "0".repeat(64)).into_bytes(),
+            ] {
+                let (mut socket, _) = server.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).unwrap();
+                assert!(count > 0);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                socket.write_all(&body).unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("app.exe");
+        std::fs::write(&target, "existing").unwrap();
+        let mut received = 0;
+        let error = UpdateClient::default()
+            .download_with_progress(&asset, &target, |bytes, _| received = bytes)
+            .unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert!(received > 0);
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "existing");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        worker.join().unwrap();
     }
 
     #[test]

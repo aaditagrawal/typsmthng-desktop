@@ -13,6 +13,8 @@ if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force $Stage | Out-Null
 New-Item -ItemType Directory -Force $Bin | Out-Null
 Copy-Item $Binary $Bin
+$Updater = Join-Path $Release "typsmthng-updater.exe"
+Copy-Item $Updater $Bin
 Copy-Item $Typst $Bin
 
 # Walk the PE import graph with the same MinGW objdump that supplied GTK.
@@ -20,6 +22,7 @@ $Objdump = Join-Path $Msys "bin\objdump.exe"
 $Queue = [System.Collections.Generic.Queue[string]]::new()
 $Seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $Queue.Enqueue($Binary)
+$Queue.Enqueue($Updater)
 $QueryLoaders = Join-Path $Msys "bin\gdk-pixbuf-query-loaders.exe"
 if (!(Test-Path $QueryLoaders)) { throw "Missing gdk-pixbuf-query-loaders.exe" }
 Copy-Item $QueryLoaders $Bin
