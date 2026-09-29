@@ -1,8 +1,8 @@
 name: Native GTK Release
-
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - v*
   workflow_dispatch:
     inputs:
       version:
@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       source_ref:
-        description: "Immutable release source tag or commit (for example v0.1.0)"
+        description: Immutable release source tag or commit (for example v0.1.0)
         type: string
         required: false
       publish:
@@ -18,18 +18,18 @@ on:
         type: boolean
         default: true
       macos_signing:
-        description: "macOS signing (unsigned uses ad-hoc signatures without notarization)"
+        description: macOS signing (unsigned uses ad-hoc signatures without notarization)
         type: choice
-        options: [unsigned, signed]
+        options:
+          - unsigned
+          - signed
         default: unsigned
-
 permissions:
-  contents: write
-
+  contents: read
+  actions: read
 concurrency:
   group: gtk-release-${{ github.ref }}-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
-
 jobs:
   preflight:
     runs-on: ubuntu-24.04
@@ -43,286 +43,124 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.source_ref || github.ref }}
+      - name: Release orchestration from the workflow commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          enable-cache: false
       - id: version
         env:
           RAW_VERSION: ${{ inputs.version || github.ref_name }}
           REQUESTED_SIGNING: ${{ inputs.macos_signing }}
-        shell: bash
-        run: |
-          version="$RAW_VERSION"
-          version="${version#v}"
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || exit 1
-          manifest_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' native/gtk/Cargo.toml | head -1)"
-          [[ "$manifest_version" == "$version" ]] || { echo "Cargo version $manifest_version != $version"; exit 1; }
-          prerelease=false
-          [[ "$version" == *-* ]] && prerelease=true
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          signing="${REQUESTED_SIGNING:-unsigned}"
-          [[ "$signing" == signed || "$signing" == unsigned ]] || exit 1
-          echo "macos_signing=$signing" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)"
-          [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-          echo "rust_toolchain=$toolchain" >> "$GITHUB_OUTPUT"
-
-  linux:
+        run: uv run --no-project .release-tools/packaging/release/source.py
+  candidate:
     needs: preflight
     runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    outputs:
+      run_id: ${{ steps.candidate.outputs.run_id }}
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+      SIGNING: ${{ needs.preflight.outputs.macos_signing }}
+      RUST_TOOLCHAIN: ${{ needs.preflight.outputs.rust_toolchain }}
+      REPOSITORY: ${{ github.repository }}
+      BUILD_RUN_ID: ${{ github.run_id }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Release orchestration from the workflow commit
+        uses: actions/checkout@v6
         with:
-          toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: . }
-      - name: Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libadwaita-1-dev librsvg2-common adwaita-icon-theme ruby-dev rpm libfuse2 file flatpak flatpak-builder xvfb dbus-x11
-          sudo gem install --no-document fpm
-          sudo curl -fsSL -o /usr/local/bin/linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
-          echo 'c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  /usr/local/bin/linuxdeploy' | sha256sum -c -
-          sudo chmod +x /usr/local/bin/linuxdeploy
-          sudo curl -fsSL -o /usr/local/bin/linuxdeploy-plugin-gtk https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/linuxdeploy-plugin-gtk.sh
-          echo 'b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171  /usr/local/bin/linuxdeploy-plugin-gtk' | sha256sum -c -
-          sudo chmod +x /usr/local/bin/linuxdeploy-plugin-gtk
-          sudo curl -fsSL -o /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          echo 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /usr/local/bin/appimagetool' | sha256sum -c -
-          sudo chmod +x /usr/local/bin/appimagetool
-      - name: Bundle Typst
-        run: |
-          packaging/download-typst.sh x86_64-unknown-linux-musl /tmp/typst-dist
-          sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
-      - name: Tests and packages
-        run: |
-          cargo test --locked --manifest-path native/gtk/Cargo.toml --all-targets
-          dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_preview_clicks_and_diagnostic_idle_timing -- --ignored --test-threads=1
-          dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
-          packaging/linux/build-system-packages.sh "${{ needs.preflight.outputs.version }}"
-          packaging/linux/build-appimage.sh
-          appimage="$(find build/release -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
-          test -n "$appimage"
-          packaging/linux/check-appimage.sh "$appimage"
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none timeout 30s "$appimage" --appimage-extract-and-run --smoke-test
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none timeout 45s "$appimage" --appimage-extract-and-run --presentation-smoke-test native/gtk/tests/fixtures/demo
-          dpkg-deb --info build/release/*.deb >/dev/null
-          rpm -qip build/release/*.rpm >/dev/null
-          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
-          flatpak_work="$(mktemp -d)"
-          trap 'rm -rf "$flatpak_work"' EXIT
-          mkdir -p "$flatpak_work/source"
-          git archive HEAD | tar -x -C "$flatpak_work/source"
-          flatpak-builder --force-clean --repo="$flatpak_work/repo" "$flatpak_work/build" "$flatpak_work/source/packaging/flatpak/dev.typsmthng.Typsmthng.yml"
-          flatpak build-bundle "$flatpak_work/repo" "build/release/typsmthng_${{ needs.preflight.outputs.version }}_linux_x64.flatpak" dev.typsmthng.Typsmthng
-          flatpak install --user --noninteractive --bundle "build/release/typsmthng_${{ needs.preflight.outputs.version }}_linux_x64.flatpak"
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' timeout 45s flatpak run --user --env=GTK_A11Y=none dev.typsmthng.Typsmthng --smoke-test
-          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' timeout 45s flatpak run --user --env=GTK_A11Y=none dev.typsmthng.Typsmthng --presentation-smoke-test "$PWD/native/gtk/tests/fixtures/demo"
-      - uses: actions/upload-artifact@v5
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
-          name: release-linux-x64
-          path: build/release/*
-          if-no-files-found: error
-
-  macos:
-    needs: preflight
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            arch: arm64
-          - os: macos-15-intel
-            arch: x64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: . }
-      - run: |
-          brew install gtk4 gtksourceview5 libadwaita adwaita-icon-theme dylibbundler
-          machine="$(uname -m)"
-          [[ "$machine" == "arm64" ]] && machine="aarch64"
-          packaging/download-typst.sh "${machine}-apple-darwin" /tmp/typst-dist
-          sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
-      - name: Import signing certificate
-        if: needs.preflight.outputs.macos_signing == 'signed'
-        env:
-          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-        run: |
-          test -n "$MACOS_CERTIFICATE_P12"
-          test -n "$MACOS_CERTIFICATE_PASSWORD"
-          test -n "$MACOS_KEYCHAIN_PASSWORD"
-          echo "$MACOS_CERTIFICATE_P12" | base64 -D > /tmp/signing.p12
-          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" build.keychain
-          security import /tmp/signing.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$MACOS_KEYCHAIN_PASSWORD" build.keychain
-      - name: Build and bundle
-        env:
-          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
-          MACOS_SIGNING_MODE: ${{ needs.preflight.outputs.macos_signing }}
-        run: packaging/macos/bundle.sh "${{ needs.preflight.outputs.version }}" "${{ matrix.arch }}"
-      - name: Verify packaged application
-        run: |
-          G_DEBUG=fatal-warnings build/release/typsmthng.app/Contents/MacOS/typsmthng --smoke-test
-          G_DEBUG=fatal-warnings build/release/typsmthng.app/Contents/MacOS/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
-          codesign --verify --deep --strict --verbose=2 build/release/typsmthng.app
-      - name: Verify packaged updater replacement and relaunch
-        run: |
-          update_test="$(mktemp -d)"
-          trap 'rm -rf "$update_test"' EXIT
-          ditto build/release/typsmthng.app "$update_test/typsmthng.app"
-          python3 packaging/test-update-helper.py \
-            --helper build/release/typsmthng.app/Contents/MacOS/typsmthng-updater \
-            --artifact "build/release/typsmthng-${{ needs.preflight.outputs.version }}-macos-${{ matrix.arch }}.dmg" \
-            --target "$update_test/typsmthng.app" \
-            --expected-binary build/release/typsmthng.app/Contents/MacOS/typsmthng
-      - name: Notarize and staple
-        if: needs.preflight.outputs.macos_signing == 'signed'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          test -n "$APPLE_ID"
-          test -n "$APPLE_APP_PASSWORD"
-          test -n "$APPLE_TEAM_ID"
-          dmg="build/release/typsmthng-${{ needs.preflight.outputs.version }}-macos-${{ matrix.arch }}.dmg"
-          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
-          xcrun stapler staple "$dmg"
-          xcrun stapler validate "$dmg"
-      - name: Verify disk image integrity
-        run: hdiutil verify "build/release/typsmthng-${{ needs.preflight.outputs.version }}-macos-${{ matrix.arch }}.dmg"
-      - uses: actions/upload-artifact@v5
-        with:
-          name: release-macos-${{ matrix.arch }}
-          path: build/release/*.dmg
-          if-no-files-found: error
-
-  windows:
-    needs: preflight
-    runs-on: windows-2022
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.source_sha }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
-          targets: x86_64-pc-windows-gnu
-      - uses: msys2/setup-msys2@v2
-        id: msys2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-gtk4
-            mingw-w64-x86_64-adwaita-icon-theme
-            mingw-w64-x86_64-libadwaita
-            mingw-w64-x86_64-gtksourceview5
-            mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-nsis
-            unzip
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: . }
-      - name: Build
-        env:
-          RUSTUP_TOOLCHAIN: ${{ needs.preflight.outputs.rust_toolchain }}
-        run: |
-          "$(cygpath -u "$CARGO_HOME")/bin/rustup.exe" target add --toolchain "$RUSTUP_TOOLCHAIN" x86_64-pc-windows-gnu
-          "$(cygpath -u "$CARGO_HOME")/bin/rustc.exe" --version --verbose
-          export RUSTC="$(cygpath -m "$CARGO_HOME")/bin/rustc.exe"
-          export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
-          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
-          packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/release
-          export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
-          timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
-          timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
-          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
-      - name: Collect GTK runtime
-        env:
-          TYPSMTHNG_MINGW_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\mingw64
-        shell: pwsh
-        run: packaging/windows/collect-runtime.ps1
-      - name: Installer
-        run: |
-          mkdir -p build/release
-          makensis -WX -DVERSION="${{ needs.preflight.outputs.version }}" packaging/windows/installer.nsi
-      - name: Verify install, upgrade, uninstall, and unrelated file preservation
-        shell: pwsh
-        run: packaging/windows/test-installer.ps1
-      - uses: actions/upload-artifact@v5
-        with:
-          name: release-windows-x64
-          path: build/release/*.exe
-          if-no-files-found: error
-
+          enable-cache: false
+      - id: candidate
+        name: Reuse an exact verified candidate or wait for its active build
+        run: |-
+          uv run --no-project .release-tools/packaging/release/find-candidate.py \
+            --repository "$REPOSITORY" --source-sha "$SOURCE_SHA" --version "$VERSION" \
+            --signing "$SIGNING" --rust-toolchain "$RUST_TOOLCHAIN"
+  packages:
+    needs:
+      - preflight
+      - candidate
+    if: needs.candidate.outputs.run_id == ''
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+      macos_signing: ${{ needs.preflight.outputs.macos_signing }}
+    secrets: inherit
   publish:
-    needs: [preflight, linux, macos, windows]
+    needs:
+      - preflight
+      - candidate
+      - packages
+    if: always() && !cancelled() && needs.preflight.result == 'success' && needs.candidate.result == 'success' && (needs.packages.result == 'success' || (needs.packages.result ==
+      'skipped' && needs.candidate.outputs.run_id != ''))
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+      SIGNING: ${{ needs.preflight.outputs.macos_signing }}
+      RUST_TOOLCHAIN: ${{ needs.preflight.outputs.rust_toolchain }}
+      REPOSITORY: ${{ github.repository }}
+      BUILD_RUN_ID: ${{ needs.candidate.outputs.run_id || github.run_id }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
+      - name: Release orchestration from the workflow commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          enable-cache: false
       - uses: actions/download-artifact@v5
         with:
-          path: artifacts
-          pattern: release-*
-          merge-multiple: true
-      - name: Verify complete artifact set and generate checksums
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-        run: |
-          cd artifacts
-          for asset in \
-            "typsmthng_${VERSION}_amd64.deb" \
-            "typsmthng_${VERSION}_x86_64.rpm" \
-            "typsmthng-$VERSION-linux-x64.AppImage" \
-            "typsmthng_${VERSION}_linux_x64.flatpak" \
-            "typsmthng-$VERSION-macos-arm64.dmg" \
-            "typsmthng-$VERSION-macos-x64.dmg" \
-            "typsmthng-windows-x64.exe"; do
-            test -s "$asset" || { echo "Missing release artifact: $asset" >&2; exit 1; }
-          done
-          sha256sum -- *.deb *.rpm *.AppImage *.flatpak *.dmg *.exe > SHA256SUMS
-          sha256sum -c SHA256SUMS
-      - uses: actions/upload-artifact@v5
-        with:
           name: verified-release
-          path: artifacts/*
-          if-no-files-found: error
+          path: artifacts
+          run-id: ${{ needs.candidate.outputs.run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify candidate metadata, exact assets, and every checksum
+        run: |-
+          uv run --no-project .release-tools/packaging/release/artifacts.py verify artifacts --version "$VERSION" --source-sha "$SOURCE_SHA" --signing "$SIGNING" \
+            --repository "$REPOSITORY" --run-id "$BUILD_RUN_ID" --rust-toolchain "$RUST_TOOLCHAIN"
       - name: Publish GitHub release
         if: github.event_name != 'workflow_dispatch' || inputs.publish
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version="${{ needs.preflight.outputs.version }}"
-          title="v$version"
-          notes="releases/v$version.md"
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+        run: |-
+          uv run --no-project .release-tools/packaging/release/tag.py --version "$VERSION" --source-sha "$SOURCE_SHA"
+          title="v$VERSION"
+          notes="releases/v$VERSION.md"
           test -f "$notes"
-          if [[ "${{ needs.preflight.outputs.macos_signing }}" == unsigned ]]; then
+          if [[ "$SIGNING" == unsigned ]]; then
             printf '\nmacOS builds are unsigned (ad-hoc signed) and are not notarized by Apple.\n' >> "$notes"
           fi
-          flags=(--notes-file "$notes" --title "$title" --target "${{ needs.preflight.outputs.source_sha }}")
-          if [[ "${{ needs.preflight.outputs.prerelease }}" == "true" ]]; then
+          flags=(--notes-file "$notes" --title "$title" --target "$SOURCE_SHA")
+          if [[ "$PRERELEASE" == true ]]; then
             flags+=(--prerelease)
           else
             flags+=(--latest)
           fi
-          gh release create "v$version" artifacts/* --repo "${{ github.repository }}" "${flags[@]}"
+          # Build provenance stays in Actions; publish only installers and their checksums.
+          rm artifacts/release-metadata.json
+          gh release create "v$VERSION" artifacts/* --repo "$REPOSITORY" "${flags[@]}"

@@ -14,12 +14,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read pinned Rust toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)"
+          [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "version=$toolchain" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
+          shared-key: native-${{ runner.os }}-${{ runner.arch }}-dev
       - name: GTK development libraries
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libadwaita-1-dev librsvg2-common xvfb dbus-x11 flatpak-builder openbox xdotool imagemagick
       - name: Typst compiler for integration smoke
@@ -28,6 +37,13 @@ jobs:
           sudo install -m755 /tmp/typst-dist/typst /usr/local/bin/typst
       - name: Validate Flatpak manifest
         run: flatpak-builder --show-manifest packaging/flatpak/dev.typsmthng.Typsmthng.yml >/dev/null
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          enable-cache: false
+      - name: Release promotion and Flatpak cache regression checks
+        run: |
+          uv run --no-project packaging/release/test_release.py
+          bash packaging/flatpak/test-build.sh
       - name: Formatting
         run: cargo fmt --manifest-path native/gtk/Cargo.toml --all -- --check
       - name: Tests
@@ -77,10 +93,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Read pinned Rust toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)"
+          [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "version=$toolchain" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
+          shared-key: native-${{ runner.os }}-${{ runner.arch }}-ci
       - name: macOS GTK dependencies
         if: runner.os == 'macOS'
         run: brew install gtk4 gtksourceview5 libadwaita adwaita-icon-theme
@@ -102,26 +128,26 @@ jobs:
       - name: Compile native application
         if: runner.os != 'Windows'
         shell: bash
-        run: cargo build --locked --release --manifest-path native/gtk/Cargo.toml
+        run: cargo build --locked --profile ci --manifest-path native/gtk/Cargo.toml
       - name: Compile native application (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
-          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --profile ci --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
       - name: Windows GTK and presentation smoke tests
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
-          packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/release
-          export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
-          timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
-          timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
+          packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/ci
+          export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/ci:$PATH"
+          timeout 20s target/x86_64-pc-windows-gnu/ci/typsmthng.exe --smoke-test
+          timeout 30s target/x86_64-pc-windows-gnu/ci/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
       - name: Compile windowed Windows binary
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           export PKG_CONFIG_ALLOW_CROSS=1
           export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
-          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
+          "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --profile ci --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml

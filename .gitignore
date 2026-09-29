@@ -1,6 +1,9 @@
 # Build output
 build/
 target/
+.flatpak-builder/
+.cache/flatpak-release/
+__pycache__/
 
 # Compiled native libraries
 *.dylib
