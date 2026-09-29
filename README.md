@@ -1,6 +1,6 @@
 # typsmthng desktop
 
-typsmthng is a native GTK 4 editor and presentation app for Typst. It opens ordinary folders, writes ordinary files, and uses the Typst 0.15.1 compiler for preview and PDF output. The shipped application has no browser, WebView, JavaScript runtime, React renderer, or WASM compiler.
+typsmthng is a native GTK 4 editor and presentation app for Typst. It opens ordinary folders, writes ordinary files, and uses Typst 0.15.1 for preview and PDF output. Live preview keeps the compiler, parsed sources, and fonts in memory between edits; PDF export uses the bundled CLI. The shipped application has no browser, WebView, JavaScript runtime, React renderer, or WASM compiler.
 
 The project is in beta. Keep backups of important work.
 
@@ -24,6 +24,8 @@ See the [full screenshot gallery and migration notes](docs/gtk4-migration.md) fo
 - GtkSourceView editor with Typst syntax, diagnostics, line numbers, wrapping, search, undo, Vim-style modal input, and configurable font size
 - Debounced writes and latest-wins background compilation
 - Multi-page SVG preview with zoom, page navigation, image preview, and PDF export
+- Click rendered text or formulas to jump to their source, including local imports
+- Diagnostics wait for a 900 ms typing pause while valid previews update independently
 - Path and full-text search across the open project
 - ZIP project import and export with traversal checks
 - LaTeX import for document structure, text styles, lists, links, citations, math, figures, and tables

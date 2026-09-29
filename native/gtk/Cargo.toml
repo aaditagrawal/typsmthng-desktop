@@ -1,6 +1,6 @@
 [package]
 name = "typsmthng-gtk"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Native GTK 4 desktop client for typsmthng"
@@ -39,6 +39,12 @@ ureq = { version = "3.1", features = ["json"] }
 url = "2.5"
 wait-timeout = "0.2"
 zip = { version = "6.0", default-features = false, features = ["deflate"] }
+
+typst = "=0.15.1"
+typst-layout = "=0.15.1"
+typst-svg = "=0.15.1"
+typst-ide = "=0.15.1"
+typst-kit = { version = "=0.15.1", features = ["datetime", "embedded-fonts", "scan-fonts", "system-files", "emit-diagnostics"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -7,6 +7,7 @@ pub mod latex;
 pub mod model;
 pub mod paths;
 pub mod persistence;
+pub mod preview;
 pub mod project;
 pub mod typst;
 pub mod universe;

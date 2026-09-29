@@ -2,7 +2,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
+use typsmthng_gtk::backend::preview::SourceMap;
 
 use adw::prelude::*;
 use regex::Regex;
@@ -24,13 +26,10 @@ const PREVIEW_HORIZONTAL_INSET: i32 = 64;
 #[derive(Debug, PartialEq, Eq)]
 struct PreviewIdentity {
     pages: Vec<[u8; 32]>,
-    source: Option<(String, usize)>,
+    source: Option<String>,
 }
 
-fn preview_identity(
-    pages: &[Option<String>],
-    source: Option<(&str, usize)>,
-) -> Option<PreviewIdentity> {
+fn preview_identity(pages: &[Option<String>], source: Option<&str>) -> Option<PreviewIdentity> {
     let pages = pages
         .iter()
         .map(|page| {
@@ -40,7 +39,7 @@ fn preview_identity(
         .collect::<Option<Vec<_>>>()?;
     Some(PreviewIdentity {
         pages,
-        source: source.map(|(path, lines)| (path.to_string(), lines)),
+        source: source.map(str::to_string),
     })
 }
 
@@ -241,6 +240,11 @@ pub struct WorkspaceView {
     dirty: Rc<Cell<bool>>,
     suppress_changes: Rc<Cell<bool>>,
     pending_compile: Rc<RefCell<Option<glib::SourceId>>>,
+    pending_diagnostics: Rc<RefCell<Option<glib::SourceId>>>,
+    pending_error: Rc<RefCell<Option<glib::SourceId>>>,
+    revision: Rc<Cell<u64>>,
+    last_edit: Rc<Cell<Option<Instant>>>,
+    source_map: Rc<RefCell<Option<Arc<SourceMap>>>>,
     callbacks: WorkspaceCallbacks,
     vim_context: Rc<RefCell<Option<sourceview5::VimIMContext>>>,
     vim_status: gtk::Label,
@@ -730,6 +734,11 @@ impl WorkspaceView {
         let document_search_dialog = build_document_search_dialog(window, &buffer, &editor);
 
         let pending_compile = Rc::new(RefCell::new(None::<glib::SourceId>));
+        let pending_diagnostics = Rc::new(RefCell::new(None::<glib::SourceId>));
+        let pending_error = Rc::new(RefCell::new(None::<glib::SourceId>));
+        let revision = Rc::new(Cell::new(0_u64));
+        let last_edit = Rc::new(Cell::new(None::<Instant>));
+        let source_map = Rc::new(RefCell::new(None));
         {
             let callback = callbacks.go_home.clone();
             home.connect_clicked(move |_| callback());
@@ -912,8 +921,27 @@ impl WorkspaceView {
             let callbacks = callbacks.clone();
             let settings = settings.clone();
             let pending = pending_compile.clone();
+            let revision = revision.clone();
+            let last_edit = last_edit.clone();
+            let source_map = source_map.clone();
+            let pending_diagnostics = pending_diagnostics.clone();
+            let pending_error = pending_error.clone();
+            let diagnostics_revealer = diagnostics_revealer.clone();
+            let compile_label = compile_label.clone();
             buffer.connect_changed(move |_| {
+                revision.set(revision.get().wrapping_add(1));
+                for pending in [&pending_diagnostics, &pending_error] {
+                    if let Some(timer) = pending.borrow_mut().take() {
+                        timer.remove();
+                    }
+                }
+                diagnostics_revealer.set_reveal_child(false);
+                source_map.replace(None);
                 if !suppress_changes.get() {
+                    last_edit.set(Some(Instant::now()));
+                    if compile_label.text().starts_with("Compile error:") {
+                        compile_label.set_text("Editing…");
+                    }
                     dirty.set(true);
                     save_label.set_text("Unsaved changes");
                     if let Some(source) = pending.borrow_mut().take() {
@@ -985,6 +1013,11 @@ impl WorkspaceView {
             dirty,
             suppress_changes,
             pending_compile,
+            pending_diagnostics,
+            pending_error,
+            revision,
+            last_edit,
+            source_map,
             callbacks,
             vim_context,
             vim_status,
@@ -1252,8 +1285,14 @@ impl WorkspaceView {
     }
 
     pub fn cancel_pending_compile(&self) {
-        if let Some(source) = self.pending_compile.borrow_mut().take() {
-            source.remove();
+        for pending in [
+            &self.pending_compile,
+            &self.pending_diagnostics,
+            &self.pending_error,
+        ] {
+            if let Some(source) = pending.borrow_mut().take() {
+                source.remove();
+            }
         }
     }
 
@@ -1383,16 +1422,11 @@ impl WorkspaceView {
         self.set_preview_content(pages, None);
     }
 
-    pub fn set_compiled_preview(
-        &self,
-        pages: &[PathBuf],
-        source_path: &str,
-        source_line_count: usize,
-    ) {
-        self.set_preview_content(pages, Some((source_path, source_line_count.max(1))));
+    pub fn set_compiled_preview(&self, pages: &[PathBuf], source_path: &str) {
+        self.set_preview_content(pages, Some(source_path));
     }
 
-    fn set_preview_content(&self, pages: &[PathBuf], source: Option<(&str, usize)>) {
+    fn set_preview_content(&self, pages: &[PathBuf], source: Option<&str>) {
         let contents = pages
             .iter()
             .map(|page| std::fs::read_to_string(page).ok())
@@ -1435,34 +1469,12 @@ impl WorkspaceView {
                 .unwrap_or_default();
             let sheet = gtk::Box::new(gtk::Orientation::Vertical, 8);
             sheet.add_css_class("page-sheet");
-            if let Some((source_path, source_line_count)) = source {
-                let source_line =
-                    source_line_for_page_position(index, pages.len(), 0.5, source_line_count);
-                let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                header.set_margin_start(8);
-                header.set_margin_end(8);
+            if source.is_some() {
                 let page_number = gtk::Label::new(Some(&format!("Page {}", index + 1)));
                 page_number.add_css_class("muted");
                 page_number.set_halign(gtk::Align::Start);
-                page_number.set_hexpand(true);
-                let edit_source =
-                    gtk::Button::with_label(&format!("Edit source · line {source_line}"));
-                edit_source.add_css_class("flat");
-                edit_source.set_tooltip_text(Some(
-                    "Open the compiled source near this page. Double-click the page for a more precise position.",
-                ));
-                edit_source.connect_clicked({
-                    let select = self.callbacks.select_file.clone();
-                    let source_path = source_path.to_string();
-                    let buffer = self.buffer.clone();
-                    let editor = self.editor.clone();
-                    move |_| {
-                        focus_source_line(&select, &source_path, source_line, &buffer, &editor);
-                    }
-                });
-                header.append(&page_number);
-                header.append(&edit_source);
-                sheet.append(&header);
+                page_number.set_margin_start(8);
+                sheet.append(&page_number);
             }
             let loaded = gtk::Picture::for_filename(page);
             // Keep the decoded paintable, not a GtkPicture tied to a disposable
@@ -1475,36 +1487,68 @@ impl WorkspaceView {
             picture.set_can_shrink(true);
             picture.set_content_fit(gtk::ContentFit::Contain);
             picture.set_tooltip_text(Some(if source.is_some() {
-                "Double-click to edit source near this position"
+                "Click text or a formula to go to its source"
             } else {
                 "Preview"
             }));
-            if let Some((source_path, source_line_count)) = source {
+            if source.is_some() {
                 let edit = gtk::GestureClick::new();
                 edit.set_button(1);
                 edit.connect_released({
                     let select = self.callbacks.select_file.clone();
-                    let source_path = source_path.to_string();
+                    let source_map = self.source_map.clone();
                     let buffer = self.buffer.clone();
                     let editor = self.editor.clone();
-                    let picture = picture.clone();
-                    let page_count = pages.len();
-                    move |_, press_count, _, y| {
-                        if press_count != 2 {
+                    let picture = picture.downgrade();
+                    let status = self.compile_label.clone();
+                    let file_label = self.file_label.clone();
+                    move |_, press_count, x, y| {
+                        if press_count != 1 {
                             return;
                         }
-                        let within_page = if picture.height() > 0 {
-                            y / f64::from(picture.height())
-                        } else {
-                            0.5
+                        let Some(picture) = picture.upgrade() else {
+                            return;
                         };
-                        let line = source_line_for_page_position(
-                            index,
-                            page_count,
-                            within_page,
-                            source_line_count,
-                        );
-                        focus_source_line(&select, &source_path, line, &buffer, &editor);
+                        // Release the RefCell borrow before selecting a file: that
+                        // can synchronously compile or replace the editor buffer.
+                        let map = source_map.borrow().clone();
+                        let Some(map) = map else {
+                            status.set_text("Waiting for the updated preview…");
+                            return;
+                        };
+                        let Some((_, page_height)) = map.dimensions(index) else {
+                            return;
+                        };
+                        let Some((x, y)) = preview_point(
+                            f64::from(picture.width()),
+                            f64::from(picture.height()),
+                            aspect_ratio,
+                            page_height,
+                            x,
+                            y,
+                        ) else {
+                            return;
+                        };
+                        if let Some(location) = map.jump(index, x, y) {
+                            if file_label.text().as_str() != location.path {
+                                select(location.path.clone());
+                            }
+                            // Selection may be refused while resolving an external conflict.
+                            if file_label.text().as_str() != location.path {
+                                return;
+                            }
+                            if let Some(mut target) =
+                                buffer.iter_at_line(location.line.saturating_sub(1) as i32)
+                            {
+                                let available = target.chars_in_line().saturating_sub(1).max(0);
+                                target.forward_chars(
+                                    (location.column.saturating_sub(1) as i32).min(available),
+                                );
+                                buffer.place_cursor(&target);
+                                editor.scroll_to_iter(&mut target, 0.15, false, 0.0, 0.25);
+                                editor.grab_focus();
+                            }
+                        }
                     }
                 });
                 picture.add_controller(edit);
@@ -1542,7 +1586,54 @@ impl WorkspaceView {
         glib::idle_add_local_once(move || resize());
     }
 
+    pub fn revision(&self) -> u64 {
+        self.revision.get()
+    }
+
+    fn diagnostic_delay(&self) -> Duration {
+        self.last_edit.get().map_or(Duration::ZERO, |edit| {
+            Duration::from_millis(900).saturating_sub(edit.elapsed())
+        })
+    }
+
+    pub fn set_source_map(&self, source_map: Option<Arc<SourceMap>>) {
+        self.source_map.replace(source_map);
+    }
+
+    pub fn set_compile_error(&self, text: &str) {
+        if let Some(timer) = self.pending_error.borrow_mut().take() {
+            timer.remove();
+        }
+        let this = self.clone();
+        let text = text.to_string();
+        let timer = glib::timeout_add_local_once(self.diagnostic_delay(), move || {
+            this.pending_error.borrow_mut().take();
+            this.set_compile_status(&text);
+        });
+        self.pending_error.replace(Some(timer));
+    }
+
     pub fn set_diagnostics(&self, diagnostics: &[DiagnosticRow]) {
+        if let Some(timer) = self.pending_diagnostics.borrow_mut().take() {
+            timer.remove();
+        }
+        if let Some(timer) = self.pending_error.borrow_mut().take() {
+            timer.remove();
+        }
+        if diagnostics.is_empty() {
+            self.render_diagnostics(diagnostics);
+            return;
+        }
+        let this = self.clone();
+        let diagnostics = diagnostics.to_vec();
+        let timer = glib::timeout_add_local_once(self.diagnostic_delay(), move || {
+            this.pending_diagnostics.borrow_mut().take();
+            this.render_diagnostics(&diagnostics);
+        });
+        self.pending_diagnostics.replace(Some(timer));
+    }
+
+    fn render_diagnostics(&self, diagnostics: &[DiagnosticRow]) {
         while let Some(child) = self.diagnostics_list.first_child() {
             self.diagnostics_list.remove(&child);
         }
@@ -1931,33 +2022,27 @@ fn external_link_label(uri: &str) -> String {
     }
 }
 
-fn source_line_for_page_position(
-    page_index: usize,
-    page_count: usize,
-    within_page: f64,
-    source_line_count: usize,
-) -> usize {
-    if page_count == 0 || source_line_count <= 1 {
-        return 1;
+/// Account for GtkPicture's centered `Contain` sizing and cropped slide widths.
+fn preview_point(
+    width: f64,
+    height: f64,
+    aspect: f64,
+    page_height: f64,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    if width <= 0.0 || height <= 0.0 || aspect <= 0.0 {
+        return None;
     }
-    let page = page_index.min(page_count - 1) as f64;
-    let position = (page + within_page.clamp(0.0, 1.0)) / page_count as f64;
-    1 + (position * source_line_count.saturating_sub(1) as f64).round() as usize
-}
-
-fn focus_source_line(
-    select: &Rc<dyn Fn(String)>,
-    source_path: &str,
-    line: usize,
-    buffer: &sourceview5::Buffer,
-    editor: &sourceview5::View,
-) {
-    select(source_path.to_string());
-    if let Some(mut target) = buffer.iter_at_line(line.saturating_sub(1) as i32) {
-        buffer.place_cursor(&target);
-        editor.scroll_to_iter(&mut target, 0.15, false, 0.0, 0.25);
-        editor.grab_focus();
+    let drawn_height = height.min(width / aspect);
+    let drawn_width = drawn_height * aspect;
+    let x = x - (width - drawn_width) / 2.0;
+    let y = y - (height - drawn_height) / 2.0;
+    if x < 0.0 || y < 0.0 || x > drawn_width || y > drawn_height {
+        return None;
     }
+    let scale = page_height / drawn_height;
+    Some((x * scale, y * scale))
 }
 
 fn build_document_search_dialog(
@@ -2555,32 +2640,27 @@ fn build_search_dialog(
 mod tests {
     use super::{
         document_match_offsets, document_regex, extract_external_links, preview_dimensions,
-        preview_identity, reusable_preview_pages, should_uncomment_lines,
-        source_line_for_page_position, svg_aspect_ratio,
+        preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
+        svg_aspect_ratio,
     };
 
     #[test]
     fn preview_reuses_only_unchanged_pages_with_stable_source_mapping() {
-        let before = preview_identity(
-            &[Some("one".into()), Some("two".into())],
-            Some(("main.typ", 20)),
-        );
+        let before = preview_identity(&[Some("one".into()), Some("two".into())], Some("main.typ"));
         let after = preview_identity(
             &[Some("one".into()), Some("changed".into())],
-            Some(("main.typ", 20)),
+            Some("main.typ"),
         );
         assert_eq!(
             reusable_preview_pages(before.as_ref(), after.as_ref()),
             vec![true, false]
         );
-        let different_mapping = preview_identity(
-            &[Some("one".into()), Some("two".into())],
-            Some(("main.typ", 21)),
-        );
+        let different_mapping =
+            preview_identity(&[Some("one".into()), Some("two".into())], Some("other.typ"));
         assert!(reusable_preview_pages(before.as_ref(), different_mapping.as_ref()).is_empty());
         let additional_page = preview_identity(
             &[Some("one".into()), Some("two".into()), Some("three".into())],
-            Some(("main.typ", 20)),
+            Some("main.typ"),
         );
         assert!(reusable_preview_pages(before.as_ref(), additional_page.as_ref()).is_empty());
         assert!(reusable_preview_pages(None, after.as_ref()).is_empty());
@@ -2589,13 +2669,12 @@ mod tests {
     #[test]
     fn preview_reuse_requires_identical_content_order_and_source_mapping() {
         let pages = vec![Some("<svg>one</svg>".into()), Some("<svg>two</svg>".into())];
-        let first = preview_identity(&pages, Some(("main.typ", 20)));
-        assert_eq!(first, preview_identity(&pages, Some(("main.typ", 20))));
-        assert_ne!(first, preview_identity(&pages, Some(("main.typ", 21))));
-        assert_ne!(first, preview_identity(&pages, Some(("other.typ", 20))));
+        let first = preview_identity(&pages, Some("main.typ"));
+        assert_eq!(first, preview_identity(&pages, Some("main.typ")));
+        assert_ne!(first, preview_identity(&pages, Some("other.typ")));
         assert_ne!(first, preview_identity(&pages, None));
         let reversed = pages.into_iter().rev().collect::<Vec<_>>();
-        assert_ne!(first, preview_identity(&reversed, Some(("main.typ", 20))));
+        assert_ne!(first, preview_identity(&reversed, Some("main.typ")));
         assert!(preview_identity(&[None], None).is_none());
         assert_eq!(
             svg_aspect_ratio(r#"<svg><rect width="50" height="100"/></svg>"#),
@@ -2664,10 +2743,194 @@ mod tests {
     }
 
     #[test]
-    fn page_position_maps_across_the_source() {
-        assert_eq!(source_line_for_page_position(0, 3, 0.0, 30), 1);
-        assert_eq!(source_line_for_page_position(1, 3, 0.5, 30), 16);
-        assert_eq!(source_line_for_page_position(2, 3, 1.0, 30), 30);
-        assert_eq!(source_line_for_page_position(4, 0, 0.5, 30), 1);
+    fn clicks_account_for_letterboxing_zoom_and_cropped_pages() {
+        assert_eq!(
+            preview_point(800.0, 600.0, 2.0, 400.0, 200.0, 200.0),
+            Some((200.0, 100.0))
+        );
+        assert_eq!(preview_point(800.0, 600.0, 2.0, 400.0, 200.0, 50.0), None);
+        assert_eq!(
+            preview_point(400.0, 200.0, 2.0, 400.0, 100.0, 50.0),
+            Some((200.0, 100.0))
+        );
+        assert_eq!(preview_point(0.0, 0.0, 2.0, 400.0, 0.0, 0.0), None);
+    }
+    #[test]
+    #[ignore = "requires a display; run under xvfb-run with --test-threads=1"]
+    fn native_preview_clicks_and_diagnostic_idle_timing() {
+        use super::*;
+        use typsmthng_gtk::backend::{preview::PreviewCompiler, CompileOptions, Project};
+        adw::init().unwrap();
+        let application = gtk::Application::builder()
+            .application_id("dev.typsmthng.PreviewTest")
+            .build();
+        application.register(None::<&gio::Cancellable>).unwrap();
+        let window = gtk::ApplicationWindow::builder()
+            .application(&application)
+            .default_width(1200)
+            .default_height(800)
+            .build();
+        let noop: Rc<dyn Fn()> = Rc::new(|| {});
+        let path_noop: Rc<dyn Fn(String)> = Rc::new(|_| {});
+        let workspace = WorkspaceView::new(
+            &window,
+            WorkspaceCallbacks {
+                go_home: noop.clone(),
+                open_project: noop.clone(),
+                save: Rc::new(|_| true),
+                force_save: Rc::new(|_| true),
+                select_file: path_noop.clone(),
+                create_file: noop.clone(),
+                create_folder: noop.clone(),
+                import_files: noop.clone(),
+                drop_files: Rc::new(|_| {}),
+                move_path: Rc::new(|_| {}),
+                toggle_hidden: noop.clone(),
+                rename_path: path_noop.clone(),
+                duplicate_path: path_noop.clone(),
+                trash_path: path_noop.clone(),
+                reveal_path: path_noop.clone(),
+                open_external: path_noop.clone(),
+                preview_asset: path_noop.clone(),
+                check_update: noop.clone(),
+                export_pdf: noop.clone(),
+                export_project: noop.clone(),
+                present_single: noop.clone(),
+                present_dual: noop,
+                refresh_compile: path_noop,
+                search: Rc::new(|_, _, reply| reply(Vec::new())),
+                settings_changed: Rc::new(|_| {}),
+            },
+        );
+        window.set_child(Some(&workspace.root));
+        window.present();
+        let drive = |duration| {
+            let until = Instant::now() + duration;
+            let context = glib::MainContext::default();
+            while Instant::now() < until {
+                while context.pending() {
+                    context.iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let source = format!(
+            "#set page(width: 240pt, height: 180pt, margin: 20pt)\n{}$ a^2 + b^2 = c^2 $",
+            "// comment\n".repeat(25)
+        );
+        std::fs::write(dir.path().join("main.typ"), &source).unwrap();
+        let project = Project::open(dir.path()).unwrap();
+        let compiler = PreviewCompiler::default();
+        let options = CompileOptions {
+            ignore_system_fonts: true,
+            ..Default::default()
+        };
+        let preview = compiler
+            .compile(&project, "main.typ", &options)
+            .unwrap()
+            .artifact
+            .unwrap();
+        let map = preview.source_map.clone();
+        workspace.show_text_file("main.typ", &source);
+        let page = dir.path().join("page.svg");
+        std::fs::write(&page, &preview.pages[0].svg).unwrap();
+        workspace.set_source_map(Some(preview.source_map));
+        workspace.set_compiled_preview(std::slice::from_ref(&page), "main.typ");
+        drive(Duration::from_millis(100));
+        let picture = workspace.preview_pictures.borrow()[0].widget.clone();
+        let (x, y, location) = (20..100)
+            .flat_map(|y| (20..220).map(move |x| (x, y)))
+            .find_map(|(x, y)| {
+                map.jump(0, x as f64, y as f64)
+                    .map(|location| (x as f64, y as f64, location))
+            })
+            .expect("clickable formula");
+        assert_eq!(location.line, 27);
+        let height = f64::from(picture.height()).min(f64::from(picture.width()) / (240.0 / 180.0));
+        let widget_x =
+            (f64::from(picture.width()) - height * 240.0 / 180.0) / 2.0 + x * height / 180.0;
+        let widget_y = (f64::from(picture.height()) - height) / 2.0 + y * height / 180.0;
+        let controllers = picture.observe_controllers();
+        let click = (0..controllers.n_items())
+            .find_map(|index| {
+                controllers
+                    .item(index)?
+                    .downcast::<gtk::GestureClick>()
+                    .ok()
+            })
+            .unwrap();
+        click.emit_by_name::<()>("released", &[&1_i32, &widget_x, &widget_y]);
+        assert_eq!(
+            workspace
+                .buffer
+                .iter_at_mark(&workspace.buffer.get_insert())
+                .line(),
+            26
+        );
+        assert_eq!(
+            workspace
+                .buffer
+                .iter_at_mark(&workspace.buffer.get_insert())
+                .line_offset(),
+            location.column as i32 - 1
+        );
+
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.start_iter(), "// inserted\n");
+        assert!(workspace.source_map.borrow().is_none());
+        std::fs::write(dir.path().join("main.typ"), workspace.source_text()).unwrap();
+        let preview = compiler
+            .compile(&project, "main.typ", &options)
+            .unwrap()
+            .artifact
+            .unwrap();
+        workspace.set_source_map(Some(preview.source_map));
+        workspace.set_compiled_preview(std::slice::from_ref(&page), "main.typ");
+        assert_eq!(workspace.preview_pictures.borrow()[0].widget, picture);
+        click.emit_by_name::<()>("released", &[&1_i32, &widget_x, &widget_y]);
+        assert_eq!(
+            workspace
+                .buffer
+                .iter_at_mark(&workspace.buffer.get_insert())
+                .line(),
+            27
+        );
+
+        let errors = [DiagnosticRow {
+            severity: DiagnosticKind::Error,
+            path: "main.typ".into(),
+            line: Some(1),
+            column: Some(1),
+            message: "unfinished expression".into(),
+        }];
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), "\n#");
+        workspace.set_diagnostics(&errors);
+        workspace.set_compile_error("Compile error: unfinished expression");
+        drive(Duration::from_millis(450));
+        assert!(!workspace.diagnostics_revealer.reveals_child());
+        assert_ne!(
+            workspace.compile_label.text(),
+            "Compile error: unfinished expression"
+        );
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), "text");
+        workspace.set_diagnostics(&[]);
+        workspace.set_compile_status("Compiled");
+        drive(Duration::from_millis(950));
+        assert!(!workspace.diagnostics_revealer.reveals_child());
+        assert_eq!(workspace.compile_label.text(), "Compiled");
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), "(");
+        workspace.set_diagnostics(&errors);
+        drive(Duration::from_millis(950));
+        assert!(workspace.diagnostics_revealer.reveals_child());
+        workspace.cancel_pending_compile();
+        window.destroy();
     }
 }

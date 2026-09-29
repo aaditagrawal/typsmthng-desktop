@@ -17,6 +17,8 @@ use typsmthng_gtk::backend::{
     UpdateClient, UpdateStatus, UserSettings, WindowState as BackendWindowState,
 };
 
+use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
+
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
 use super::model::{resolve_startup_path, SearchMode, Theme, UiSettings};
 use super::presentation::PresentationController;
@@ -100,6 +102,7 @@ struct AppController {
     hidden_files: RefCell<bool>,
     render_cache: RefCell<Option<tempfile::TempDir>>,
     watcher: RefCell<Option<ExternalWatcher>>,
+    preview_compiler: PreviewCompiler,
     compile_generation: Cell<u64>,
     compile_in_flight: Cell<bool>,
     compile_cancellation: RefCell<Option<Arc<AtomicBool>>>,
@@ -121,6 +124,8 @@ struct PendingSearch {
 
 struct CompileFinished {
     generation: u64,
+    revision: u64,
+    source_map: Option<Arc<SourceMap>>,
     main: String,
     result: Result<(CompileOutput<PreparedPreview>, Vec<InlineNote>), String>,
 }
@@ -129,7 +134,6 @@ struct PreparedPreview {
     cache: tempfile::TempDir,
     paths: Vec<PathBuf>,
     rendered_notes: Vec<Option<PathBuf>>,
-    source_line_count: usize,
 }
 
 impl AppController {
@@ -226,6 +230,7 @@ impl AppController {
             hidden_files: RefCell::new(false),
             render_cache: RefCell::new(None),
             watcher: RefCell::new(None),
+            preview_compiler: PreviewCompiler::default(),
             compile_generation: Cell::new(0),
             compile_in_flight: Cell::new(false),
             compile_cancellation: RefCell::new(None),
@@ -1120,23 +1125,35 @@ impl AppController {
             }
             self.prepare_project_fonts(project.clone(), source.clone());
         }
+        let revision = workspace.revision();
+        let compiler = self.preview_compiler.clone();
         let notes_layout = self.settings.borrow().presentation_notes_layout.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn({
             let main = main.clone();
             move || {
-                let result = TypstTool::detect()
-                    .and_then(|tool| {
-                        let output = tool.compile_svg_with_options(&project, &main, &options)?;
-                        // Speaker-note queries are loaded only for presentation.
-                        // Ordinary editing runs a single compiler process.
-                        let notes = Vec::new();
-                        let output = prepare_preview(output, &notes_layout, &project, &main)?;
-                        Ok((output, notes))
+                let mut source_map = None;
+                let result = compiler
+                    .compile(&project, &main, &options)
+                    .and_then(|output| {
+                        let output = CompileOutput {
+                            artifact: output.artifact.map(|preview| {
+                                source_map = Some(preview.source_map);
+                                preview.pages
+                            }),
+                            diagnostics: output.diagnostics,
+                            stdout: output.stdout,
+                            stderr: output.stderr,
+                            elapsed: output.elapsed,
+                        };
+                        let output = prepare_preview(output, &notes_layout)?;
+                        Ok((output, Vec::new()))
                     })
                     .map_err(|error| error.to_string());
                 let _ = sender.send(CompileFinished {
                     generation,
+                    revision,
+                    source_map,
                     main,
                     result,
                 });
@@ -1224,10 +1241,13 @@ impl AppController {
         let Some(workspace) = self.workspace.borrow().as_ref().cloned() else {
             return;
         };
+        if finished.revision != workspace.revision() {
+            return;
+        }
         let (output, inline_notes) = match finished.result {
             Ok(output) => output,
             Err(error) => {
-                workspace.set_compile_status(&format!("Compile error: {error}"));
+                workspace.set_compile_error(&format!("Compile error: {error}"));
                 return;
             }
         };
@@ -1257,18 +1277,18 @@ impl AppController {
             } else {
                 output.stderr.trim()
             };
-            workspace.set_compile_status(&format!("Compile error: {detail}"));
+            workspace.set_compile_error(&format!("Compile error: {detail}"));
             return;
         };
         let PreparedPreview {
             cache,
             paths,
             rendered_notes,
-            source_line_count,
         } = preview;
         self.render_cache.replace(Some(cache));
         self.compiled_main.replace(Some(finished.main.clone()));
-        workspace.set_compiled_preview(&paths, &finished.main, source_line_count);
+        workspace.set_source_map(finished.source_map);
+        workspace.set_compiled_preview(&paths, &finished.main);
         workspace.set_compile_status(&format!("Compiled in {} ms", output.elapsed.as_millis()));
         if let Some(presentation) = self.presentation.borrow().as_ref() {
             let (inline_notes, sidecar_notes) =
@@ -1310,6 +1330,7 @@ impl AppController {
                         .as_ref()
                         .is_some_and(|project| project.root() == root);
                 if refresh {
+                    this.preview_compiler.invalidate_fonts();
                     if let Some(workspace) = this.workspace.borrow().as_ref() {
                         workspace.request_compile();
                     }
@@ -3142,7 +3163,7 @@ impl AppController {
         guide_section(
             &content,
             "PREVIEW AND DIAGNOSTICS",
-            "The right pane compiles through the native Typst CLI. Resize the split, zoom or fit pages, follow safe external links, and activate diagnostics to jump to their file and line. External edits are watched; conflicting unsaved changes must be resolved before saving.",
+            "The right pane uses a persistent Typst compiler. Click rendered text or formulas to jump to their source. Resize the split, zoom or fit pages, follow safe external links, and activate diagnostics to jump to their file and line. External edits are watched; conflicting unsaved changes must be resolved before saving.",
         );
         guide_section(
             &content,
@@ -3286,8 +3307,6 @@ fn find_css_widget(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
 fn prepare_preview(
     output: CompileOutput<Vec<SvgPage>>,
     notes_layout: &str,
-    project: &Project,
-    main: &str,
 ) -> typsmthng_gtk::backend::Result<CompileOutput<PreparedPreview>> {
     let artifact = output
         .artifact
@@ -3339,19 +3358,10 @@ fn prepare_preview(
                 });
                 rendered_notes.push(note_path);
             }
-            let source_line_count = project
-                .read_file(main)
-                .ok()
-                .and_then(|file| match file.content {
-                    FileContent::Text(source) => Some(source.lines().count().max(1)),
-                    FileContent::Binary(_) => None,
-                })
-                .unwrap_or(1);
             Ok(PreparedPreview {
                 cache,
                 paths,
                 rendered_notes,
-                source_line_count,
             })
         })
         .transpose()?;
@@ -3879,22 +3889,10 @@ mod tests {
 
     #[test]
     fn prepared_preview_splits_ultrawide_notes_and_owns_cache_lifetime() {
-        let directory = tempdir().unwrap();
-        let project = Project::create(directory.path(), "preview").unwrap();
-        project
-            .write_text_atomic("main.typ", "one\ntwo\nthree")
-            .unwrap();
-        let result = super::prepare_preview(
-            preview_output(&[(1200.0, 400.0)]),
-            "auto",
-            &project,
-            "main.typ",
-        )
-        .unwrap();
+        let result = super::prepare_preview(preview_output(&[(1200.0, 400.0)]), "auto").unwrap();
         assert_eq!(result.stdout, "compiler output");
         assert_eq!(result.elapsed.as_millis(), 12);
         let preview = result.artifact.unwrap();
-        assert_eq!(preview.source_line_count, 3);
         let slide = fs::read_to_string(&preview.paths[0]).unwrap();
         assert!(slide.contains(r#"viewBox="0.000 0 600.000 400.000""#));
         let notes = fs::read_to_string(preview.rendered_notes[0].as_ref().unwrap()).unwrap();
@@ -3907,18 +3905,15 @@ mod tests {
 
     #[test]
     fn prepared_preview_respects_mixed_pages_and_layout_overrides() {
-        let directory = tempdir().unwrap();
-        let project = Project::create(directory.path(), "preview").unwrap();
         for (layout, dimensions, split) in [
             ("auto", vec![(1200.0, 400.0), (600.0, 800.0)], false),
             ("whole", vec![(1200.0, 400.0)], false),
             ("right-half", vec![(1200.0, 800.0)], true),
         ] {
-            let preview =
-                super::prepare_preview(preview_output(&dimensions), layout, &project, "main.typ")
-                    .unwrap()
-                    .artifact
-                    .unwrap();
+            let preview = super::prepare_preview(preview_output(&dimensions), layout)
+                .unwrap()
+                .artifact
+                .unwrap();
             assert_eq!(preview.paths.len(), dimensions.len());
             assert!(preview
                 .rendered_notes
@@ -3928,15 +3923,13 @@ mod tests {
         let mut failed = preview_output(&[]);
         failed.artifact = None;
         failed.stderr = "compile failure".into();
-        let result = super::prepare_preview(failed, "auto", &project, "main.typ").unwrap();
+        let result = super::prepare_preview(failed, "auto").unwrap();
         assert!(result.artifact.is_none());
         assert_eq!(result.stderr, "compile failure");
     }
 
     #[test]
     fn forced_notes_split_preserves_pages_without_valid_dimensions() {
-        let directory = tempdir().unwrap();
-        let project = Project::create(directory.path(), "preview").unwrap();
         for dimensions in [
             (None, Some(400.0)),
             (Some(1200.0), None),
@@ -3948,7 +3941,7 @@ mod tests {
             page.width_points = dimensions.0;
             page.height_points = dimensions.1;
             let original = page.svg.clone();
-            let preview = super::prepare_preview(output, "right-half", &project, "main.typ")
+            let preview = super::prepare_preview(output, "right-half")
                 .unwrap()
                 .artifact
                 .unwrap();

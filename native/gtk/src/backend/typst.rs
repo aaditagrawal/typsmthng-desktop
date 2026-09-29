@@ -417,7 +417,7 @@ fn apply_options(command: &mut Command, options: &CompileOptions) {
     }
 }
 
-fn compile_entry(
+pub(super) fn compile_entry(
     project: &Project,
     main: &str,
     options: &CompileOptions,
