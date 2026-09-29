@@ -8,11 +8,13 @@ use std::time::Instant;
 
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime, Duration};
-use typst::introspection::PagedPosition;
-use typst::layout::{Abs, Point};
-use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::introspection::{Location, PagedPosition, Tag};
+use typst::layout::{Abs, Frame, FrameItem, Point, Rect};
+use typst::math::EquationElem;
+use typst::syntax::{FileId, RootedPath, Source, Span, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
-use typst::utils::LazyHash;
+use typst::utils::{LazyHash, Numeric};
+use typst::visualize::{FillRule, Geometry};
 use typst::{Library, LibraryExt, World};
 use typst_ide::{IdeWorld, Jump};
 use typst_kit::datetime::Time;
@@ -59,10 +61,17 @@ impl SourceMap {
             page: page.checked_add(1)?.try_into().ok()?,
             point: Point::new(Abs::pt(x), Abs::pt(y)),
         };
-        let Jump::File(id, offset) =
-            typst_ide::jump_from_click(&self.world, &self.document, &position)?
-        else {
-            return None;
+        let (id, offset) = match typst_ide::jump_from_click(&self.world, &self.document, &position)
+        {
+            Some(Jump::File(id, offset)) => (id, offset),
+            Some(_) => return None,
+            None => {
+                let frame = &self.document.pages().get(page)?.frame;
+                let span = equation_from_click(frame, position.point)?;
+                let id = span.id()?;
+                let source = self.world.sources.get(&id)?;
+                (id, source.find(span)?.offset())
+            }
         };
         // Package sources cannot be opened by the project editor.
         if *id.root() != VirtualRoot::Project {
@@ -77,6 +86,121 @@ impl SourceMap {
             column: source.text().get(start..offset)?.chars().count() + 1,
         })
     }
+}
+
+struct EquationBounds {
+    location: Location,
+    span: Span,
+    bounds: Option<Rect>,
+}
+
+/// Typst's glyph hit boxes miss descenders, tall math symbols and generated
+/// glyphs with detached spans. Equation tags provide a source for the whole
+/// formula, including the space between its glyphs and fraction strokes.
+fn equation_from_click(frame: &Frame, click: Point) -> Option<Span> {
+    // Prefer the deepest, frontmost equation and use its local coordinates.
+    for (pos, item) in frame.items().rev() {
+        if let FrameItem::Group(group) = item {
+            let local = click - *pos;
+            if group
+                .clip
+                .as_ref()
+                .is_some_and(|clip| !clip.contains(FillRule::NonZero, local))
+            {
+                continue;
+            }
+            let Some(inverse) = group.transform.invert() else {
+                continue;
+            };
+            if let Some(span) = equation_from_click(&group.frame, local.transform_inf(inverse)) {
+                return Some(span);
+            }
+        }
+    }
+
+    let mut equations: Vec<EquationBounds> = Vec::new();
+    let mut target = None;
+    for (pos, item) in frame.items() {
+        match item {
+            FrameItem::Tag(Tag::Start(elem, _)) if elem.is::<EquationElem>() => {
+                equations.push(EquationBounds {
+                    location: elem.location()?,
+                    span: elem.span(),
+                    bounds: None,
+                });
+            }
+            FrameItem::Tag(Tag::End(location, ..)) => {
+                if let Some(index) = equations.iter().rposition(|eq| eq.location == *location) {
+                    let equation = equations.remove(index);
+                    if equation
+                        .bounds
+                        .is_some_and(|bounds| contains(bounds, click))
+                    {
+                        target = Some(equation.span);
+                    }
+                }
+            }
+            _ if !equations.is_empty() => {
+                let bounds = match item {
+                    FrameItem::Text(text) => text.bbox(),
+                    FrameItem::Group(group) => {
+                        if group.transform.invert().is_none()
+                            || group
+                                .clip
+                                .as_ref()
+                                .is_some_and(|clip| !clip.contains(FillRule::NonZero, click - *pos))
+                        {
+                            continue;
+                        }
+                        let size = group.frame.size();
+                        let corners = [
+                            Point::zero(),
+                            Point::with_x(size.x),
+                            Point::with_y(size.y),
+                            size.to_point(),
+                        ]
+                        .map(|point| point.transform_inf(group.transform));
+                        Rect::new(
+                            corners.into_iter().reduce(Point::min)?,
+                            corners.into_iter().reduce(Point::max)?,
+                        )
+                    }
+                    FrameItem::Shape(shape, _) => match &shape.geometry {
+                        Geometry::Line(to) => Rect::new(Point::zero(), *to),
+                        Geometry::Rect(size) => Rect::new(Point::zero(), size.to_point()),
+                        Geometry::Curve(curve) => curve.bbox(shape.stroke.as_ref()),
+                    },
+                    FrameItem::Image(_, size, _) => Rect::new(Point::zero(), size.to_point()),
+                    FrameItem::Link(..) | FrameItem::Tag(..) => continue,
+                };
+                // Text bounding boxes use a Y-up font coordinate system.
+                let bounds = Rect::new(
+                    bounds.min.min(bounds.max) + *pos,
+                    bounds.min.max(bounds.max) + *pos,
+                );
+                if !bounds.min.is_finite() || !bounds.max.is_finite() {
+                    continue;
+                }
+                for equation in &mut equations {
+                    equation.bounds = Some(match equation.bounds {
+                        Some(previous) => {
+                            Rect::new(previous.min.min(bounds.min), previous.max.max(bounds.max))
+                        }
+                        None => bounds,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    target
+}
+
+fn contains(bounds: Rect, point: Point) -> bool {
+    bounds.min.x <= point.x
+        && point.x <= bounds.max.x
+        && bounds.min.y <= point.y
+        && point.y <= bounds.max.y
 }
 
 // Reuse the app's Rust TLS HTTP client instead of adding an OpenSSL dependency.
@@ -511,6 +635,137 @@ mod tests {
             compiled(&compiler, &other).pages,
             compiled(&compiler, &project).pages
         );
+    }
+
+    #[test]
+    fn source_jumps_cover_equation_bounds_and_generated_symbols() {
+        let (_dir, project) = fixture("#set page(width: 240pt, height: 240pt, margin: 20pt)\n$ integral_0^1 x dif x $\n$ frac(a, b) $\n$ sqrt(frac(a, b)) $\nInline $g+h$ text");
+        let preview = compiled(&PreviewCompiler::default(), &project);
+        // Coordinates use the pinned compiler's embedded fonts, without any
+        // system-font substitution. Every point misses Typst's own hit test.
+        for (x, y, line, column) in [
+            (102., 42., 2, 1),  // integral below its baseline
+            (106., 24., 2, 1),  // integral above the font-size hit box
+            (129., 32., 2, 1),  // generated differential d, with no source span
+            (120., 70., 3, 1),  // gap between numerator and fraction bar
+            (113., 120., 4, 1), // lower part of the radical
+            (52., 144., 5, 8),  // inline g descender
+            (55., 140., 5, 8),  // gap between inline math glyphs
+        ] {
+            let position = PagedPosition {
+                page: 1.try_into().unwrap(),
+                point: Point::new(Abs::pt(x), Abs::pt(y)),
+            };
+            assert_eq!(
+                typst_ide::jump_from_click(
+                    &preview.source_map.world,
+                    &preview.source_map.document,
+                    &position
+                ),
+                None,
+                "expected an upstream hit-test miss at {x}, {y}"
+            );
+            assert_eq!(
+                preview.source_map.jump(0, x, y),
+                Some(SourceLocation {
+                    path: "main.typ".into(),
+                    line,
+                    column,
+                })
+            );
+        }
+        // Exact glyph hits still use Typst's more precise source offsets.
+        assert_eq!(preview.source_map.jump(0, 120., 64.).unwrap().column, 8);
+        for (x, y) in [
+            (99., 37.),
+            (20., 50.),
+            (120., 90.),
+            (100., 67.),
+            (200., 200.),
+        ] {
+            assert_eq!(preview.source_map.jump(0, x, y), None);
+        }
+    }
+
+    fn integral_descender(frame: &Frame) -> Option<Point> {
+        for (pos, item) in frame.items() {
+            match item {
+                FrameItem::Text(text) if text.text == "∫" => {
+                    return Some(*pos + Point::new(Abs::pt(6.), Abs::pt(5.)));
+                }
+                FrameItem::Group(group) => {
+                    if let Some(point) = integral_descender(&group.frame) {
+                        return Some(point.transform_inf(group.transform) + *pos);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn equation_fallback_tracks_transformed_imports_and_source_only_edits() {
+        let (_dir, project) =
+            fixture("#set page(width: 240pt, height: 180pt, margin: 20pt)\n#include \"part.typ\"");
+        let source = "// included\n#rotate(20deg, reflow: true)[$ integral_0^1 x dif x $]";
+        fs::write(project.root().join("part.typ"), source).unwrap();
+        let compiler = PreviewCompiler::default();
+        let first = compiled(&compiler, &project);
+        let point = integral_descender(&first.source_map.document.pages()[0].frame).unwrap();
+        let expected = SourceLocation {
+            path: "part.typ".into(),
+            line: 2,
+            column: 30,
+        };
+        assert_eq!(
+            first.source_map.jump(0, point.x.to_pt(), point.y.to_pt()),
+            Some(expected)
+        );
+        fs::write(
+            project.root().join("part.typ"),
+            format!("// inserted\n{source}"),
+        )
+        .unwrap();
+        let second = compiled(&compiler, &project);
+        assert_eq!(first.pages, second.pages);
+        assert_eq!(
+            second
+                .source_map
+                .jump(0, point.x.to_pt(), point.y.to_pt())
+                .unwrap()
+                .line,
+            3
+        );
+        assert_eq!(
+            first
+                .source_map
+                .jump(0, point.x.to_pt(), point.y.to_pt())
+                .unwrap()
+                .line,
+            2
+        );
+    }
+
+    #[test]
+    fn equation_fallback_respects_clipping_and_empty_equations() {
+        let (_dir, project) = fixture("#set page(width: 240pt, height: 180pt, margin: 20pt)\n#box(width: 12pt, height: 12pt, clip: true)[$ integral_0^1 x dif x $]");
+        let compiler = PreviewCompiler::default();
+        let clipped = compiled(&compiler, &project);
+        let point = integral_descender(&clipped.source_map.document.pages()[0].frame).unwrap();
+        assert_eq!(
+            clipped.source_map.jump(0, point.x.to_pt(), point.y.to_pt()),
+            None
+        );
+        fs::write(
+            project.root().join("main.typ"),
+            "#set page(width: 240pt, height: 180pt, margin: 20pt)\n$ \" \" $",
+        )
+        .unwrap();
+        let empty = compiled(&compiler, &project);
+        for (x, y) in [(0., 0.), (100., 30.), (120., 50.), (220., 160.)] {
+            assert_eq!(empty.source_map.jump(0, x, y), None);
+        }
     }
 
     #[test]
