@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from artifacts import METADATA, asset_names, expected_metadata, main, verify
+from release_artifacts import METADATA, asset_names, expected_metadata, main, verify
 from tag import verify_tag
 
 spec = importlib.util.spec_from_file_location("find_candidate", Path(__file__).with_name("find-candidate.py"))
@@ -39,7 +39,7 @@ class ArtifactVerification(unittest.TestCase):
                  "--source-sha", self.args.source_sha, "--signing", self.args.signing,
                  "--repository", self.args.repository, "--run-id", self.args.run_id,
                  "--rust-toolchain", self.args.rust_toolchain]
-        with patch("sys.argv", ["artifacts.py", *flags]):
+        with patch("sys.argv", ["release_artifacts.py", *flags]):
             main()
         self.expected = expected_metadata(self.args)
 

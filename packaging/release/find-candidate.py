@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import time
 
-from artifacts import check_metadata, expected_metadata
+from release_artifacts import check_metadata, expected_metadata
 
 
 WORKFLOW = ".github/workflows/release-candidate.yml"

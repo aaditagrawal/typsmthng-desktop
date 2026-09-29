@@ -11,6 +11,7 @@ strip = "symbols"
 [profile.ci]
 inherits = "dev"
 debug = 0
+incremental = false
 # Match the Windows shipping binary's subsystem selection in main.rs.
 debug-assertions = false
 lto = "off"

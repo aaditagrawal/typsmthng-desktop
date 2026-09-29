@@ -141,7 +141,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Verify candidate metadata, exact assets, and every checksum
         run: |-
-          uv run --no-project .release-tools/packaging/release/artifacts.py verify artifacts --version "$VERSION" --source-sha "$SOURCE_SHA" --signing "$SIGNING" \
+          uv run --no-project .release-tools/packaging/release/release_artifacts.py verify artifacts --version "$VERSION" --source-sha "$SOURCE_SHA" --signing "$SIGNING" \
             --repository "$REPOSITORY" --run-id "$BUILD_RUN_ID" --rust-toolchain "$RUST_TOOLCHAIN"
       - name: Publish GitHub release
         if: github.event_name != 'workflow_dispatch' || inputs.publish

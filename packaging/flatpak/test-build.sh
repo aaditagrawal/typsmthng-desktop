@@ -6,13 +6,18 @@ unset SOURCE_REPOSITORY
 test_directory="$(mktemp -d)"
 trap 'rm -rf "$test_directory"' EXIT
 fixture_repository="$test_directory/repository with spaces"
-mkdir -p "$fixture_repository/packaging/flatpak" "$fixture_repository/native/gtk/tests/fixtures/demo" "$test_directory/bin"
+mkdir -p "$fixture_repository/packaging/flatpak" "$fixture_repository/native/gtk/tests/fixtures/demo" "$fixture_repository/native/gtk/src" "$test_directory/bin"
 cp "$script_directory/build.sh" "$script_directory/dev.typsmthng.Typsmthng.yml" "$fixture_repository/packaging/flatpak/"
 printf '[package]\nname = "typsmthng-gtk"\nversion = "0.1.3"\n' > "$fixture_repository/native/gtk/Cargo.toml"
 printf 'committed source\n' > "$fixture_repository/native/gtk/tests/fixtures/demo/main.typ"
+printf 'fn main() { print!("{}", include_str!("../tests/fixtures/demo/main.typ")); }\n' > "$fixture_repository/native/gtk/src/main.rs"
+export FLATPAK_TEST_REAL_CARGO
+FLATPAK_TEST_REAL_CARGO="$(command -v cargo)"
+"$FLATPAK_TEST_REAL_CARGO" generate-lockfile --offline --manifest-path "$fixture_repository/native/gtk/Cargo.toml"
 git -C "$fixture_repository" init -q
 git -C "$fixture_repository" add .
-git -C "$fixture_repository" -c user.name='Flatpak test' -c user.email='flatpak-test@example.invalid' commit -qm fixture
+GIT_AUTHOR_DATE='2020-01-02T00:00:00Z' GIT_COMMITTER_DATE='2020-01-02T00:00:00Z' \
+  git -C "$fixture_repository" -c user.name='Flatpak test' -c user.email='flatpak-test@example.invalid' commit -qm fixture
 printf 'uncommitted source\n' > "$fixture_repository/native/gtk/tests/fixtures/demo/main.typ"
 mkdir -p "$fixture_repository/target"
 printf 'host build output\n' > "$fixture_repository/target/host-only"
@@ -80,6 +85,30 @@ case "$(basename "$0")" in
     test "$(cat "$FLATPAK_TEST_CACHE/source/native/gtk/tests/fixtures/demo/main.typ")" = "$FLATPAK_TEST_EXPECTED_SOURCE"
     test ! -e "$FLATPAK_TEST_CACHE/source/target"
     test ! -e "$FLATPAK_TEST_CACHE/source/.git"
+    if [[ "${FLATPAK_TEST_RUN_CARGO:-0}" == 1 ]]; then
+      module_directory="$FLATPAK_TEST_CACHE/cargo-module"
+      rm -rf "$module_directory"
+      mkdir -p "$module_directory"
+      tar -xf "$FLATPAK_TEST_CACHE/source.tar" -C "$module_directory"
+      # Execute the generated preparation and Cargo commands against a real
+      # tiny crate, keeping source paths and target objects across commits.
+      while IFS= read -r build_command; do
+        case "$build_command" in
+          'find source -type f -exec touch {} +')
+            (cd "$module_directory" && bash -c "$build_command")
+            ;;
+          'cargo build --release --locked')
+            CARGO_TARGET_DIR="$FLATPAK_TEST_CACHE/target" "$FLATPAK_TEST_REAL_CARGO" build --release --locked --offline --quiet \
+              --manifest-path "$module_directory/source/native/gtk/Cargo.toml"
+            ;;
+        esac
+      done < <(jq -r '.modules[] | select(.name == "typsmthng") | ."build-commands"[]' "$manifest")
+      compiled_source="$("$FLATPAK_TEST_CACHE/target/release/typsmthng-gtk")"
+      if [[ "$compiled_source" != "$FLATPAK_TEST_EXPECTED_SOURCE" ]]; then
+        echo "Cached Cargo binary contains '$compiled_source', expected '$FLATPAK_TEST_EXPECTED_SOURCE'" >&2
+        exit 1
+      fi
+    fi
     [[ " $* " == *" --rebuild-on-sdk-change "* ]]
     mkdir -p "$FLATPAK_TEST_CACHE/.flatpak-builder/cache" "$FLATPAK_TEST_CACHE/.flatpak-builder/downloads"
     printf 'builder state\n' > "$FLATPAK_TEST_CACHE/.flatpak-builder/cache/sentinel"
@@ -125,7 +154,7 @@ export PATH="$test_directory/bin:$PATH"
 
 build_script="$fixture_repository/packaging/flatpak/build.sh"
 output_directory="$test_directory/output with spaces"
-"$build_script" 0.1.3 "$output_directory" "$FLATPAK_TEST_CACHE"
+FLATPAK_TEST_RUN_CARGO=1 "$build_script" 0.1.3 "$output_directory" "$FLATPAK_TEST_CACHE"
 test -s "$output_directory/typsmthng_0.1.3_linux_x64.flatpak"
 test ! -d "$(cat "$FLATPAK_TEST_CACHE/last-smoke-directory")"
 test "$(cat "$FLATPAK_USER_DIR/existing-app")" = 'developer app'
@@ -138,7 +167,7 @@ test -f "$FLATPAK_TEST_CACHE/target/object-sentinel"
 test -f "$FLATPAK_TEST_CACHE/.flatpak-builder/cache/sentinel"
 
 FLATPAK_TEST_SDK_COMMIT="$(printf 'b%.0s' {1..64})"
-"$build_script" 0.1.3 "$output_directory" "$FLATPAK_TEST_CACHE"
+FLATPAK_TEST_RUN_CARGO=1 "$build_script" 0.1.3 "$output_directory" "$FLATPAK_TEST_CACHE"
 test ! -e "$FLATPAK_TEST_CACHE/target/object-sentinel"
 test -f "$FLATPAK_TEST_CACHE/cargo/registry-sentinel"
 
@@ -159,9 +188,10 @@ test "$(cat "$FLATPAK_USER_DIR/existing-app")" = 'developer app'
 unset FLATPAK_TEST_SMOKE_FAIL
 printf 'changed committed source\n' > "$fixture_repository/native/gtk/tests/fixtures/demo/main.typ"
 git -C "$fixture_repository" add native/gtk/tests/fixtures/demo/main.typ
-git -C "$fixture_repository" -c user.name='Flatpak test' -c user.email='flatpak-test@example.invalid' commit -qm changed
+GIT_AUTHOR_DATE='2019-01-02T00:00:00Z' GIT_COMMITTER_DATE='2019-01-02T00:00:00Z' \
+  git -C "$fixture_repository" -c user.name='Flatpak test' -c user.email='flatpak-test@example.invalid' commit -qm changed
 FLATPAK_TEST_EXPECTED_SOURCE='changed committed source'
-"$build_script" 0.1.3 "$output_directory" "$FLATPAK_TEST_CACHE"
+FLATPAK_TEST_RUN_CARGO=1 "$build_script" 0.1.3 "$output_directory" "$FLATPAK_TEST_CACHE"
 test "$(sha256sum "$FLATPAK_TEST_CACHE/source.tar")" != "$first_checksum"
 
 # Release tooling may be newer than the selected source. Use the source

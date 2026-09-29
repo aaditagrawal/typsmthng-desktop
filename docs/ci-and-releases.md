@@ -1,7 +1,8 @@
 # CI and release packages
 
 Pull requests run the native quality checks and build macOS and both Windows
-variants with Cargo's `ci` profile. This profile removes debug symbols and LTO.
+variants with Cargo's `ci` profile. This profile removes debug symbols and LTO
+and disables incremental compilation.
 It disables debug assertions so the Windows windowed build selects the same
 subsystem as a shipping build. Linux quality checks retain the normal debug and
 test profiles. Shipping packages retain the optimized `release` profile.
@@ -56,6 +57,8 @@ its own SDK-compatible Cargo registry and target caches, with stable sandbox
 paths. A changed SDK commit invalidates compiled objects. Builder state and
 downloads persist between runs. Sources contain only the selected Git commit,
 without host build output or cache directories.
+When a module rebuilds, it refreshes extracted source timestamps before Cargo
+runs, so commits with older timestamps cannot reuse a stale application binary.
 
 The native package jobs retain their packaged application, installer, updater,
 signature, and disk-image checks. Flatpak retains both application and

@@ -61,6 +61,10 @@ printf '%s\n' "$sdk_commit" > "$cache_directory/target/.sdk-commit"
 
 # Keep sandbox paths stable across runners while storing registry downloads
 # and compiled objects outside module directories that builder recreates.
+# Git archives retain commit mtimes, which can precede cached Cargo outputs.
+# Refresh extracted workspace mtimes when the module builds so changed files
+# cannot reuse stale binaries. Cache hits skip this command and keep the
+# deterministic source archive unchanged.
 jq --arg archive "$source_archive" --arg checksum "$source_checksum" --arg cargo "$cache_directory/cargo" --arg target "$cache_directory/target" '
   (.modules[] | select(.name == "typsmthng")) |= (
     ."build-options".env.CARGO_HOME = "/run/build-cache/cargo"
@@ -69,10 +73,12 @@ jq --arg archive "$source_archive" --arg checksum "$source_checksum" --arg cargo
         "--bind-mount=/run/build-cache/cargo=" + $cargo,
         "--bind-mount=/run/build-cache/target=" + $target
       ]
-    | ."build-commands" |= map(
-        if . == "install -Dm755 source/target/release/typsmthng /app/bin/typsmthng"
-        then "install -Dm755 \"$CARGO_TARGET_DIR/release/typsmthng\" /app/bin/typsmthng"
-        else . end
+    | ."build-commands" |= (
+        ["find source -type f -exec touch {} +"] + map(
+          if . == "install -Dm755 source/target/release/typsmthng /app/bin/typsmthng"
+          then "install -Dm755 \"$CARGO_TARGET_DIR/release/typsmthng\" /app/bin/typsmthng"
+          else . end
+        )
       )
     | (.sources[] | select(.type == "dir" and .dest == "source")) = {
         type: "archive", path: $archive, sha256: $checksum,
