@@ -101,7 +101,10 @@ fn equation_from_click(frame: &Frame, click: Point) -> Option<Span> {
     // Prefer the deepest, frontmost equation and use its local coordinates.
     for (pos, item) in frame.items().rev() {
         if let FrameItem::Group(group) = item {
-            let local = click - *pos;
+            let Some(inverse) = group.transform.invert() else {
+                continue;
+            };
+            let local = (click - *pos).transform_inf(inverse);
             if group
                 .clip
                 .as_ref()
@@ -109,10 +112,7 @@ fn equation_from_click(frame: &Frame, click: Point) -> Option<Span> {
             {
                 continue;
             }
-            let Some(inverse) = group.transform.invert() else {
-                continue;
-            };
-            if let Some(span) = equation_from_click(&group.frame, local.transform_inf(inverse)) {
+            if let Some(span) = equation_from_click(&group.frame, local) {
                 return Some(span);
             }
         }
@@ -123,8 +123,11 @@ fn equation_from_click(frame: &Frame, click: Point) -> Option<Span> {
     for (pos, item) in frame.items() {
         match item {
             FrameItem::Tag(Tag::Start(elem, _)) if elem.is::<EquationElem>() => {
+                let Some(location) = elem.location() else {
+                    continue;
+                };
                 equations.push(EquationBounds {
-                    location: elem.location()?,
+                    location,
                     span: elem.span(),
                     bounds: None,
                 });
@@ -144,11 +147,14 @@ fn equation_from_click(frame: &Frame, click: Point) -> Option<Span> {
                 let bounds = match item {
                     FrameItem::Text(text) => text.bbox(),
                     FrameItem::Group(group) => {
-                        if group.transform.invert().is_none()
-                            || group
-                                .clip
-                                .as_ref()
-                                .is_some_and(|clip| !clip.contains(FillRule::NonZero, click - *pos))
+                        let Some(inverse) = group.transform.invert() else {
+                            continue;
+                        };
+                        let local = (click - *pos).transform_inf(inverse);
+                        if group
+                            .clip
+                            .as_ref()
+                            .is_some_and(|clip| !clip.contains(FillRule::NonZero, local))
                         {
                             continue;
                         }
@@ -745,6 +751,62 @@ mod tests {
                 .line,
             2
         );
+    }
+
+    #[test]
+    fn equation_fallback_checks_clips_in_transformed_group_coordinates() {
+        use typst::layout::{GroupItem, Size, Transform};
+        use typst::visualize::Curve;
+
+        let (_dir, project) = fixture(
+            "#set page(width: 240pt, height: 180pt, margin: 20pt)\n$ integral_0^1 x dif x $",
+        );
+        let preview = compiled(&PreviewCompiler::default(), &project);
+        let original = &preview.source_map.document.pages()[0].frame;
+        let expected = original
+            .items()
+            .find_map(|(_, item)| match item {
+                FrameItem::Tag(Tag::Start(elem, _)) if elem.is::<EquationElem>() => {
+                    Some(elem.span())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let offset = Point::new(Abs::pt(200.), Abs::pt(50.));
+        let click = Point::new(Abs::pt(102.), Abs::pt(42.)) + offset;
+
+        // Cover tags inside the transformed group and tags surrounding it.
+        for tags_inside in [true, false] {
+            let mut frame = if tags_inside {
+                let mut wrapper = Frame::soft(original.size());
+                wrapper.push(
+                    Point::zero(),
+                    FrameItem::Group(GroupItem::new(original.clone())),
+                );
+                wrapper
+            } else {
+                original.clone()
+            };
+            frame.retain(|item| {
+                if let FrameItem::Group(group) = item {
+                    group.transform = Transform::translate(offset.x, offset.y);
+                    group.clip = Some(Curve::rect(group.frame.size()));
+                }
+                true
+            });
+            assert_eq!(
+                equation_from_click(&frame, click),
+                Some(expected),
+                "tags_inside={tags_inside}"
+            );
+            frame.retain(|item| {
+                if let FrameItem::Group(group) = item {
+                    group.clip = Some(Curve::rect(Size::splat(Abs::pt(1.))));
+                }
+                true
+            });
+            assert_eq!(equation_from_click(&frame, click), None);
+        }
     }
 
     #[test]
