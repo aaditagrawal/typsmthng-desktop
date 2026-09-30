@@ -146,6 +146,7 @@ pub struct UserSettings {
     pub system_fonts_enabled: bool,
     pub google_fonts_enabled: bool,
     pub translucent: bool,
+    pub view_mode: String,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -166,6 +167,7 @@ impl Default for UserSettings {
             system_fonts_enabled: true,
             google_fonts_enabled: true,
             translucent: false,
+            view_mode: "split".into(),
             extra: BTreeMap::new(),
         }
     }

@@ -20,7 +20,9 @@ use typsmthng_gtk::backend::{
 use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
 
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
-use super::model::{effective_page_size, resolve_startup_path, SearchMode, Theme, UiSettings};
+use super::model::{
+    effective_page_size, resolve_startup_path, SearchMode, Theme, UiSettings, ViewMode,
+};
 use super::presentation::PresentationController;
 use super::workspace::{
     DiagnosticKind, DiagnosticRow, FileRow, SearchResultRow, WorkspaceCallbacks, WorkspaceView,
@@ -653,6 +655,7 @@ impl AppController {
                     })
                 },
                 settings_changed: callback1(&weak, Self::settings_changed),
+                preferences_changed: callback1(&weak, Self::preferences_changed),
             },
         );
         self.stack.add_named(&workspace.root, Some("workspace"));
@@ -731,6 +734,15 @@ impl AppController {
             }
         });
         self.add_action("cycle-theme", &["<Primary>j"], Self::cycle_theme);
+        self.add_action("view-source", &["<Primary>1"], |this| {
+            this.set_view_mode(ViewMode::Source)
+        });
+        self.add_action("view-split", &["<Primary>2"], |this| {
+            this.set_view_mode(ViewMode::Split)
+        });
+        self.add_action("view-preview", &["<Primary>3"], |this| {
+            this.set_view_mode(ViewMode::Preview)
+        });
         self.add_action("quit", &["<Primary>q"], |this| {
             this.window.close();
         });
@@ -2423,6 +2435,21 @@ impl AppController {
         }
     }
 
+    fn set_view_mode(&self, mode: ViewMode) {
+        if let Some(workspace) = self.workspace.borrow().as_ref() {
+            workspace.set_view_mode(mode);
+        }
+    }
+
+    fn preferences_changed(&self, settings: UiSettings) {
+        self.settings.replace(settings.clone());
+        if let Some(store) = &self.state_store {
+            if let Err(error) = store.save_settings(&settings_to_backend(&settings)) {
+                self.show_error("Could not save settings", &error.to_string());
+            }
+        }
+    }
+
     fn cycle_theme(&self) {
         let mut settings = self.settings.borrow().clone();
         settings.theme = match settings.theme {
@@ -3590,6 +3617,7 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         system_fonts: settings.system_fonts_enabled,
         google_fonts: settings.google_fonts_enabled,
         translucent: settings.translucent,
+        view_mode: ViewMode::from_id(&settings.view_mode),
     }
 }
 
@@ -3612,6 +3640,7 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         system_fonts_enabled: settings.system_fonts,
         google_fonts_enabled: settings.google_fonts,
         translucent: settings.translucent,
+        view_mode: settings.view_mode.id().into(),
         ..UserSettings::default()
     }
 }

@@ -13,7 +13,7 @@ use sourceview5::prelude::*;
 use url::Url;
 
 use super::home::icon_button;
-use super::model::{page_size_label, SearchMode, Theme, UiSettings, PAGE_SIZES};
+use super::model::{page_size_label, SearchMode, Theme, UiSettings, ViewMode, PAGE_SIZES};
 
 type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
 
@@ -186,6 +186,8 @@ pub struct WorkspaceCallbacks {
     pub refresh_compile: Rc<dyn Fn(String)>,
     pub search: SearchCallback,
     pub settings_changed: Rc<dyn Fn(UiSettings)>,
+    /// Persist layout preferences (zoom, panes) without recompiling.
+    pub preferences_changed: Rc<dyn Fn(UiSettings)>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +240,8 @@ pub struct WorkspaceView {
     callbacks: WorkspaceCallbacks,
     vim_context: Rc<RefCell<Option<sourceview5::VimIMContext>>>,
     vim_status: gtk::Label,
+    editor_pane: gtk::Widget,
+    view_buttons: [gtk::ToggleButton; 3],
 }
 
 impl WorkspaceView {
@@ -290,6 +294,27 @@ impl WorkspaceView {
         toolbar.append(&theme_button);
         toolbar.append(&search);
         toolbar.append(&file_label);
+        let view_switcher = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        view_switcher.add_css_class("linked");
+        view_switcher.add_css_class("view-switcher");
+        let view_buttons = ViewMode::ALL.map(|mode| {
+            let (icon, tooltip) = match mode {
+                ViewMode::Source => ("document-edit-symbolic", "Source only (Ctrl+1)"),
+                ViewMode::Split => ("view-dual-symbolic", "Source and preview (Ctrl+2)"),
+                ViewMode::Preview => ("document-print-preview-symbolic", "Preview only (Ctrl+3)"),
+            };
+            let button = gtk::ToggleButton::new();
+            button.set_icon_name(icon);
+            button.set_tooltip_text(Some(tooltip));
+            button.add_css_class("flat");
+            view_switcher.append(&button);
+            button
+        });
+        for button in &view_buttons[1..] {
+            button.set_group(Some(&view_buttons[0]));
+        }
+        view_buttons[1].set_active(true);
+        toolbar.append(&view_switcher);
         toolbar.append(&export);
         toolbar.append(&present);
         let more = gtk::MenuButton::new();
@@ -840,7 +865,12 @@ impl WorkspaceView {
             let select = callbacks.select_file.clone();
             let buffer = buffer.clone();
             let editor = editor.clone();
+            let reveal_source = view_buttons[1].clone();
+            let editor_pane = editor_scroll.clone();
             move |_, row| {
+                if !editor_pane.is_visible() {
+                    reveal_source.set_active(true);
+                }
                 let Some((path, line, column)) =
                     locations.borrow().get(row.index() as usize).cloned()
                 else {
@@ -971,6 +1001,33 @@ impl WorkspaceView {
             });
         }
 
+        for (mode, button) in ViewMode::ALL.into_iter().zip(&view_buttons) {
+            let settings = settings.clone();
+            let persist = callbacks.preferences_changed.clone();
+            let editor_pane = editor_scroll.clone();
+            let preview_panel = preview_panel.clone();
+            let editor = editor.clone();
+            button.connect_toggled(move |button| {
+                if !button.is_active() {
+                    return;
+                }
+                editor_pane.set_visible(mode.shows_source());
+                preview_panel.set_visible(mode.shows_preview());
+                if mode.shows_source() {
+                    editor.grab_focus();
+                }
+                let changed = {
+                    let mut settings = settings.borrow_mut();
+                    let changed = settings.view_mode != mode;
+                    settings.view_mode = mode;
+                    changed.then(|| settings.clone())
+                };
+                if let Some(settings) = changed {
+                    persist(settings);
+                }
+            });
+        }
+
         Self {
             root,
             editor,
@@ -1011,6 +1068,8 @@ impl WorkspaceView {
             callbacks,
             vim_context,
             vim_status,
+            editor_pane: editor_scroll.upcast(),
+            view_buttons,
         }
     }
 
@@ -1492,6 +1551,8 @@ impl WorkspaceView {
                     let picture = picture.downgrade();
                     let status = self.compile_label.clone();
                     let file_label = self.file_label.clone();
+                    let reveal_source = self.view_buttons[1].clone();
+                    let editor_pane = self.editor_pane.clone();
                     move |_, press_count, x, y| {
                         if press_count != 1 {
                             return;
@@ -1523,6 +1584,10 @@ impl WorkspaceView {
                             return;
                         };
                         if let Some(location) = map.jump(index, x, y) {
+                            // Jumping to source from a preview-only layout needs the editor.
+                            if !editor_pane.is_visible() {
+                                reveal_source.set_active(true);
+                            }
                             if file_label.text().as_str() != location.path {
                                 select(location.path.clone());
                             }
@@ -1745,7 +1810,18 @@ impl WorkspaceView {
             self.vim_context.replace(None);
         }
         self.vim_status.set_visible(settings.vim_mode);
+        let view_mode = settings.view_mode;
         self.settings.replace(settings);
+        self.set_view_mode(view_mode);
+    }
+
+    pub fn set_view_mode(&self, mode: ViewMode) {
+        if let Some(index) = ViewMode::ALL
+            .iter()
+            .position(|candidate| *candidate == mode)
+        {
+            self.view_buttons[index].set_active(true);
+        }
     }
 }
 
@@ -2416,10 +2492,10 @@ fn build_settings_dialog(
                     _ => "auto",
                 }
                 .into(),
-                presentation_notes_font_size: settings.borrow().presentation_notes_font_size,
                 system_fonts: system_fonts.is_active(),
                 google_fonts: google_fonts.is_active(),
                 translucent: translucent.is_active(),
+                ..settings.borrow().clone()
             };
             settings.replace(value.clone());
             on_changed(value);
@@ -2776,6 +2852,7 @@ mod tests {
                 refresh_compile: path_noop,
                 search: Rc::new(|_, _, reply| reply(Vec::new())),
                 settings_changed: Rc::new(|_| {}),
+                preferences_changed: Rc::new(|_| {}),
             },
         );
         window.set_child(Some(&workspace.root));
