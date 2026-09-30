@@ -1,5 +1,6 @@
 mod app;
 mod home;
+mod minimap;
 pub mod model;
 mod page_paintable;
 mod presentation;

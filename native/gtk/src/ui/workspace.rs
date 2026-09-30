@@ -13,6 +13,7 @@ use sourceview5::prelude::*;
 use url::Url;
 
 use super::home::icon_button;
+use super::minimap::HeadingMinimap;
 use super::model::{
     page_size_label, zoom_editor_font, SearchMode, Theme, UiSettings, ViewMode,
     DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, PAGE_SIZES,
@@ -156,6 +157,7 @@ struct SettingsDialog {
     line_numbers: gtk::Switch,
     wrapping: gtk::Switch,
     vim: gtk::Switch,
+    minimap: gtk::Switch,
     auto_compile: gtk::Switch,
     delay: gtk::SpinButton,
     theme: gtk::DropDown,
@@ -192,6 +194,7 @@ impl SettingsDialog {
         self.line_numbers.set_active(settings.line_numbers);
         self.wrapping.set_active(settings.line_wrapping);
         self.vim.set_active(settings.vim_mode);
+        self.minimap.set_active(settings.minimap);
         self.auto_compile.set_active(settings.auto_compile);
         self.delay.set_value(settings.compile_delay_ms as f64);
         self.theme.set_selected(match settings.theme {
@@ -325,6 +328,7 @@ pub struct WorkspaceView {
     editor_pane: gtk::Widget,
     view_buttons: [gtk::ToggleButton; 3],
     editor_badge: ZoomBadge,
+    minimap: gtk::Overlay,
 }
 
 impl WorkspaceView {
@@ -592,9 +596,15 @@ impl WorkspaceView {
         editor_scroll.set_vexpand(true);
         let editor_overlay = gtk::Overlay::new();
         editor_overlay.set_child(Some(&editor_scroll));
+        editor_overlay.set_hexpand(true);
         let editor_badge = ZoomBadge::new();
         editor_overlay.add_overlay(editor_badge.widget());
-        work_paned.set_start_child(Some(&editor_overlay));
+        let minimap = HeadingMinimap::new(&editor);
+        let editor_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        editor_row.add_css_class("editor-row");
+        editor_row.append(&editor_overlay);
+        editor_row.append(minimap.widget());
+        work_paned.set_start_child(Some(&editor_row));
 
         let preview_overlay = gtk::Overlay::new();
         preview_overlay.add_css_class("preview-pane");
@@ -1111,7 +1121,7 @@ impl WorkspaceView {
             let buffer = buffer.clone();
             let editor = editor.clone();
             let reveal_source = view_buttons[1].clone();
-            let editor_pane = editor_overlay.clone();
+            let editor_pane = editor_row.clone();
             move |_, row| {
                 if !editor_pane.is_visible() {
                     reveal_source.set_active(true);
@@ -1249,7 +1259,7 @@ impl WorkspaceView {
         for (mode, button) in ViewMode::ALL.into_iter().zip(&view_buttons) {
             let settings = settings.clone();
             let persist = callbacks.preferences_changed.clone();
-            let editor_pane = editor_overlay.clone();
+            let editor_pane = editor_row.clone();
             let preview_panel = preview_panel.clone();
             let editor = editor.clone();
             button.connect_toggled(move |button| {
@@ -1315,7 +1325,8 @@ impl WorkspaceView {
             callbacks,
             vim_context,
             vim_status,
-            editor_pane: editor_overlay.upcast(),
+            editor_pane: editor_row.upcast(),
+            minimap: minimap.widget().clone(),
             editor_badge,
             view_buttons,
         };
@@ -2116,9 +2127,20 @@ impl WorkspaceView {
             self.vim_context.replace(None);
         }
         self.vim_status.set_visible(settings.vim_mode);
+        self.minimap.set_visible(settings.minimap);
         let view_mode = settings.view_mode;
         self.settings.replace(settings);
         self.set_view_mode(view_mode);
+    }
+
+    pub fn toggle_minimap(&self) {
+        let settings = {
+            let mut settings = self.settings.borrow_mut();
+            settings.minimap = !settings.minimap;
+            settings.clone()
+        };
+        self.minimap.set_visible(settings.minimap);
+        (self.callbacks.preferences_changed)(settings);
     }
 
     pub fn set_view_mode(&self, mode: ViewMode) {
@@ -2771,6 +2793,13 @@ fn build_settings_dialog(
         "Wrap long source lines",
         &wrapping,
     ));
+    let minimap = gtk::Switch::new();
+    minimap.set_active(settings.borrow().minimap);
+    group.add(&setting_row(
+        "Heading minimap",
+        "Overview with section titles beside the source (Ctrl+Shift+M)",
+        &minimap,
+    ));
     let vim = gtk::Switch::new();
     vim.set_active(settings.borrow().vim_mode);
     group.add(&setting_row(
@@ -2873,6 +2902,7 @@ fn build_settings_dialog(
         line_numbers: line_numbers.clone(),
         wrapping: wrapping.clone(),
         vim: vim.clone(),
+        minimap: minimap.clone(),
         auto_compile: auto_compile.clone(),
         delay: delay.clone(),
         theme: theme.clone(),
@@ -2896,6 +2926,7 @@ fn build_settings_dialog(
                 line_numbers: line_numbers.is_active(),
                 line_wrapping: wrapping.is_active(),
                 vim_mode: vim.is_active(),
+                minimap: minimap.is_active(),
                 auto_compile: auto_compile.is_active(),
                 compile_delay_ms: delay.value() as u32,
                 page_size: (page_size.selected() as usize)

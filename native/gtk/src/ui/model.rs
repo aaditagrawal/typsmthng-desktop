@@ -64,6 +64,7 @@ pub struct UiSettings {
     pub google_fonts: bool,
     pub translucent: bool,
     pub view_mode: ViewMode,
+    pub minimap: bool,
 }
 
 impl Default for UiSettings {
@@ -83,6 +84,7 @@ impl Default for UiSettings {
             google_fonts: true,
             translucent: false,
             view_mode: ViewMode::Split,
+            minimap: true,
         }
     }
 }

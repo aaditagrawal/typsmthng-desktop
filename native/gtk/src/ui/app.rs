@@ -743,6 +743,11 @@ impl AppController {
         self.add_action("view-preview", &["<Primary>3"], |this| {
             this.set_view_mode(ViewMode::Preview)
         });
+        self.add_action("minimap", &["<Primary><Shift>m"], |this| {
+            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                workspace.toggle_minimap();
+            }
+        });
         self.add_action("quit", &["<Primary>q"], |this| {
             this.window.close();
         });
@@ -3618,6 +3623,7 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         google_fonts: settings.google_fonts_enabled,
         translucent: settings.translucent,
         view_mode: ViewMode::from_id(&settings.view_mode),
+        minimap: settings.minimap,
     }
 }
 
@@ -3641,6 +3647,7 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         google_fonts_enabled: settings.google_fonts,
         translucent: settings.translucent,
         view_mode: settings.view_mode.id().into(),
+        minimap: settings.minimap,
         ..UserSettings::default()
     }
 }
