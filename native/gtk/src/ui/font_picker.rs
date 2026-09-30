@@ -418,9 +418,9 @@ impl Inner {
     fn show_local_count(&self) {
         let shown = self.local_model.n_items();
         let message = if self.monospace.is_active() {
-            format!("{shown} monospace families")
+            format!("{shown} monospace {}", families(shown as usize))
         } else {
-            format!("{shown} installed families")
+            format!("{shown} installed {}", families(shown as usize))
         };
         self.set_status(&message, false);
     }
@@ -514,7 +514,7 @@ impl Inner {
             let shown = if total > rows.len() {
                 format!("Showing {} of {total} families", rows.len())
             } else {
-                format!("{total} families")
+                format!("{total} {}", families(total))
             };
             self.set_status(&shown, false);
         }
@@ -720,6 +720,14 @@ impl FamilyRow {
         self.check.set_opacity(if current { 1.0 } else { 0.0 });
         self.root
             .update_property(&[gtk::accessible::Property::Label(family)]);
+    }
+}
+
+fn families(count: usize) -> &'static str {
+    if count == 1 {
+        "family"
+    } else {
+        "families"
     }
 }
 
