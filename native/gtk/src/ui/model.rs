@@ -70,7 +70,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             theme: Theme::System,
-            font_size: 15,
+            font_size: DEFAULT_EDITOR_FONT_SIZE,
             auto_compile: true,
             compile_delay_ms: 100,
             line_wrapping: true,
@@ -280,6 +280,15 @@ impl SlideNumberBuffer {
     }
 }
 
+pub const DEFAULT_EDITOR_FONT_SIZE: u32 = 15;
+pub const EDITOR_FONT_SIZES: std::ops::RangeInclusive<u32> = 8..=40;
+
+/// Apply `steps` zoom notches to an editor font size in points.
+pub fn zoom_editor_font(size: u32, steps: i32) -> u32 {
+    size.saturating_add_signed(steps)
+        .clamp(*EDITOR_FONT_SIZES.start(), *EDITOR_FONT_SIZES.end())
+}
+
 /// Explicit page sizes offered in settings, in dropdown order after "Auto".
 pub const PAGE_SIZES: [(&str, &str); 8] = [
     ("a3", "A3"),
@@ -366,6 +375,14 @@ pub fn format_elapsed(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_zoom_steps_by_point_within_bounds() {
+        assert_eq!(zoom_editor_font(15, 1), 16);
+        assert_eq!(zoom_editor_font(15, -3), 12);
+        assert_eq!(zoom_editor_font(9, -5), 8);
+        assert_eq!(zoom_editor_font(39, 4), 40);
+    }
 
     #[test]
     fn view_mode_round_trips_and_defaults_to_split() {
