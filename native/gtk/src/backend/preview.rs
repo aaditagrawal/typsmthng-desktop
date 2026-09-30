@@ -9,12 +9,12 @@ use std::time::Instant;
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::introspection::{Location, PagedPosition, Tag};
-use typst::layout::{Abs, Frame, FrameItem, Point, Rect};
+use typst::layout::{Abs, Frame, FrameItem, Point, Rect, Transform};
 use typst::math::EquationElem;
 use typst::syntax::{FileId, RootedPath, Source, Span, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::{LazyHash, Numeric};
-use typst::visualize::{FillRule, Geometry};
+use typst::visualize::{FillRule, FixedStroke, Geometry, Paint};
 use typst::{Library, LibraryExt, World};
 use typst_ide::{IdeWorld, Jump};
 use typst_kit::datetime::Time;
@@ -45,12 +45,65 @@ pub struct SourceLocation {
 pub struct SourceMap {
     document: PagedDocument,
     world: Snapshot,
+    /// Per-page ink extents, measured on the compiler thread at build time.
+    content: Vec<PageContent>,
+    column: Option<(f64, f64)>,
+}
+
+/// Axis-aligned box in page points, origin at the page's top-left corner
+/// with y growing downwards: the same space as [`SourceMap::dimensions`]
+/// and [`SourceMap::jump`]. Always lies within the page.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContentBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 impl SourceMap {
+    fn new(document: PagedDocument, world: Snapshot) -> Self {
+        let content = document
+            .pages()
+            .iter()
+            .map(|page| PageContent::measure(&page.frame))
+            .collect::<Vec<_>>();
+        let column = content_column(&content);
+        Self {
+            document,
+            world,
+            content,
+            column,
+        }
+    }
+
     pub fn dimensions(&self, page: usize) -> Option<(f64, f64)> {
         let frame = &self.document.pages().get(page)?.frame;
         Some((frame.width().to_pt(), frame.height().to_pt()))
+    }
+
+    /// Union of everything visibly drawn on `page` (text ink, stroked shapes,
+    /// images, headers, footers, page backgrounds), clipped to the page.
+    /// `page.fill` is not part of the frame and never counts. `None` for a
+    /// blank page or an out-of-range index.
+    pub fn content_bounds(&self, page: usize) -> Option<ContentBounds> {
+        let bounds = self.content.get(page)?.bounds?;
+        Some(ContentBounds {
+            x: bounds.min.x.to_pt(),
+            y: bounds.min.y.to_pt(),
+            width: (bounds.max.x - bounds.min.x).to_pt(),
+            height: (bounds.max.y - bounds.min.y).to_pt(),
+        })
+    }
+
+    /// Document-wide horizontal content extent `(x_min, x_max)` in page
+    /// points from the left page edge, for a zoom that stays put while
+    /// scrolling. Measured over the pages that share the most common page
+    /// width (the UI renders every page at one widget width, so points on
+    /// differently sized pages would map to other pixels), ignoring
+    /// edge-to-edge backdrops. See [`content_column`].
+    pub fn content_column(&self) -> Option<(f64, f64)> {
+        self.column
     }
 
     pub fn jump(&self, page: usize, x: f64, y: f64) -> Option<SourceLocation> {
@@ -86,6 +139,193 @@ impl SourceMap {
             column: source.text().get(start..offset)?.chars().count() + 1,
         })
     }
+}
+
+/// Ink measured on one page. `column` omits backdrops; see [`content_column`].
+#[derive(Debug, Clone, Copy)]
+struct PageContent {
+    width: Abs,
+    bounds: Option<Rect>,
+    column: Option<(Abs, Abs)>,
+}
+
+impl PageContent {
+    fn measure(frame: &Frame) -> Self {
+        let page = Rect::from_pos_size(Point::zero(), frame.size());
+        // Anything this close to both paper edges is a backdrop, not text column.
+        let tolerance = frame.width() * 0.02;
+        let mut content = Self {
+            width: frame.width(),
+            bounds: None,
+            column: None,
+        };
+        visit_ink(
+            frame,
+            Transform::identity(),
+            page,
+            &mut |ink, backdrop_candidate| {
+                content.bounds = Some(union(content.bounds, ink));
+                let backdrop = backdrop_candidate
+                    && ink.min.x <= tolerance
+                    && ink.max.x >= frame.width() - tolerance;
+                if !backdrop {
+                    content.column = Some(match content.column {
+                        Some((min, max)) => (min.min(ink.min.x), max.max(ink.max.x)),
+                        None => (ink.min.x, ink.max.x),
+                    });
+                }
+            },
+        );
+        content
+    }
+}
+
+/// Column robustness: take the plain union of every page's horizontal ink,
+/// minus shapes and images that reach both paper edges (within 2% of the page
+/// width). We deliberately do not use a median or percentile: the point of the
+/// mode is that all content stays visible, and a percentile would silently crop
+/// the one page with a wide table, an overflowing equation or a margin note.
+/// The pages that do break a plain union are almost always decoration: page
+/// backgrounds, full-bleed cover images and edge-to-edge colour bands. By
+/// construction those touch both edges of the paper, which a margin-bounded
+/// text column never does, so dropping them keeps the column tight without
+/// hiding information. Text is never discarded, so a full-width page of text
+/// still (correctly) widens the column to the full page. Pages whose width
+/// differs from the most common page width (a landscape insert) are skipped,
+/// because their points map to different preview pixels. If every page is
+/// pure backdrop, fall back to their full ink bounds.
+fn content_column(pages: &[PageContent]) -> Option<(f64, f64)> {
+    let same_width = |a: Abs, b: Abs| (a - b).abs() < Abs::pt(0.01);
+    // `rev` makes ties resolve to the earliest page.
+    let width = pages
+        .iter()
+        .rev()
+        .filter(|page| page.bounds.is_some())
+        .max_by_key(|page| {
+            pages
+                .iter()
+                .filter(|other| other.bounds.is_some() && same_width(page.width, other.width))
+                .count()
+        })?
+        .width;
+    let pages = pages.iter().filter(|page| same_width(page.width, width));
+    let union = |extents: &mut dyn Iterator<Item = (Abs, Abs)>| {
+        extents.reduce(|(a_min, a_max), (b_min, b_max)| (a_min.min(b_min), a_max.max(b_max)))
+    };
+    let (min, max) = union(&mut pages.clone().filter_map(|page| page.column)).or_else(|| {
+        union(
+            &mut pages
+                .filter_map(|page| page.bounds)
+                .map(|bounds| (bounds.min.x, bounds.max.x)),
+        )
+    })?;
+    Some((min.to_pt(), max.to_pt()))
+}
+
+fn union(previous: Option<Rect>, next: Rect) -> Rect {
+    match previous {
+        Some(previous) => Rect::new(previous.min.min(next.min), previous.max.max(next.max)),
+        None => next,
+    }
+}
+
+fn is_visible(paint: &Paint) -> bool {
+    match paint {
+        Paint::Solid(color) => color.alpha().is_none_or(|alpha| alpha > 0.0),
+        Paint::Gradient(_) | Paint::Tiling(_) => true,
+    }
+}
+
+fn visible_stroke(stroke: Option<&FixedStroke>) -> Option<&FixedStroke> {
+    stroke.filter(|stroke| stroke.thickness > Abs::zero() && is_visible(&stroke.paint))
+}
+
+/// Calls `emit` with the page-space bounding box of every visible leaf item
+/// and whether it may be a backdrop (filled shapes and images, never text).
+/// `ts` maps `frame` coordinates to page coordinates; `clip` is the page-space
+/// bounding box of all enclosing clips. Rotated clips are approximated by
+/// their bounding box, which can only over-estimate the ink.
+fn visit_ink(frame: &Frame, ts: Transform, clip: Rect, emit: &mut dyn FnMut(Rect, bool)) {
+    for (pos, item) in frame.items() {
+        let local = ts.pre_concat(Transform::translate(pos.x, pos.y));
+        let (bounds, backdrop_candidate) = match item {
+            FrameItem::Group(group) => {
+                let ts = local.pre_concat(group.transform);
+                let clip = match &group.clip {
+                    Some(curve) => match intersect(clip, transformed(curve.bbox(None), ts)) {
+                        Some(clip) => clip,
+                        None => continue,
+                    },
+                    None => clip,
+                };
+                visit_ink(&group.frame, ts, clip, emit);
+                continue;
+            }
+            FrameItem::Text(text) => {
+                let stroke = visible_stroke(text.stroke.as_ref());
+                if !is_visible(&text.fill) && stroke.is_none() {
+                    continue;
+                }
+                // Ink boxes rather than advances: spaces have no ink, and
+                // italic overhangs and accents may leave the advance box.
+                let bbox = text.bbox();
+                let grow = stroke.map_or(Abs::zero(), |stroke| stroke.thickness / 2.0);
+                // Text bounding boxes use a Y-up font coordinate system.
+                let bbox = Rect::new(bbox.min.min(bbox.max), bbox.min.max(bbox.max));
+                (
+                    Rect::new(bbox.min - Point::splat(grow), bbox.max + Point::splat(grow)),
+                    false,
+                )
+            }
+            FrameItem::Shape(shape, _) => {
+                let stroke = visible_stroke(shape.stroke.as_ref());
+                let filled = shape.fill.as_ref().is_some_and(is_visible)
+                    && !matches!(shape.geometry, Geometry::Line(_));
+                if !filled && stroke.is_none() {
+                    continue;
+                }
+                let bbox = shape.geometry.bbox(stroke);
+                if stroke.is_none() && (bbox.size().x.is_zero() || bbox.size().y.is_zero()) {
+                    continue;
+                }
+                (bbox, true)
+            }
+            FrameItem::Image(_, size, _) => {
+                if size.x.is_zero() || size.y.is_zero() {
+                    continue;
+                }
+                (Rect::from_pos_size(Point::zero(), *size), true)
+            }
+            FrameItem::Link(..) | FrameItem::Tag(..) => continue,
+        };
+        if !bounds.min.is_finite() || !bounds.max.is_finite() {
+            continue;
+        }
+        if let Some(bounds) = intersect(transformed(bounds, local), clip) {
+            emit(bounds, backdrop_candidate);
+        }
+    }
+}
+
+fn transformed(rect: Rect, ts: Transform) -> Rect {
+    let corners = [
+        rect.min,
+        Point::new(rect.max.x, rect.min.y),
+        Point::new(rect.min.x, rect.max.y),
+        rect.max,
+    ]
+    .map(|point| point.transform_inf(ts));
+    Rect::new(
+        corners.into_iter().fold(corners[0], Point::min),
+        corners.into_iter().fold(corners[0], Point::max),
+    )
+}
+
+/// Overlap of two boxes, `None` when disjoint. Degenerate overlaps are kept
+/// so that axis-aligned hairlines still count.
+fn intersect(a: Rect, b: Rect) -> Option<Rect> {
+    let rect = Rect::new(a.min.max(b.min), a.max.min(b.max));
+    (rect.min.x <= rect.max.x && rect.min.y <= rect.max.y).then_some(rect)
 }
 
 struct EquationBounds {
@@ -467,7 +707,7 @@ impl Engine {
                 };
                 Some(Preview {
                     pages,
-                    source_map: Arc::new(SourceMap { document, world }),
+                    source_map: Arc::new(SourceMap::new(document, world)),
                 })
             }
             Ok(_) => return Err(BackendError::Process("Compilation superseded".into())),
@@ -898,6 +1138,174 @@ mod tests {
                 .unwrap()
                 .pages
         );
+    }
+
+    fn source_map(source: &str) -> Arc<SourceMap> {
+        let (_dir, project) = fixture(source);
+        compiled(&PreviewCompiler::default(), &project).source_map
+    }
+
+    fn assert_near(actual: f64, expected: f64, tolerance: f64, what: &str) {
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{what}: {actual} is not within {tolerance} of {expected}"
+        );
+    }
+
+    fn assert_bounds(actual: Option<ContentBounds>, expected: [f64; 4]) {
+        let actual = actual.expect("content bounds");
+        let actual = [actual.x, actual.y, actual.width, actual.height];
+        for (name, (actual, expected)) in ["x", "y", "width", "height"]
+            .into_iter()
+            .zip(actual.into_iter().zip(expected))
+        {
+            assert_near(actual, expected, 1e-6, name);
+        }
+    }
+
+    // Typst's default margin is 2.5/21 of the shorter page side.
+    const A4_WIDTH: f64 = 595.2755905511812;
+    const A4_MARGIN: f64 = 2.5 / 21.0 * A4_WIDTH;
+
+    #[test]
+    fn content_bounds_follow_default_a4_margins() {
+        let map = source_map("#set par(justify: true)\n#lorem(400)");
+        assert_near(A4_MARGIN, 70.866, 0.001, "default margin");
+        let bounds = map.content_bounds(0).unwrap();
+        // Ink starts at the margin; hanging punctuation may overhang slightly.
+        assert_near(bounds.x, A4_MARGIN, 0.5, "left");
+        assert_near(bounds.x + bounds.width, A4_WIDTH - A4_MARGIN, 2.0, "right");
+        assert_near(bounds.y, A4_MARGIN, 1.0, "top");
+        assert!(bounds.y + bounds.height < 841.89 - A4_MARGIN);
+        let (min, max) = map.content_column().unwrap();
+        assert_eq!(min, bounds.x);
+        assert_near(max, bounds.x + bounds.width, 1e-9, "column");
+        // Ragged text is narrower: the column follows ink, not the margins.
+        let ragged = source_map("#lorem(400)").content_column().unwrap();
+        assert_near(ragged.0, A4_MARGIN, 0.5, "ragged left");
+        assert!(ragged.1 < max && ragged.1 > A4_WIDTH - A4_MARGIN - 20.0);
+    }
+
+    #[test]
+    fn content_bounds_follow_custom_margins_and_ignore_page_fill() {
+        let source = "#set page(margin: 1in)\n#set par(justify: true)\n#lorem(300)";
+        let plain = source_map(source);
+        let (min, max) = plain.content_column().unwrap();
+        assert_near(min, 72.0, 0.5, "left");
+        assert_near(max, A4_WIDTH - 72.0, 2.0, "right");
+        let filled = source_map(&format!("#set page(fill: gray)\n{source}"));
+        assert_eq!(filled.content_bounds(0), plain.content_bounds(0));
+        assert_eq!(filled.content_column(), plain.content_column());
+    }
+
+    #[test]
+    fn content_bounds_include_wide_equations_clipped_to_the_page() {
+        let terms = (0..40).map(|i| format!("x_{i}")).collect::<Vec<_>>();
+        let map = source_map(&format!("Text\n$ {} $", terms.join(" + ")));
+        let bounds = map.content_bounds(0).unwrap();
+        // The overflowing equation spills into both margins, but never past
+        // the paper, which the SVG preview does not show.
+        assert_eq!(bounds.x, 0.0);
+        assert_near(bounds.width, A4_WIDTH, 1e-9, "width");
+        assert_eq!(map.content_column(), Some((0.0, A4_WIDTH)));
+    }
+
+    #[test]
+    fn page_number_only_and_empty_pages() {
+        let map = source_map("#set page(numbering: \"1\")\n#pagebreak()");
+        for page in 0..2 {
+            let bounds = map.content_bounds(page).unwrap();
+            assert_near(bounds.x + bounds.width / 2.0, A4_WIDTH / 2.0, 1.0, "center");
+            assert!(bounds.y > 841.89 - A4_MARGIN && bounds.width < 10.0);
+        }
+        let (min, max) = map.content_column().unwrap();
+        assert!(min > 290.0 && max < 305.0);
+
+        let map = source_map("");
+        assert_eq!(map.dimensions(0), Some((A4_WIDTH, 841.8897637795276)));
+        assert_eq!(map.content_bounds(0), None);
+        assert_eq!(map.content_bounds(1), None);
+        assert_eq!(map.content_column(), None);
+        // Invisible paint, missing strokes and whitespace are not content.
+        let map = source_map(
+            "#text(fill: rgb(0, 0, 0, 0))[Hidden] #h(1em) \n#rect(fill: none, stroke: none)\n#rect(width: 0pt, height: 10pt, fill: red, stroke: none)\n#line(length: 10pt, stroke: 0pt)\n#link(\"https://example.com\")[#h(5pt)]",
+        );
+        assert_eq!(map.content_bounds(0), None);
+        assert_eq!(map.content_column(), None);
+    }
+
+    #[test]
+    fn content_bounds_apply_group_transforms_clips_and_placement() {
+        let page = "#set page(width: 300pt, height: 300pt, margin: 50pt)\n";
+        // A 100x20 box rotated about its centre (150, 60) becomes 20x100.
+        let map = source_map(&format!(
+            "{page}#align(center, rotate(90deg, box(width: 100pt, height: 20pt, fill: black)))"
+        ));
+        assert_bounds(map.content_bounds(0), [140.0, 10.0, 20.0, 100.0]);
+        // Scaling about the centre (70, 70) of a 40pt square.
+        let map = source_map(&format!(
+            "{page}#scale(x: 200%, y: 50%, box(width: 40pt, height: 40pt, fill: black))"
+        ));
+        assert_bounds(map.content_bounds(0), [30.0, 60.0, 80.0, 20.0]);
+        // Clips bound oversized children; the stroke is half outside the rect.
+        let map = source_map(&format!(
+            "{page}#box(width: 20pt, height: 20pt, clip: true, rect(width: 200pt, height: 200pt, fill: black))\n#place(bottom + right, rect(width: 10pt, height: 10pt, stroke: 2pt))"
+        ));
+        assert_bounds(map.content_bounds(0), [50.0, 50.0, 201.0, 201.0]);
+        // Placed margin notes widen the column; so do stroked lines.
+        let map = source_map(&format!(
+            "{page}#place(dx: -40pt, box(width: 10pt, height: 10pt, fill: black))\n#line(length: 100pt, stroke: 4pt)"
+        ));
+        let bounds = map.content_bounds(0).unwrap();
+        assert_near(bounds.x, 10.0, 1e-6, "margin note");
+        assert_near(bounds.x + bounds.width, 150.0, 1e-6, "line end");
+        assert_eq!(map.content_column(), Some((bounds.x, 150.0)));
+    }
+
+    #[test]
+    fn two_column_layout_spans_both_columns() {
+        let map = source_map("#set page(columns: 2)\n#set par(justify: true)\n#lorem(900)");
+        let (min, max) = map.content_column().unwrap();
+        assert_near(min, A4_MARGIN, 0.5, "left");
+        assert_near(max, A4_WIDTH - A4_MARGIN, 2.0, "right");
+    }
+
+    #[test]
+    fn content_column_ignores_backdrops_and_differently_sized_pages() {
+        let (_dir, project) = fixture(concat!(
+            "#set par(justify: true)\n",
+            "#page(margin: 0pt, image(\"cover.svg\", width: 100%))\n",
+            "#page(background: rect(width: 100%, height: 100%, fill: gray))[#lorem(300)]\n",
+            "#page(flipped: true, margin: 5pt)[#lorem(300)]\n",
+            "#lorem(300)",
+        ));
+        fs::write(
+            project.root().join("cover.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10"/></svg>"#,
+        )
+        .unwrap();
+        let map = compiled(&PreviewCompiler::default(), &project).source_map;
+        // Page bounds still report everything drawn, backdrops included.
+        let cover = map.content_bounds(0).unwrap();
+        assert_eq!((cover.x, cover.width), (0.0, A4_WIDTH));
+        assert_bounds(
+            map.content_bounds(1),
+            [0.0, 0.0, A4_WIDTH, 841.8897637795276],
+        );
+        let wide = map.content_bounds(2).unwrap();
+        assert!(wide.width > 800.0);
+        // The column is the text column of the portrait text pages.
+        let (min, max) = map.content_column().unwrap();
+        assert_near(min, A4_MARGIN, 0.5, "left");
+        assert_near(max, A4_WIDTH - A4_MARGIN, 2.0, "right");
+
+        // A page of pure backdrop falls back to its full extent.
+        let map = source_map("#set page(background: rect(width: 100%, height: 100%, fill: gray))");
+        assert_eq!(map.content_column(), Some((0.0, A4_WIDTH)));
+        // Text is never treated as a backdrop, even edge to edge.
+        let map = source_map("#set page(margin: 2pt)\n#set par(justify: true)\n#lorem(900)");
+        let (min, max) = map.content_column().unwrap();
+        assert!(min < 3.0 && max > A4_WIDTH - 4.0);
     }
 
     #[test]
