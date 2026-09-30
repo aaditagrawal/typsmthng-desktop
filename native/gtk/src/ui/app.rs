@@ -9,6 +9,7 @@ use std::sync::{
 use std::time::Duration;
 
 use adw::prelude::*;
+use typsmthng_gtk::backend::app_fonts;
 use typsmthng_gtk::backend::{
     convert_latex_to_typst, export_project, export_projects, import_project, import_projects,
     ArchiveLimits, BackendError, CompileOptions, CompileOutput, DiagnosticSeverity, EntryKind,
@@ -21,7 +22,8 @@ use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
 
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
 use super::model::{
-    effective_page_size, resolve_startup_path, SearchMode, Theme, UiSettings, ViewMode,
+    effective_page_size, resolve_startup_path, ui_font_name, SearchMode, Theme, UiSettings,
+    ViewMode,
 };
 use super::presentation::PresentationController;
 use super::workspace::{
@@ -119,6 +121,8 @@ struct AppController {
     pending_compile_source: RefCell<Option<String>>,
     search_in_flight: Cell<bool>,
     pending_search: RefCell<Option<PendingSearch>>,
+    /// The desktop's `gtk-font-name`, captured before any override.
+    system_font: String,
 }
 
 type SearchReply = Rc<dyn Fn(Vec<SearchResultRow>)>;
@@ -255,6 +259,9 @@ impl AppController {
             pending_compile_source: RefCell::new(None),
             search_in_flight: Cell::new(false),
             pending_search: RefCell::new(None),
+            system_font: gtk::Settings::default()
+                .and_then(|settings| settings.gtk_font_name())
+                .map_or_else(|| "Sans 11".to_string(), |name| name.to_string()),
         });
         controller.self_weak.replace(Rc::downgrade(&controller));
 
@@ -301,6 +308,10 @@ impl AppController {
             .unwrap()
             .apply_settings(settings.clone());
         controller.apply_theme(settings.theme);
+        controller.apply_ui_font(&settings);
+        if !smoke {
+            controller.restore_downloaded_fonts(&settings);
+        }
         adw::StyleManager::default().connect_dark_notify({
             let weak = Rc::downgrade(&controller);
             move |_| {
@@ -2419,6 +2430,7 @@ impl AppController {
     fn settings_changed(&self, settings: UiSettings) {
         self.settings.replace(settings.clone());
         self.apply_theme(settings.theme);
+        self.apply_ui_font(&settings);
         if settings.translucent {
             self.window.add_css_class("translucent");
         } else {
@@ -2454,6 +2466,44 @@ impl AppController {
                 self.show_error("Could not save settings", &error.to_string());
             }
         }
+    }
+
+    fn apply_ui_font(&self, settings: &UiSettings) {
+        let Some(gtk_settings) = gtk::Settings::default() else {
+            return;
+        };
+        match ui_font_name(settings, &self.system_font) {
+            Some(name) => gtk_settings.set_gtk_font_name(Some(&name)),
+            None => gtk_settings.set_gtk_font_name(Some(&self.system_font)),
+        }
+    }
+
+    /// Google families chosen earlier live in the app's font cache, not the
+    /// system; register them again, then re-apply so widgets pick them up.
+    fn restore_downloaded_fonts(&self, settings: &UiSettings) {
+        let missing = [&settings.ui_font_family, &settings.editor_font_family]
+            .into_iter()
+            .filter(|family| !family.is_empty() && !app_fonts::family_is_available(family))
+            .cloned()
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return;
+        }
+        let weak = self.weak();
+        super::font_picker::ensure_registered_async(missing, move |results| {
+            for (family, result) in &results {
+                if let Err(error) = result {
+                    eprintln!("Could not restore font {family:?}: {error}");
+                }
+            }
+            if let Some(this) = weak.upgrade() {
+                let settings = this.settings.borrow().clone();
+                this.apply_ui_font(&settings);
+                if let Some(workspace) = this.workspace.borrow().as_ref() {
+                    workspace.apply_settings(settings);
+                }
+            }
+        });
     }
 
     fn cycle_theme(&self) {
@@ -3671,6 +3721,14 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         translucent: settings.translucent,
         view_mode: ViewMode::from_id(&settings.view_mode),
         minimap: settings.minimap,
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_line_height: settings.editor_line_height.clamp(100, 200),
+        editor_ligatures: settings.editor_ligatures,
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: match settings.ui_font_size {
+            0 => 0,
+            size => size.clamp(6, 32),
+        },
     }
 }
 
@@ -3695,6 +3753,11 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         translucent: settings.translucent,
         view_mode: settings.view_mode.id().into(),
         minimap: settings.minimap,
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_line_height: settings.editor_line_height,
+        editor_ligatures: settings.editor_ligatures,
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: settings.ui_font_size,
         ..UserSettings::default()
     }
 }

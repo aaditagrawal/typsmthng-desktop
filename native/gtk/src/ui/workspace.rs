@@ -12,11 +12,13 @@ use sha2::{Digest, Sha256};
 use sourceview5::prelude::*;
 use url::Url;
 
+use super::font_picker::{FontPicker, FontPickerKind};
 use super::home::icon_button;
 use super::minimap::HeadingMinimap;
 use super::model::{
-    page_size_label, zoom_editor_font, SearchMode, Theme, UiSettings, ViewMode,
-    DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, PAGE_SIZES,
+    editor_css, editor_line_padding, page_size_label, zoom_editor_font, SearchMode, Theme,
+    UiSettings, ViewMode, DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS,
+    PAGE_SIZES, UI_FONT_SIZES_OFFERED,
 };
 use super::zoom::{
     connect_ctrl_scroll, fit_text_crop, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
@@ -158,6 +160,13 @@ struct SettingsDialog {
     wrapping: gtk::Switch,
     vim: gtk::Switch,
     minimap: gtk::Switch,
+    ui_family: Rc<RefCell<String>>,
+    refresh_ui_family: Rc<dyn Fn()>,
+    ui_size: gtk::DropDown,
+    editor_family: Rc<RefCell<String>>,
+    refresh_editor_family: Rc<dyn Fn()>,
+    line_height: gtk::SpinButton,
+    ligatures: gtk::Switch,
     auto_compile: gtk::Switch,
     delay: gtk::SpinButton,
     theme: gtk::DropDown,
@@ -195,6 +204,16 @@ impl SettingsDialog {
         self.wrapping.set_active(settings.line_wrapping);
         self.vim.set_active(settings.vim_mode);
         self.minimap.set_active(settings.minimap);
+        self.ui_family.replace(settings.ui_font_family.clone());
+        (self.refresh_ui_family)();
+        self.ui_size
+            .set_selected(ui_font_size_index(settings.ui_font_size));
+        self.editor_family
+            .replace(settings.editor_font_family.clone());
+        (self.refresh_editor_family)();
+        self.line_height
+            .set_value(f64::from(settings.editor_line_height) / 100.0);
+        self.ligatures.set_active(settings.editor_ligatures);
         self.auto_compile.set_active(settings.auto_compile);
         self.delay.set_value(settings.compile_delay_ms as f64);
         self.theme.set_selected(match settings.theme {
@@ -2088,8 +2107,7 @@ impl WorkspaceView {
         };
         let scheme = preferred.iter().find_map(|id| schemes.scheme(id));
         self.buffer.set_style_scheme(scheme.as_ref());
-        self.editor_style
-            .load_from_string(&editor_css(settings.font_size));
+        apply_editor_typography(&self.editor, &self.editor_style, &settings);
         if settings.vim_mode && self.vim_context.borrow().is_none() {
             let vim = sourceview5::VimIMContext::new();
             vim.set_client_widget(Some(&self.editor));
@@ -2199,7 +2217,7 @@ impl EditorZoom {
             .editor
             .iter_at_location(visible.x(), visible.y())
             .map(|iter| self.editor.buffer().create_mark(None, &iter, true));
-        self.editor_style.load_from_string(&editor_css(size));
+        apply_editor_typography(&self.editor, &self.editor_style, &settings);
         if let Some(anchor) = anchor {
             let editor = self.editor.clone();
             glib::idle_add_local_once(move || {
@@ -2211,8 +2229,17 @@ impl EditorZoom {
     }
 }
 
-fn editor_css(font_size: u32) -> String {
-    format!(".typst-editor {{ font-size: {font_size}pt; }}")
+/// Apply font family, size, features and line spacing to the editor.
+fn apply_editor_typography(
+    editor: &sourceview5::View,
+    style: &gtk::CssProvider,
+    settings: &UiSettings,
+) {
+    style.load_from_string(&editor_css(settings));
+    let (above, below) = editor_line_padding(settings.font_size, settings.editor_line_height);
+    editor.set_pixels_above_lines(above);
+    editor.set_pixels_below_lines(below);
+    editor.set_pixels_inside_wrap(above + below);
 }
 
 // Tick callbacks run before allocation. The second frame sees the first
@@ -2768,17 +2795,6 @@ fn build_settings_dialog(
     rows.set_margin_end(22);
     let group = adw::PreferencesGroup::builder().title("Editor").build();
     rows.append(&group);
-    let font = gtk::SpinButton::with_range(
-        f64::from(*EDITOR_FONT_SIZES.start()),
-        f64::from(*EDITOR_FONT_SIZES.end()),
-        1.0,
-    );
-    font.set_value(settings.borrow().font_size as f64);
-    group.add(&setting_row(
-        "Editor font size",
-        "Ctrl+scroll or Ctrl+= / Ctrl+- in the editor",
-        &font,
-    ));
     let line_numbers = gtk::Switch::new();
     line_numbers.set_active(settings.borrow().line_numbers);
     group.add(&setting_row(
@@ -2806,6 +2822,87 @@ fn build_settings_dialog(
         "Vim input",
         "Use GtkSourceView's native Vim mode",
         &vim,
+    ));
+    let group = adw::PreferencesGroup::builder()
+        .title("Fonts")
+        .description("Installed families, or any Google Fonts family downloaded on demand")
+        .build();
+    rows.append(&group);
+    let FontFamilyRow {
+        row: ui_family_row,
+        family: ui_family,
+        refresh: refresh_ui_family,
+    } = font_family_row(
+        &dialog,
+        FontPickerKind::Ui,
+        "Interface font",
+        "Menus, panels and dialogs",
+        "System",
+        &settings.borrow().ui_font_family,
+    );
+    group.add(&ui_family_row);
+    let ui_size_labels = std::iter::once("Auto".to_string())
+        .chain(
+            UI_FONT_SIZES_OFFERED
+                .iter()
+                .map(|size| format!("{size} pt")),
+        )
+        .collect::<Vec<_>>();
+    let ui_size = gtk::DropDown::from_strings(
+        &ui_size_labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    ui_size.set_selected(ui_font_size_index(settings.borrow().ui_font_size));
+    group.add(&setting_row(
+        "Interface text size",
+        "Auto follows the desktop",
+        &ui_size,
+    ));
+    let FontFamilyRow {
+        row: editor_family_row,
+        family: editor_family,
+        refresh: refresh_editor_family,
+    } = font_family_row(
+        &dialog,
+        FontPickerKind::Editor,
+        "Editor font",
+        "Source text; monospace families are listed first",
+        "System monospace",
+        &settings.borrow().editor_font_family,
+    );
+    group.add(&editor_family_row);
+    let font = gtk::SpinButton::with_range(
+        f64::from(*EDITOR_FONT_SIZES.start()),
+        f64::from(*EDITOR_FONT_SIZES.end()),
+        1.0,
+    );
+    font.set_value(settings.borrow().font_size as f64);
+    group.add(&setting_row(
+        "Editor font size",
+        "Ctrl+scroll or Ctrl+= / Ctrl+- in the editor",
+        &font,
+    ));
+    // Shown as a multiplier (1.30) and stored as a percentage (130).
+    let line_height = gtk::SpinButton::with_range(
+        f64::from(*EDITOR_LINE_HEIGHTS.start()) / 100.0,
+        f64::from(*EDITOR_LINE_HEIGHTS.end()) / 100.0,
+        0.05,
+    );
+    line_height.set_digits(2);
+    line_height.set_value(f64::from(settings.borrow().editor_line_height) / 100.0);
+    group.add(&setting_row(
+        "Line spacing",
+        "Multiple of the font's line height",
+        &line_height,
+    ));
+    let ligatures = gtk::Switch::new();
+    ligatures.set_active(settings.borrow().editor_ligatures);
+    group.add(&setting_row(
+        "Ligatures",
+        "Join sequences like -> and != when the font supports it",
+        &ligatures,
     ));
     let group = adw::PreferencesGroup::builder()
         .title("Compilation")
@@ -2903,6 +3000,13 @@ fn build_settings_dialog(
         wrapping: wrapping.clone(),
         vim: vim.clone(),
         minimap: minimap.clone(),
+        ui_family: ui_family.clone(),
+        refresh_ui_family: refresh_ui_family.clone(),
+        ui_size: ui_size.clone(),
+        editor_family: editor_family.clone(),
+        refresh_editor_family: refresh_editor_family.clone(),
+        line_height: line_height.clone(),
+        ligatures: ligatures.clone(),
         auto_compile: auto_compile.clone(),
         delay: delay.clone(),
         theme: theme.clone(),
@@ -2927,6 +3031,15 @@ fn build_settings_dialog(
                 line_wrapping: wrapping.is_active(),
                 vim_mode: vim.is_active(),
                 minimap: minimap.is_active(),
+                ui_font_family: ui_family.borrow().clone(),
+                ui_font_size: (ui_size.selected() as usize)
+                    .checked_sub(1)
+                    .and_then(|index| UI_FONT_SIZES_OFFERED.get(index))
+                    .copied()
+                    .unwrap_or(0),
+                editor_font_family: editor_family.borrow().clone(),
+                editor_line_height: (line_height.value() * 100.0).round() as u32,
+                editor_ligatures: ligatures.is_active(),
                 auto_compile: auto_compile.is_active(),
                 compile_delay_ms: delay.value() as u32,
                 page_size: (page_size.selected() as usize)
@@ -2951,6 +3064,115 @@ fn build_settings_dialog(
         }
     });
     settings_dialog
+}
+
+struct FontFamilyRow {
+    row: adw::ActionRow,
+    /// The pending family; empty means the default.
+    family: Rc<RefCell<String>>,
+    refresh: Rc<dyn Fn()>,
+}
+
+/// A settings row that shows a font family in its own face and opens a
+/// picker.
+fn font_family_row(
+    dialog: &gtk::Window,
+    kind: FontPickerKind,
+    title: &str,
+    subtitle: &str,
+    default_label: &'static str,
+    initial: &str,
+) -> FontFamilyRow {
+    let family = Rc::new(RefCell::new(initial.to_string()));
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .activatable(true)
+        .build();
+    let choose = gtk::Button::new();
+    choose.add_css_class("flat");
+    choose.set_valign(gtk::Align::Center);
+    let label = gtk::Label::new(None);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_max_width_chars(18);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&label);
+    content.append(&gtk::Image::from_icon_name("go-next-symbolic"));
+    choose.set_child(Some(&content));
+    let reset = gtk::Button::from_icon_name("edit-clear-symbolic");
+    reset.add_css_class("flat");
+    reset.set_valign(gtk::Align::Center);
+    reset.set_tooltip_text(Some("Use the default font"));
+    row.add_suffix(&reset);
+    row.add_suffix(&choose);
+    row.set_activatable_widget(Some(&choose));
+    let refresh: Rc<dyn Fn()> = Rc::new({
+        let family = family.clone();
+        let label = label.clone();
+        let reset = reset.clone();
+        move || {
+            let family = family.borrow();
+            // Preview the family in its own face, like a type specimen.
+            let attributes = gtk::pango::AttrList::new();
+            if !family.is_empty() {
+                attributes.insert(gtk::pango::AttrFontDesc::new(
+                    &gtk::pango::FontDescription::from_string(&family),
+                ));
+            }
+            label.set_attributes(Some(&attributes));
+            label.set_text(if family.is_empty() {
+                default_label
+            } else {
+                &family
+            });
+            reset.set_visible(!family.is_empty());
+        }
+    });
+    refresh();
+    let picker = Rc::new(RefCell::new(None::<Rc<FontPicker>>));
+    choose.connect_clicked({
+        let dialog = dialog.clone();
+        let family = family.clone();
+        let refresh = refresh.clone();
+        move |_| {
+            let picker = picker
+                .borrow_mut()
+                .get_or_insert_with(|| {
+                    let picker = Rc::new(FontPicker::new(kind));
+                    let family = family.clone();
+                    let refresh = refresh.clone();
+                    picker.connect_selected(move |choice| {
+                        family.replace(choice.family.clone());
+                        refresh();
+                    });
+                    picker
+                })
+                .clone();
+            let current = family.borrow().clone();
+            picker.set_current((!current.is_empty()).then_some(current.as_str()));
+            picker.present(Some(&dialog));
+        }
+    });
+    reset.connect_clicked({
+        let family = family.clone();
+        let refresh = refresh.clone();
+        move |_| {
+            family.borrow_mut().clear();
+            refresh();
+        }
+    });
+    FontFamilyRow {
+        row,
+        family,
+        refresh,
+    }
+}
+
+fn ui_font_size_index(size: u32) -> u32 {
+    UI_FONT_SIZES_OFFERED
+        .iter()
+        .position(|candidate| *candidate == size)
+        .map_or(0, |index| index as u32 + 1)
 }
 
 fn page_size_index(id: &str) -> u32 {
