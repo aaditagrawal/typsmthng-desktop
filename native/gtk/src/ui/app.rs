@@ -3671,6 +3671,14 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         translucent: settings.translucent,
         view_mode: ViewMode::from_id(&settings.view_mode),
         minimap: settings.minimap,
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_line_height: settings.editor_line_height.clamp(100, 200),
+        editor_ligatures: settings.editor_ligatures,
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: match settings.ui_font_size {
+            0 => 0,
+            size => size.clamp(6, 32),
+        },
     }
 }
 
@@ -3695,6 +3703,11 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         translucent: settings.translucent,
         view_mode: settings.view_mode.id().into(),
         minimap: settings.minimap,
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_line_height: settings.editor_line_height,
+        editor_ligatures: settings.editor_ligatures,
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: settings.ui_font_size,
         ..UserSettings::default()
     }
 }

@@ -148,6 +148,11 @@ pub struct UserSettings {
     pub translucent: bool,
     pub view_mode: String,
     pub minimap: bool,
+    pub editor_font_family: String,
+    pub editor_line_height: u32,
+    pub editor_ligatures: bool,
+    pub ui_font_family: String,
+    pub ui_font_size: u32,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -170,6 +175,11 @@ impl Default for UserSettings {
             translucent: false,
             view_mode: "split".into(),
             minimap: true,
+            editor_font_family: String::new(),
+            editor_line_height: 100,
+            editor_ligatures: true,
+            ui_font_family: String::new(),
+            ui_font_size: 0,
             extra: BTreeMap::new(),
         }
     }
