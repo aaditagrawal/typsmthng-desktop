@@ -13,7 +13,7 @@ use sourceview5::prelude::*;
 use url::Url;
 
 use super::home::icon_button;
-use super::model::{page_size_label, SearchMode, Theme, UiSettings, PAGE_SIZES};
+use super::model::{page_size_label, SearchMode, Theme, UiSettings, ViewMode, PAGE_SIZES};
 
 type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
 
@@ -186,6 +186,8 @@ pub struct WorkspaceCallbacks {
     pub refresh_compile: Rc<dyn Fn(String)>,
     pub search: SearchCallback,
     pub settings_changed: Rc<dyn Fn(UiSettings)>,
+    /// Persist layout preferences (zoom, panes) without recompiling.
+    pub preferences_changed: Rc<dyn Fn(UiSettings)>,
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +292,27 @@ impl WorkspaceView {
         toolbar.append(&theme_button);
         toolbar.append(&search);
         toolbar.append(&file_label);
+        let view_switcher = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        view_switcher.add_css_class("linked");
+        view_switcher.add_css_class("view-switcher");
+        let view_buttons = ViewMode::ALL.map(|mode| {
+            let (icon, tooltip) = match mode {
+                ViewMode::Source => ("document-edit-symbolic", "Source only (Ctrl+1)"),
+                ViewMode::Split => ("view-dual-symbolic", "Source and preview (Ctrl+2)"),
+                ViewMode::Preview => ("document-print-preview-symbolic", "Preview only (Ctrl+3)"),
+            };
+            let button = gtk::ToggleButton::new();
+            button.set_icon_name(icon);
+            button.set_tooltip_text(Some(tooltip));
+            button.add_css_class("flat");
+            view_switcher.append(&button);
+            button
+        });
+        for button in &view_buttons[1..] {
+            button.set_group(Some(&view_buttons[0]));
+        }
+        view_buttons[1].set_active(true);
+        toolbar.append(&view_switcher);
         toolbar.append(&export);
         toolbar.append(&present);
         let more = gtk::MenuButton::new();
@@ -968,6 +991,33 @@ impl WorkspaceView {
                     ));
                 }
                 let _ = buffer;
+            });
+        }
+
+        for (mode, button) in ViewMode::ALL.into_iter().zip(&view_buttons) {
+            let settings = settings.clone();
+            let persist = callbacks.preferences_changed.clone();
+            let editor_pane = editor_scroll.clone();
+            let preview_panel = preview_panel.clone();
+            let editor = editor.clone();
+            button.connect_toggled(move |button| {
+                if !button.is_active() {
+                    return;
+                }
+                editor_pane.set_visible(mode.shows_source());
+                preview_panel.set_visible(mode.shows_preview());
+                if mode.shows_source() {
+                    editor.grab_focus();
+                }
+                let changed = {
+                    let mut settings = settings.borrow_mut();
+                    let changed = settings.view_mode != mode;
+                    settings.view_mode = mode;
+                    changed.then(|| settings.clone())
+                };
+                if let Some(settings) = changed {
+                    persist(settings);
+                }
             });
         }
 
@@ -1745,7 +1795,18 @@ impl WorkspaceView {
             self.vim_context.replace(None);
         }
         self.vim_status.set_visible(settings.vim_mode);
+        let view_mode = settings.view_mode;
         self.settings.replace(settings);
+        self.set_view_mode(view_mode);
+    }
+
+    pub fn set_view_mode(&self, mode: ViewMode) {
+        if let Some(index) = ViewMode::ALL
+            .iter()
+            .position(|candidate| *candidate == mode)
+        {
+            self.view_buttons[index].set_active(true);
+        }
     }
 }
 
@@ -2776,6 +2837,7 @@ mod tests {
                 refresh_compile: path_noop,
                 search: Rc::new(|_, _, reply| reply(Vec::new())),
                 settings_changed: Rc::new(|_| {}),
+                preferences_changed: Rc::new(|_| {}),
             },
         );
         window.set_child(Some(&workspace.root));

@@ -655,6 +655,7 @@ impl AppController {
                     })
                 },
                 settings_changed: callback1(&weak, Self::settings_changed),
+                preferences_changed: callback1(&weak, Self::preferences_changed),
             },
         );
         self.stack.add_named(&workspace.root, Some("workspace"));
@@ -733,6 +734,15 @@ impl AppController {
             }
         });
         self.add_action("cycle-theme", &["<Primary>j"], Self::cycle_theme);
+        self.add_action("view-source", &["<Primary>1"], |this| {
+            this.set_view_mode(ViewMode::Source)
+        });
+        self.add_action("view-split", &["<Primary>2"], |this| {
+            this.set_view_mode(ViewMode::Split)
+        });
+        self.add_action("view-preview", &["<Primary>3"], |this| {
+            this.set_view_mode(ViewMode::Preview)
+        });
         self.add_action("quit", &["<Primary>q"], |this| {
             this.window.close();
         });
@@ -2421,6 +2431,21 @@ impl AppController {
                 if workspace.editor.is_editable() {
                     self.compile(workspace.source_text());
                 }
+            }
+        }
+    }
+
+    fn set_view_mode(&self, mode: ViewMode) {
+        if let Some(workspace) = self.workspace.borrow().as_ref() {
+            workspace.set_view_mode(mode);
+        }
+    }
+
+    fn preferences_changed(&self, settings: UiSettings) {
+        self.settings.replace(settings.clone());
+        if let Some(store) = &self.state_store {
+            if let Err(error) = store.save_settings(&settings_to_backend(&settings)) {
+                self.show_error("Could not save settings", &error.to_string());
             }
         }
     }
