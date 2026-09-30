@@ -21,6 +21,8 @@ sed -e "s/@VERSION@/$version/g" -e "s/@MINIMUM_SYSTEM_VERSION@/$minimum_system_v
 iconutil -c icns "$repo_root/icon.iconset" -o "$contents/Resources/typsmthng.icns"
 mkdir -p "$contents/Resources/language-specs"
 cp "$repo_root/native/gtk/data/language-specs/typst.lang" "$contents/Resources/language-specs/"
+mkdir -p "$contents/Resources/styles"
+cp "$repo_root"/native/gtk/data/styles/*.xml "$contents/Resources/styles/"
 
 # Copy and rewrite the complete non-system dylib closure. GTK data resources
 # are copied separately because they are discovered at runtime, not by dyld.

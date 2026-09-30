@@ -60,6 +60,9 @@ foreach ($Relative in @("share\glib-2.0", "share\icons", "share\gtksourceview-5"
 $LanguageTarget = Join-Path $Stage "share\typsmthng\language-specs"
 New-Item -ItemType Directory -Force $LanguageTarget | Out-Null
 Copy-Item (Join-Path $RepoRoot "native\gtk\data\language-specs\typst.lang") $LanguageTarget
+$StylesTarget = Join-Path $Stage "share\typsmthng\styles"
+New-Item -ItemType Directory -Force $StylesTarget | Out-Null
+Copy-Item (Join-Path $RepoRoot "native\gtk\data\styles\*.xml") $StylesTarget
 Write-Host "Collected $($Seen.Count) runtime DLLs plus GTK data and Typst in $Stage"
 
 & "$PSScriptRoot\generate-file-manifest.ps1" -Stage $Stage

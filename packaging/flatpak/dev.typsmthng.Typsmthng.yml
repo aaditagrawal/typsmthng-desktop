@@ -43,6 +43,7 @@ modules:
       - install -Dm755 "$CARGO_TARGET_DIR/release/typsmthng" /app/bin/typsmthng
       - install -Dm755 typst-dist/typst /app/lib/typsmthng/typst
       - install -Dm644 source/native/gtk/data/language-specs/typst.lang /app/share/typsmthng/language-specs/typst.lang
+      - install -Dm644 -t /app/share/typsmthng/styles source/native/gtk/data/styles/typsmthng-light.xml source/native/gtk/data/styles/typsmthng-dark.xml
       - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.desktop /app/share/applications/dev.typsmthng.Typsmthng.desktop
       - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.metainfo.xml /app/share/metainfo/dev.typsmthng.Typsmthng.metainfo.xml
       - install -Dm644 source/icon.iconset/icon_512x512.png /app/share/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png

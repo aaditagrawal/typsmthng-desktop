@@ -12,6 +12,7 @@ install -Dm755 "$repo_root/target/release/typsmthng" "$stage/usr/bin/typsmthng"
 command -v typst >/dev/null 2>&1 || { echo "Typst 0.15.1 is required for packaging" >&2; exit 1; }
 install -Dm755 "$(command -v typst)" "$stage/usr/lib/typsmthng/typst"
 install -Dm644 "$repo_root/native/gtk/data/language-specs/typst.lang" "$stage/usr/share/typsmthng/language-specs/typst.lang"
+install -Dm644 -t "$stage/usr/share/typsmthng/styles" "$repo_root"/native/gtk/data/styles/*.xml
 install -Dm644 "$repo_root/packaging/linux/dev.typsmthng.Typsmthng.desktop" "$stage/usr/share/applications/dev.typsmthng.Typsmthng.desktop"
 install -Dm644 "$repo_root/packaging/linux/dev.typsmthng.Typsmthng.metainfo.xml" "$stage/usr/share/metainfo/dev.typsmthng.Typsmthng.metainfo.xml"
 install -Dm644 "$repo_root/icon.iconset/icon_512x512.png" "$stage/usr/share/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png"
