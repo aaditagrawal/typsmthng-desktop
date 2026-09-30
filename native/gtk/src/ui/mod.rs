@@ -5,6 +5,7 @@ mod page_paintable;
 mod presentation;
 mod smoke;
 mod workspace;
+mod zoom;
 
 pub use app::{launch, LaunchOptions};
 

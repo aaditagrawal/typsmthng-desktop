@@ -13,7 +13,11 @@ use sourceview5::prelude::*;
 use url::Url;
 
 use super::home::icon_button;
-use super::model::{page_size_label, SearchMode, Theme, UiSettings, ViewMode, PAGE_SIZES};
+use super::model::{
+    page_size_label, zoom_editor_font, SearchMode, Theme, UiSettings, ViewMode,
+    DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, PAGE_SIZES,
+};
+use super::zoom::{connect_ctrl_scroll, ZoomBadge};
 
 type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
 
@@ -242,6 +246,7 @@ pub struct WorkspaceView {
     vim_status: gtk::Label,
     editor_pane: gtk::Widget,
     view_buttons: [gtk::ToggleButton; 3],
+    editor_badge: ZoomBadge,
 }
 
 impl WorkspaceView {
@@ -503,7 +508,11 @@ impl WorkspaceView {
         editor_scroll.set_child(Some(&editor));
         editor_scroll.set_hexpand(true);
         editor_scroll.set_vexpand(true);
-        work_paned.set_start_child(Some(&editor_scroll));
+        let editor_overlay = gtk::Overlay::new();
+        editor_overlay.set_child(Some(&editor_scroll));
+        let editor_badge = ZoomBadge::new();
+        editor_overlay.add_overlay(editor_badge.widget());
+        work_paned.set_start_child(Some(&editor_overlay));
 
         let preview_overlay = gtk::Overlay::new();
         preview_overlay.add_css_class("preview-pane");
@@ -866,7 +875,7 @@ impl WorkspaceView {
             let buffer = buffer.clone();
             let editor = editor.clone();
             let reveal_source = view_buttons[1].clone();
-            let editor_pane = editor_scroll.clone();
+            let editor_pane = editor_overlay.clone();
             move |_, row| {
                 if !editor_pane.is_visible() {
                     reveal_source.set_active(true);
@@ -1004,7 +1013,7 @@ impl WorkspaceView {
         for (mode, button) in ViewMode::ALL.into_iter().zip(&view_buttons) {
             let settings = settings.clone();
             let persist = callbacks.preferences_changed.clone();
-            let editor_pane = editor_scroll.clone();
+            let editor_pane = editor_overlay.clone();
             let preview_panel = preview_panel.clone();
             let editor = editor.clone();
             button.connect_toggled(move |button| {
@@ -1028,7 +1037,7 @@ impl WorkspaceView {
             });
         }
 
-        Self {
+        let view = Self {
             root,
             editor,
             buffer,
@@ -1068,8 +1077,62 @@ impl WorkspaceView {
             callbacks,
             vim_context,
             vim_status,
-            editor_pane: editor_scroll.upcast(),
+            editor_pane: editor_overlay.upcast(),
+            editor_badge,
             view_buttons,
+        };
+        view.install_editor_zoom(&editor_scroll);
+        view
+    }
+
+    fn install_editor_zoom(&self, editor_scroll: &gtk::ScrolledWindow) {
+        let this = self.downgrade_zoom();
+        connect_ctrl_scroll(editor_scroll, {
+            let this = this.clone();
+            move |steps, _, _| {
+                if let Some(this) = this.upgrade() {
+                    let size = this.settings.borrow().font_size;
+                    this.set_editor_font_size(zoom_editor_font(size, steps));
+                }
+            }
+        });
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            use gtk::gdk::Key;
+            let modifiers = modifiers & gtk::accelerator_get_default_mod_mask();
+            // Shift is tolerated so Ctrl++ works on layouts where + is shifted.
+            if !modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                || modifiers.intersects(
+                    gtk::gdk::ModifierType::ALT_MASK | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+            {
+                return glib::Propagation::Proceed;
+            }
+            let Some(this) = this.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let size = this.settings.borrow().font_size;
+            let target = match key {
+                Key::plus | Key::equal | Key::KP_Add => zoom_editor_font(size, 1),
+                Key::minus | Key::underscore | Key::KP_Subtract => zoom_editor_font(size, -1),
+                Key::_0 | Key::KP_0 => DEFAULT_EDITOR_FONT_SIZE,
+                _ => return glib::Propagation::Proceed,
+            };
+            this.set_editor_font_size(target);
+            glib::Propagation::Stop
+        });
+        self.editor.add_controller(keys);
+    }
+
+    /// Controllers owned by child widgets must not keep the whole view alive.
+    fn downgrade_zoom(&self) -> WeakEditorZoom {
+        WeakEditorZoom {
+            editor: self.editor.downgrade(),
+            editor_style: self.editor_style.clone(),
+            settings: Rc::downgrade(&self.settings),
+            persist: self.callbacks.preferences_changed.clone(),
+            badge: self.editor_badge.clone(),
         }
     }
 
@@ -1769,10 +1832,8 @@ impl WorkspaceView {
                 .or_else(|| schemes.scheme("classic"))
         };
         self.buffer.set_style_scheme(scheme.as_ref());
-        self.editor_style.load_from_string(&format!(
-            ".typst-editor {{ font-size: {}pt; }}",
-            settings.font_size
-        ));
+        self.editor_style
+            .load_from_string(&editor_css(settings.font_size));
         if settings.vim_mode && self.vim_context.borrow().is_none() {
             let vim = sourceview5::VimIMContext::new();
             vim.set_client_widget(Some(&self.editor));
@@ -1823,6 +1884,68 @@ impl WorkspaceView {
             self.view_buttons[index].set_active(true);
         }
     }
+}
+
+#[derive(Clone)]
+struct WeakEditorZoom {
+    editor: glib::WeakRef<sourceview5::View>,
+    editor_style: gtk::CssProvider,
+    settings: std::rc::Weak<RefCell<UiSettings>>,
+    persist: Rc<dyn Fn(UiSettings)>,
+    badge: ZoomBadge,
+}
+
+struct EditorZoom {
+    editor: sourceview5::View,
+    editor_style: gtk::CssProvider,
+    settings: Rc<RefCell<UiSettings>>,
+    persist: Rc<dyn Fn(UiSettings)>,
+    badge: ZoomBadge,
+}
+
+impl WeakEditorZoom {
+    fn upgrade(&self) -> Option<EditorZoom> {
+        Some(EditorZoom {
+            editor: self.editor.upgrade()?,
+            editor_style: self.editor_style.clone(),
+            settings: self.settings.upgrade()?,
+            persist: self.persist.clone(),
+            badge: self.badge.clone(),
+        })
+    }
+}
+
+impl EditorZoom {
+    fn set_editor_font_size(&self, size: u32) {
+        self.badge.show(&format!("{size} pt"));
+        let settings = {
+            let mut settings = self.settings.borrow_mut();
+            if settings.font_size == size {
+                return;
+            }
+            settings.font_size = size;
+            settings.clone()
+        };
+        // Keep the first visible line in place while the text reflows.
+        let visible = self.editor.visible_rect();
+        let anchor = self
+            .editor
+            .iter_at_location(visible.x(), visible.y())
+            .map(|iter| self.editor.buffer().create_mark(None, &iter, true));
+        self.editor_style.load_from_string(&editor_css(size));
+        if let Some(anchor) = anchor {
+            let editor = self.editor.clone();
+            glib::idle_add_local_once(move || {
+                editor.scroll_to_mark(&anchor, 0.0, true, 0.0, 0.0);
+                editor.buffer().delete_mark(&anchor);
+            });
+        }
+        (self.persist)(settings);
+    }
+}
+
+fn editor_css(font_size: u32) -> String {
+    format!(".typst-editor {{ font-size: {font_size}pt; }}")
 }
 
 // Tick callbacks run before allocation. The second frame sees the first
@@ -2333,11 +2456,15 @@ fn build_settings_dialog(
     rows.set_margin_end(22);
     let group = adw::PreferencesGroup::builder().title("Editor").build();
     rows.append(&group);
-    let font = gtk::SpinButton::with_range(10.0, 28.0, 1.0);
+    let font = gtk::SpinButton::with_range(
+        f64::from(*EDITOR_FONT_SIZES.start()),
+        f64::from(*EDITOR_FONT_SIZES.end()),
+        1.0,
+    );
     font.set_value(settings.borrow().font_size as f64);
     group.add(&setting_row(
         "Editor font size",
-        "Points used by GtkSourceView",
+        "Ctrl+scroll or Ctrl+= / Ctrl+- in the editor",
         &font,
     ));
     let line_numbers = gtk::Switch::new();
