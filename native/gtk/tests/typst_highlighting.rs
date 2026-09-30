@@ -282,6 +282,89 @@ fn check_homework_fixture() {
     ]);
 }
 
+/// Headings stay headings after several repetitions of the homework body
+/// (fenced raw, escapes, nested block comments, `#let`, `RR^#k`, ...).
+fn check_repeated_fixture_headings() {
+    let fixture = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/homework/main.typ"),
+    )
+    .unwrap();
+    let body = &fixture[fixture.find("= Problem 1").unwrap()..];
+    let source: String = (1..=4)
+        .map(|round| {
+            body.replace("= Problem 1", &format!("= Problem {}", 2 * round - 1))
+                .replace("= Problem 2", &format!("= Problem {}", 2 * round))
+                .replace("Part 1(", &format!("Part {}(", 2 * round - 1))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let highlighted = Highlighted::new(&source);
+    let headings: Vec<&str> = source
+        .lines()
+        .filter(|line| line.starts_with('='))
+        .collect();
+    assert_eq!(headings.len(), 16);
+    let cases: Vec<(&str, usize, Option<&str>)> = headings
+        .iter()
+        .flat_map(|line| {
+            let text = line.find(' ').unwrap() + 1;
+            [
+                (*line, 0, Some("heading-marker")),
+                (*line, text, Some("heading")),
+                (*line, line.len() - 1, Some("heading")),
+            ]
+        })
+        .collect();
+    highlighted.assert_styles(&cases);
+}
+
+/// Unterminated inline constructs stop at a paragraph break instead of
+/// swallowing the rest of the document.
+fn check_unclosed_constructs_do_not_leak() {
+    let sample = r#"Unclosed `raw here
+continues on this line
+
+= After raw
+Unclosed $x + y
+still math
+
+= After math
+Escapes \$ and \* and \` stay text *bold* here.
+
+= After escapes
+Math $a < b$ and $x <y> z$ and $a<=b$ then <label> text.
+
+= After less-than
+#let s = "unclosed string
+#set text(size: 1pt)
+
+= After string
+"#;
+    let highlighted = Highlighted::new(sample);
+    highlighted.assert_styles(&[
+        ("raw here", 0, Some("raw")),
+        ("continues", 0, Some("raw")),
+        ("= After raw", 2, Some("heading")),
+        ("still math", 0, Some("math-symbol")),
+        ("= After math", 2, Some("heading")),
+        ("\\$ and", 0, Some("escape")),
+        ("\\* and", 1, Some("escape")),
+        ("\\` stay", 1, Some("escape")),
+        ("stay text", 0, None),
+        ("*bold*", 1, Some("strong")),
+        ("= After escapes", 2, Some("heading")),
+        ("< b$", 0, Some("math-operator")),
+        ("b$ and", 1, Some("math-delimiter")),
+        ("<y>", 0, Some("math-operator")),
+        ("<y>", 1, Some("math-variable")),
+        ("<=b", 0, Some("math-operator")),
+        ("<label>", 1, Some("label")),
+        ("= After less-than", 2, Some("heading")),
+        ("unclosed string", 0, Some("string")),
+        ("= After string", 2, Some("heading")),
+    ]);
+}
+
 fn check_bundled_schemes() {
     let schemes = sourceview5::StyleSchemeManager::new();
     schemes.append_search_path(data_dir("styles").to_str().unwrap());
@@ -320,5 +403,7 @@ fn typst_grammar_and_schemes() {
     sourceview5::init();
     check_typst_modes();
     check_homework_fixture();
+    check_repeated_fixture_headings();
+    check_unclosed_constructs_do_not_leak();
     check_bundled_schemes();
 }

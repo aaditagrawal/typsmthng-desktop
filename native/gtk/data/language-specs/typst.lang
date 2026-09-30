@@ -20,7 +20,8 @@
   GtkSourceView contexts are regex based, not a parser: expressions that end
   on a later line than they begin (for example a `#let` whose right-hand side
   continues without an open bracket) are highlighted up to the end of the
-  first line only.
+  first line only. Inline raw, math, strings, strong and emphasis also end at
+  a blank line, so an unterminated delimiter cannot restyle later headings.
 -->
 <language id="typst" name="Typst" version="2.0" _section="Markup">
   <metadata>
@@ -90,6 +91,10 @@
     <!-- Math identifiers: two or more letters/digits, no `_` or `-`. -->
     <define-regex id="math-ident">[\p{L}][\p{L}\p{N}]+</define-regex>
     <!-- `*` and `_` do not toggle strong/emph between two alphanumerics. -->
+    <!-- A blank line. Unterminated inline constructs (inline raw, math,
+         strings, strong, emph) stop here instead of swallowing the rest of
+         the document while the closing delimiter is still being typed. -->
+    <define-regex id="paragraph-break">^(?=[ \t]*$)</define-regex>
     <define-regex id="not-in-word">(?!(?&lt;=[\p{L}\p{N}].)[\p{L}\p{N}])</define-regex>
 
     <!-- ===== Shared ===== -->
@@ -119,7 +124,7 @@
 
     <context id="string" style-ref="string" class="string" class-disabled="no-spell-check">
       <start>"</start>
-      <end>"</end>
+      <end>"|\%{paragraph-break}</end>
       <include>
         <context id="string-escape" style-ref="string-escape">
           <match>\\(?:u\{[0-9A-Fa-f]*\}|.)</match>
@@ -139,7 +144,7 @@
 
     <context id="raw-inline" style-ref="raw" class="no-spell-check">
       <start>`</start>
-      <end>`</end>
+      <end>`|\%{paragraph-break}</end>
     </context>
 
     <context id="label" style-ref="label" class="no-spell-check">
@@ -321,7 +326,7 @@
 
     <context id="embed-string" style-ref="string" class="string" class-disabled="no-spell-check">
       <start>#"</start>
-      <end>"</end>
+      <end>"|\%{paragraph-break}</end>
       <include>
         <context ref="string-escape"/>
       </include>
@@ -355,7 +360,7 @@
 
     <context id="math-string" style-ref="math-string" class="string" class-disabled="no-spell-check">
       <start>"</start>
-      <end>"</end>
+      <end>"|\%{paragraph-break}</end>
       <include>
         <context ref="string-escape"/>
       </include>
@@ -422,7 +427,7 @@
 
     <context id="math" style-ref="math" class="no-spell-check">
       <start>\$</start>
-      <end>\$</end>
+      <end>\$|\%{paragraph-break}</end>
       <include>
         <context sub-pattern="0" where="start" style-ref="math-delimiter"/>
         <context sub-pattern="0" where="end" style-ref="math-delimiter"/>
@@ -498,7 +503,7 @@
          break, and never outlive an enclosing content block. -->
     <context id="strong" style-ref="strong" extend-parent="false">
       <start>\*\%{not-in-word}</start>
-      <end>\*\%{not-in-word}|^(?=[ \t]*$)</end>
+      <end>\*\%{not-in-word}|\%{paragraph-break}</end>
       <include>
         <context ref="emph"/>
         <context ref="inline-markup"/>
@@ -507,7 +512,7 @@
 
     <context id="emph" style-ref="emph" extend-parent="false">
       <start>_\%{not-in-word}</start>
-      <end>_\%{not-in-word}|^(?=[ \t]*$)</end>
+      <end>_\%{not-in-word}|\%{paragraph-break}</end>
       <include>
         <context ref="strong"/>
         <context ref="inline-markup"/>
