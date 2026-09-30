@@ -20,7 +20,9 @@ use typsmthng_gtk::backend::{
 use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
 
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
-use super::model::{effective_page_size, resolve_startup_path, SearchMode, Theme, UiSettings};
+use super::model::{
+    effective_page_size, resolve_startup_path, SearchMode, Theme, UiSettings, ViewMode,
+};
 use super::presentation::PresentationController;
 use super::workspace::{
     DiagnosticKind, DiagnosticRow, FileRow, SearchResultRow, WorkspaceCallbacks, WorkspaceView,
@@ -3590,6 +3592,7 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         system_fonts: settings.system_fonts_enabled,
         google_fonts: settings.google_fonts_enabled,
         translucent: settings.translucent,
+        view_mode: ViewMode::from_id(&settings.view_mode),
     }
 }
 
@@ -3612,6 +3615,7 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         system_fonts_enabled: settings.system_fonts,
         google_fonts_enabled: settings.google_fonts,
         translucent: settings.translucent,
+        view_mode: settings.view_mode.id().into(),
         ..UserSettings::default()
     }
 }

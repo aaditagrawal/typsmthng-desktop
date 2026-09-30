@@ -13,6 +13,41 @@ pub enum Theme {
     Dark,
 }
 
+/// Which workspace panes are visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Source,
+    Split,
+    Preview,
+}
+
+impl ViewMode {
+    pub const ALL: [ViewMode; 3] = [ViewMode::Source, ViewMode::Split, ViewMode::Preview];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            ViewMode::Source => "source",
+            ViewMode::Split => "split",
+            ViewMode::Preview => "preview",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.id() == id)
+            .unwrap_or(ViewMode::Split)
+    }
+
+    pub fn shows_source(self) -> bool {
+        self != ViewMode::Preview
+    }
+
+    pub fn shows_preview(self) -> bool {
+        self != ViewMode::Source
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiSettings {
     pub theme: Theme,
@@ -28,6 +63,7 @@ pub struct UiSettings {
     pub system_fonts: bool,
     pub google_fonts: bool,
     pub translucent: bool,
+    pub view_mode: ViewMode,
 }
 
 impl Default for UiSettings {
@@ -46,6 +82,7 @@ impl Default for UiSettings {
             system_fonts: true,
             google_fonts: true,
             translucent: false,
+            view_mode: ViewMode::Split,
         }
     }
 }
@@ -329,6 +366,16 @@ pub fn format_elapsed(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_mode_round_trips_and_defaults_to_split() {
+        for mode in ViewMode::ALL {
+            assert_eq!(ViewMode::from_id(mode.id()), mode);
+        }
+        assert_eq!(ViewMode::from_id("sideways"), ViewMode::Split);
+        assert!(!ViewMode::Preview.shows_source());
+        assert!(!ViewMode::Source.shows_preview());
+    }
 
     #[test]
     fn auto_page_size_follows_locale_paper() {
