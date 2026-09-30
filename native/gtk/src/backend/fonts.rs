@@ -13,8 +13,16 @@ use tempfile::NamedTempFile;
 use crate::backend::error::{BackendError, Result};
 use crate::backend::{EntryKind, FileContent, Project};
 
-/// Regular, italic, bold and bold italic: enough for GTK UI and editor text.
-const UI_VARIANTS: &str = "400,400italic,700,700italic";
+/// CSS2 style requests for GTK UI/editor use, most complete first. CSS2
+/// rejects styles a family lacks with HTTP 400, so fall back step by step.
+/// CSS2 (unlike the v1 API) names static instances of optical-size families
+/// correctly, e.g. "Bricolage Grotesque" rather than "... 96pt ExtraBold".
+const UI_STYLE_QUERIES: [&str; 4] = [
+    ":ital,wght@0,400;0,700;1,400;1,700",
+    ":wght@400;700",
+    ":ital@0;1",
+    "",
+];
 const GOOGLE_VARIANTS: &str = "100,100italic,200,200italic,300,300italic,400,400italic,500,500italic,600,600italic,700,700italic,800,800italic,900,900italic";
 static FAILED_FAMILIES: LazyLock<Mutex<HashMap<PathBuf, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -25,6 +33,9 @@ pub(crate) static FONT_HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
         .into()
 });
 const RETRY_DELAY: Duration = Duration::from_secs(60);
+/// Typst compiles wait on font downloads, so they keep the agent's short
+/// timeout. A user-initiated UI font download may take longer.
+const UI_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FONT_BYTES: u64 = 24 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -62,15 +73,9 @@ impl GoogleFontCache {
         &self.directory
     }
 
-    /// Font files already downloaded for `family`, without network access.
-    /// Prefers the full Typst variant set, then the UI style subset.
+    /// UI font files already downloaded for `family`, without network access.
     pub fn cached_family_files(&self, family: &str) -> Option<Vec<PathBuf>> {
-        [
-            self.family_manifest(family),
-            self.ui_family_manifest(family),
-        ]
-        .into_iter()
-        .find_map(|manifest| self.manifest_files(&manifest))
+        self.manifest_files(&self.ui_family_manifest(family.trim()))
     }
 
     /// Blocking: returns cached files for `family` or downloads its regular,
@@ -82,9 +87,29 @@ impl GoogleFontCache {
         }
         fs::create_dir_all(&self.directory)
             .map_err(|error| BackendError::io(&self.directory, error))?;
-        let urls =
-            self.download_family_variants(family, UI_VARIANTS, &self.ui_family_manifest(family))?;
-        Ok(urls.iter().map(|url| self.font_destination(url)).collect())
+        let encoded = url::form_urlencoded::byte_serialize(family.as_bytes()).collect::<String>();
+        let mut last_error = None;
+        for styles in UI_STYLE_QUERIES {
+            let css_url =
+                format!("https://fonts.googleapis.com/css2?family={encoded}{styles}&display=swap");
+            match fetch_css(&css_url, Some(UI_REQUEST_TIMEOUT)) {
+                Ok(css) => {
+                    let urls = self.download_family_css(
+                        family,
+                        &css,
+                        &self.ui_family_manifest(family),
+                        Some(UI_REQUEST_TIMEOUT),
+                    )?;
+                    return Ok(urls.iter().map(|url| self.font_destination(url)).collect());
+                }
+                // Unknown family, or a style this family does not have.
+                Err(ureq::Error::StatusCode(400)) => {
+                    last_error = Some(format!("Google Fonts has no family named {family}"));
+                }
+                Err(error) => return Err(BackendError::Network(error.to_string())),
+            }
+        }
+        Err(BackendError::Network(last_error.unwrap_or_default()))
     }
 
     /// Returns an existing cache without discovery, network access, or directory creation.
@@ -220,33 +245,27 @@ impl GoogleFontCache {
     }
 
     fn download_family(&self, family: &str) -> Result<()> {
-        self.download_family_variants(family, GOOGLE_VARIANTS, &self.family_manifest(family))
+        let encoded = url::form_urlencoded::byte_serialize(family.as_bytes()).collect::<String>();
+        let css_url = format!(
+            "https://fonts.googleapis.com/css?family={encoded}:{GOOGLE_VARIANTS}&display=swap"
+        );
+        let css =
+            fetch_css(&css_url, None).map_err(|error| BackendError::Network(error.to_string()))?;
+        self.download_family_css(family, &css, &self.family_manifest(family), None)
             .map(drop)
     }
 
-    fn download_family_variants(
+    /// Download every gstatic font in `css`, then record them in `manifest`.
+    fn download_family_css(
         &self,
         family: &str,
-        variants: &str,
+        css: &str,
         manifest: &Path,
+        timeout: Option<Duration>,
     ) -> Result<BTreeSet<String>> {
-        let encoded = url::form_urlencoded::byte_serialize(family.as_bytes()).collect::<String>();
-        let css_url =
-            format!("https://fonts.googleapis.com/css?family={encoded}:{variants}&display=swap");
-        let mut response = FONT_HTTP
-            .get(&css_url)
-            .header("User-Agent", "Mozilla/5.0 typsmthng/0.1")
-            .call()
-            .map_err(|error| BackendError::Network(error.to_string()))?;
-        let css = response
-            .body_mut()
-            .with_config()
-            .limit(512 * 1024)
-            .read_to_string()
-            .map_err(|error| BackendError::Network(error.to_string()))?;
         let urls = Regex::new(r"url\((https://fonts\.gstatic\.com/[^)]+)\)")
             .unwrap()
-            .captures_iter(&css)
+            .captures_iter(css)
             .filter_map(|capture| capture.get(1).map(|value| value.as_str().to_string()))
             .collect::<BTreeSet<_>>();
         if urls.is_empty() {
@@ -255,7 +274,7 @@ impl GoogleFontCache {
             )));
         }
         for url in &urls {
-            self.download_font(url)?;
+            self.download_font(url, timeout)?;
         }
         let mut temporary = NamedTempFile::new_in(&self.directory)
             .map_err(|error| BackendError::io(&self.directory, error))?;
@@ -277,13 +296,12 @@ impl GoogleFontCache {
         self.directory.join(format!("{hash}.{extension}"))
     }
 
-    fn download_font(&self, url: &str) -> Result<()> {
+    fn download_font(&self, url: &str, timeout: Option<Duration>) -> Result<()> {
         let destination = self.font_destination(url);
         if destination.is_file() {
             return Ok(());
         }
-        let mut response = FONT_HTTP
-            .get(url)
+        let mut response = with_timeout(FONT_HTTP.get(url), timeout)
             .header("User-Agent", "typsmthng-gtk")
             .call()
             .map_err(|error| BackendError::Network(error.to_string()))?;
@@ -303,6 +321,26 @@ impl GoogleFontCache {
             .map_err(|error| BackendError::io(&destination, error.error))?;
         Ok(())
     }
+}
+
+type Request = ureq::RequestBuilder<ureq::typestate::WithoutBody>;
+
+fn with_timeout(request: Request, timeout: Option<Duration>) -> Request {
+    match timeout {
+        Some(timeout) => request.config().timeout_global(Some(timeout)).build(),
+        None => request,
+    }
+}
+
+fn fetch_css(css_url: &str, timeout: Option<Duration>) -> std::result::Result<String, ureq::Error> {
+    // A non-browser agent makes Google serve TrueType rather than WOFF2.
+    with_timeout(FONT_HTTP.get(css_url), timeout)
+        .header("User-Agent", "Mozilla/5.0 typsmthng/0.1")
+        .call()?
+        .body_mut()
+        .with_config()
+        .limit(512 * 1024)
+        .read_to_string()
 }
 
 /// Reject names that would alter the CSS API query (`:` styles, `|` or `,`
@@ -521,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_family_files_prefer_full_cache_then_ui_subset() {
+    fn ui_family_files_come_from_the_ui_manifest_only() {
         let directory = tempfile::tempdir().unwrap();
         let cache = GoogleFontCache::with_directory(directory.path());
         assert!(cache.cached_family_files("Example").is_none());
@@ -537,17 +575,16 @@ mod tests {
             cache.ensure_family_files(" Example ").unwrap(),
             vec![cache.font_destination(ui_url)]
         );
+        // Typst's full v1 variant set is not reused: its static instances
+        // can carry names Pango does not match to the family.
         let full_url = "https://fonts.gstatic.com/full.ttf";
         fs::write(
-            cache.family_manifest("Example"),
+            cache.family_manifest("Other"),
             serde_json::to_vec(&[full_url]).unwrap(),
         )
         .unwrap();
         fs::write(cache.font_destination(full_url), b"font").unwrap();
-        assert_eq!(
-            cache.cached_family_files("Example").unwrap(),
-            vec![cache.font_destination(full_url)]
-        );
+        assert!(cache.cached_family_files("Other").is_none());
     }
 
     #[test]
