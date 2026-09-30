@@ -20,7 +20,7 @@ use typsmthng_gtk::backend::{
 use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
 
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
-use super::model::{resolve_startup_path, SearchMode, Theme, UiSettings};
+use super::model::{effective_page_size, resolve_startup_path, SearchMode, Theme, UiSettings};
 use super::presentation::PresentationController;
 use super::workspace::{
     DiagnosticKind, DiagnosticRow, FileRow, SearchResultRow, WorkspaceCallbacks, WorkspaceView,
@@ -1269,14 +1269,14 @@ impl AppController {
         let page_preamble = if owns_layout {
             None
         } else {
-            match settings.page_size.as_str() {
-                "a3" | "a4" | "a5" | "a6" | "us-letter" | "us-legal" | "iso-b5" => {
-                    Some(format!("#set page(paper: \"{}\")", settings.page_size))
-                }
+            let locale = super::locale_page_size();
+            match effective_page_size(&settings.page_size, locale) {
+                // Typst already defaults to A4; an implicit A4 needs no preamble.
+                "a4" if settings.page_size == "auto" => None,
                 "presentation-16-9" => {
                     Some("#set page(width: 13.333in, height: 7.5in)".to_string())
                 }
-                _ => None,
+                paper => Some(format!("#set page(paper: \"{paper}\")")),
             }
         };
         CompileOptions {

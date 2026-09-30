@@ -13,7 +13,7 @@ use sourceview5::prelude::*;
 use url::Url;
 
 use super::home::icon_button;
-use super::model::{SearchMode, Theme, UiSettings};
+use super::model::{page_size_label, SearchMode, Theme, UiSettings, PAGE_SIZES};
 
 type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
 
@@ -120,17 +120,7 @@ impl SettingsDialog {
             Theme::Dark => 2,
         });
         self.page_size
-            .set_selected(match settings.page_size.as_str() {
-                "a3" => 1,
-                "a4" => 2,
-                "a5" => 3,
-                "a6" => 4,
-                "us-letter" => 5,
-                "us-legal" => 6,
-                "iso-b5" => 7,
-                "presentation-16-9" => 8,
-                _ => 0,
-            });
+            .set_selected(page_size_index(&settings.page_size));
         self.notes_layout
             .set_selected(match settings.presentation_notes_layout.as_str() {
                 "right-half" => 1,
@@ -2324,32 +2314,15 @@ fn build_settings_dialog(
         "Native light or dark palette",
         &theme,
     ));
-    let page_size = gtk::DropDown::from_strings(&[
-        "Auto (A4)",
-        "A3",
-        "A4",
-        "A5",
-        "A6",
-        "US Letter",
-        "US Legal",
-        "ISO B5",
-        "Presentation 16:9",
-    ]);
-    let selected_page_size = match settings.borrow().page_size.as_str() {
-        "a3" => 1,
-        "a4" => 2,
-        "a5" => 3,
-        "a6" => 4,
-        "us-letter" => 5,
-        "us-legal" => 6,
-        "iso-b5" => 7,
-        "presentation-16-9" => 8,
-        _ => 0,
-    };
-    page_size.set_selected(selected_page_size);
+    let auto_label = format!("Auto ({})", page_size_label(super::locale_page_size()));
+    let page_size_labels = std::iter::once(auto_label.as_str())
+        .chain(PAGE_SIZES.iter().map(|(_, label)| *label))
+        .collect::<Vec<_>>();
+    let page_size = gtk::DropDown::from_strings(&page_size_labels);
+    page_size.set_selected(page_size_index(&settings.borrow().page_size));
     group.add(&setting_row(
         "Page size",
-        "Optional page preamble",
+        "Auto follows your region's paper; #set page overrides",
         &page_size,
     ));
     let notes_layout =
@@ -2432,18 +2405,11 @@ fn build_settings_dialog(
                 vim_mode: vim.is_active(),
                 auto_compile: auto_compile.is_active(),
                 compile_delay_ms: delay.value() as u32,
-                page_size: match page_size.selected() {
-                    1 => "a3",
-                    2 => "a4",
-                    3 => "a5",
-                    4 => "a6",
-                    5 => "us-letter",
-                    6 => "us-legal",
-                    7 => "iso-b5",
-                    8 => "presentation-16-9",
-                    _ => "auto",
-                }
-                .into(),
+                page_size: (page_size.selected() as usize)
+                    .checked_sub(1)
+                    .and_then(|index| PAGE_SIZES.get(index))
+                    .map_or("auto", |(id, _)| id)
+                    .into(),
                 presentation_notes_layout: match notes_layout.selected() {
                     1 => "right-half",
                     2 => "whole",
@@ -2461,6 +2427,13 @@ fn build_settings_dialog(
         }
     });
     settings_dialog
+}
+
+fn page_size_index(id: &str) -> u32 {
+    PAGE_SIZES
+        .iter()
+        .position(|(candidate, _)| *candidate == id)
+        .map_or(0, |index| index as u32 + 1)
 }
 
 fn setting_row(label: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> adw::ActionRow {
