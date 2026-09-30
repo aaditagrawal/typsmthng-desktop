@@ -6,3 +6,13 @@ resolver = "2"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# PR builds exercise native code and GTK without shipping optimization costs.
+[profile.ci]
+inherits = "dev"
+debug = 0
+incremental = false
+# Match the Windows shipping binary's subsystem selection in main.rs.
+debug-assertions = false
+lto = "off"
+codegen-units = 256
