@@ -2416,10 +2416,10 @@ fn build_settings_dialog(
                     _ => "auto",
                 }
                 .into(),
-                presentation_notes_font_size: settings.borrow().presentation_notes_font_size,
                 system_fonts: system_fonts.is_active(),
                 google_fonts: google_fonts.is_active(),
                 translucent: translucent.is_active(),
+                ..settings.borrow().clone()
             };
             settings.replace(value.clone());
             on_changed(value);
