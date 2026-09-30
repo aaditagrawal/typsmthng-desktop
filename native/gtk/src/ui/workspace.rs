@@ -1136,7 +1136,6 @@ impl WorkspaceView {
         }
     }
 
-
     pub fn set_project(&self, name: &str, files: &[FileRow]) {
         self.project_label.set_text(name);
         if self.file_rows.borrow().as_slice() == files {
