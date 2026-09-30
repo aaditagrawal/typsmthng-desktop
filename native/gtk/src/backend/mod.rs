@@ -1,7 +1,9 @@
 //! Cross-platform application backend.
 
+pub mod app_fonts;
 pub mod archive;
 pub mod error;
+pub mod font_catalog;
 pub mod fonts;
 pub mod latex;
 pub mod model;
@@ -15,10 +17,16 @@ pub mod update;
 pub mod update_install;
 pub mod watcher;
 
+pub use app_fonts::{
+    ensure_registered, family_is_available, list_local_families, register_app_font_files,
+};
 pub use archive::{
     export_project, export_projects, import_project, import_projects, ArchiveLimits,
 };
 pub use error::{BackendError, Result};
+pub use font_catalog::{
+    search_catalog, CatalogOrigin, FontCatalog, FontCategory, GoogleFontFamily,
+};
 pub use fonts::{extract_typst_font_families, GoogleFontCache};
 pub use latex::{convert_latex_to_typst, ConversionMetadata, ConversionResult, ConversionWarning};
 pub use model::*;

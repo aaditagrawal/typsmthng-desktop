@@ -1,4 +1,5 @@
 mod app;
+mod font_picker;
 mod home;
 mod minimap;
 pub mod model;

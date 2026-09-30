@@ -446,6 +446,7 @@ impl AppController {
         } else if options.smoke_test {
             match std::env::var("TYPSMTHNG_SMOKE_VIEW").as_deref() {
                 Ok("settings") => controller.show_settings(),
+                Ok("font-picker") => controller.show_font_picker_smoke(),
                 Ok("templates") => controller.create_from_template(),
                 Ok("import") => controller.show_import_options(),
                 Ok("name") => controller.prompt_name("New project", "Project name", |_, _| {}),
@@ -2471,6 +2472,52 @@ impl AppController {
             Theme::Light => adw::ColorScheme::ForceLight,
             Theme::Dark => adw::ColorScheme::ForceDark,
         });
+    }
+
+    /// Present a standalone font picker for screenshots. Configure with
+    /// `TYPSMTHNG_SMOKE_FONT_KIND=ui|editor`, `TYPSMTHNG_SMOKE_FONT_QUERY`
+    /// (opens the Google Fonts page), `TYPSMTHNG_SMOKE_FONT_CURRENT` and
+    /// `TYPSMTHNG_SMOKE_UI_FONT` (downloads a Google family for the UI).
+    fn show_font_picker_smoke(&self) {
+        use super::font_picker::{FontPicker, FontPickerKind};
+        let kind = match std::env::var("TYPSMTHNG_SMOKE_FONT_KIND").as_deref() {
+            Ok("ui") => FontPickerKind::Ui,
+            _ => FontPickerKind::Editor,
+        };
+        let picker = FontPicker::new(kind);
+        picker.set_current(
+            std::env::var("TYPSMTHNG_SMOKE_FONT_CURRENT")
+                .ok()
+                .as_deref(),
+        );
+        picker.connect_selected(|choice| {
+            println!(
+                "TYPESMTHNG_FONT_SELECTED {:?} {:?}",
+                choice.family, choice.source
+            );
+        });
+        if let Ok(query) = std::env::var("TYPSMTHNG_SMOKE_FONT_QUERY") {
+            picker.show_google(&query);
+        }
+        // Download and register a Google family, then use it for the whole UI.
+        if let Ok(family) = std::env::var("TYPSMTHNG_SMOKE_UI_FONT") {
+            super::font_picker::ensure_registered_async(vec![family], |results| {
+                for (family, result) in results {
+                    match result {
+                        Ok(files) => {
+                            println!("TYPESMTHNG_FONT_REGISTERED {family:?} {}", files.len());
+                            if let Some(settings) = gtk::Settings::default() {
+                                settings.set_gtk_font_name(Some(&format!("{family} 11")));
+                            }
+                        }
+                        Err(error) => eprintln!("TYPESMTHNG_FONT_FAILED {family:?} {error}"),
+                    }
+                }
+            });
+        }
+        picker.present(Some(&self.window));
+        // The smoke run exits with the process; keep the picker's state alive.
+        std::mem::forget(picker);
     }
 
     fn show_settings(&self) {
