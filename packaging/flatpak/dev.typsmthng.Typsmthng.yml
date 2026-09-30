@@ -34,12 +34,13 @@ modules:
       prepend-path: /app/rust/bin
       env:
         CARGO_HOME: /run/build/typsmthng/cargo
+        CARGO_TARGET_DIR: /run/build/typsmthng/target
     build-commands:
       - pkg-config --modversion gtk4 gtksourceview-5 libadwaita-1
       - rustc --version --verbose
       - cargo --version
       - cargo build --release --locked --manifest-path source/native/gtk/Cargo.toml
-      - install -Dm755 source/target/release/typsmthng /app/bin/typsmthng
+      - install -Dm755 "$CARGO_TARGET_DIR/release/typsmthng" /app/bin/typsmthng
       - install -Dm755 typst-dist/typst /app/lib/typsmthng/typst
       - install -Dm644 source/native/gtk/data/language-specs/typst.lang /app/share/typsmthng/language-specs/typst.lang
       - install -Dm644 source/packaging/linux/dev.typsmthng.Typsmthng.desktop /app/share/applications/dev.typsmthng.Typsmthng.desktop

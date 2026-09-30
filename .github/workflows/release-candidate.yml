@@ -1,0 +1,58 @@
+name: Native GTK release candidate
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      macos_signing:
+        description: macOS signing for the release candidate
+        type: choice
+        options:
+          - unsigned
+          - signed
+        default: unsigned
+permissions:
+  contents: read
+concurrency:
+  group: gtk-candidate-${{ github.sha }}-${{ inputs.macos_signing || 'unsigned' }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      macos_signing: ${{ steps.version.outputs.macos_signing }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+      rust_toolchain: ${{ steps.version.outputs.rust_toolchain }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - name: Release orchestration from the workflow commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          enable-cache: false
+      - name: Require the trusted main branch
+        env:
+          SOURCE_REF: ${{ github.ref }}
+        run: test "$SOURCE_REF" = refs/heads/main
+      - id: version
+        env:
+          RAW_VERSION: ''
+          REQUESTED_SIGNING: ${{ inputs.macos_signing }}
+        run: uv run --no-project .release-tools/packaging/release/source.py
+  packages:
+    needs: preflight
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      source_sha: ${{ needs.preflight.outputs.source_sha }}
+      macos_signing: ${{ needs.preflight.outputs.macos_signing }}
+    secrets: inherit
