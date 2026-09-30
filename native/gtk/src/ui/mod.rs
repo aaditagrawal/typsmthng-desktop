@@ -1,6 +1,7 @@
 mod app;
 mod home;
 pub mod model;
+mod page_paintable;
 mod presentation;
 mod smoke;
 mod workspace;

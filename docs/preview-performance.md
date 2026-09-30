@@ -85,3 +85,40 @@ The existing interaction smoke test also passed with twelve rapid edits,
 file switches, binary-file preservation, and resizing. The X11 keyboard smoke
 passed save/undo/redo, pairing, Vim writes, file-picker cancellation, theme and
 settings controls, search, and presentation navigation/drawing.
+
+## Display resolution and memory
+
+SVG pages render at their allocated size multiplied by the display scale. Two
+background workers rasterize visible pages and pages within 64 logical pixels
+of the viewport. Requests replace queued work for the same page; obsolete
+results are discarded. Leaving that region releases the page texture. The
+queue holds at most 64 requests, and an image is capped at 32 megapixels.
+
+Reading numeric SVG header dimensions avoids decoding every page on GTK's
+thread. Unchanged pages retain their cached image through partial recompiles.
+Changed pages retain the previous image until new pixels arrive, and source
+clicks wait for those pixels so they cannot navigate using a mismatched layout.
+
+Measured on September 30, 2026, with Rust 1.93.1, GTK 4.14.5, optimized release
+builds, the Cairo renderer, a 1920-pixel logical window, and `GDK_SCALE=2`.
+The fixture contains twenty A4 pages of text and math. Both builds display the
+first viewport for three seconds. Values are median peak process RSS from
+three runs; they include the compiler and the whole application.
+
+| Measurement | Main (`10bddc8`, v0.1.3) | Preview fix (v0.1.4) |
+| --- | ---: | ---: |
+| Peak process RSS | 522.3 MiB | 318.7 MiB |
+
+The reduction is 39%. This measures the initial viewport, rather than scrolling
+through the whole document. The GTK regression separately scrolls twenty pages
+and checks texture eviction, nearby-page caching, zoom, display scale changes,
+page reuse, stale requests, and image fallback behavior.
+
+```sh
+for scale in 1 2; do
+  dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo \
+    GDK_SCALE="$scale" cargo test --locked --bin typsmthng \
+    native_svg_pages_follow_zoom_and_display_scale \
+    -- --ignored --test-threads=1
+done
+```

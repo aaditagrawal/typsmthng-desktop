@@ -1476,21 +1476,21 @@ impl WorkspaceView {
                 page_number.set_margin_start(8);
                 sheet.append(&page_number);
             }
-            let loaded = gtk::Picture::for_filename(page);
-            // Keep the decoded paintable, not a GtkPicture tied to a disposable
-            // compiler filename. Reused pages survive deletion of that cache.
             let picture = gtk::Picture::new();
-            picture.set_paintable(loaded.paintable().as_ref());
+            if source.is_some() && !reusable.is_empty() {
+                if let Some(previous) = previous_pictures
+                    .get(index)
+                    .and_then(|previous| previous.widget.paintable())
+                {
+                    picture.set_paintable(Some(&previous.current_image()));
+                }
+            }
+            super::page_paintable::load(&picture, page);
             if picture.paintable().is_none() {
                 self.preview_identity.replace(None);
             }
             picture.set_can_shrink(true);
             picture.set_content_fit(gtk::ContentFit::Contain);
-            picture.set_tooltip_text(Some(if source.is_some() {
-                "Click text or a formula to go to its source"
-            } else {
-                "Preview"
-            }));
             if source.is_some() {
                 let edit = gtk::GestureClick::new();
                 edit.set_button(1);
@@ -1509,6 +1509,9 @@ impl WorkspaceView {
                         let Some(picture) = picture.upgrade() else {
                             return;
                         };
+                        if !super::page_paintable::is_current(&picture) {
+                            return;
+                        }
                         // Release the RefCell borrow before selecting a file: that
                         // can synchronously compile or replace the editor buffer.
                         let map = source_map.borrow().clone();
@@ -2839,6 +2842,16 @@ mod tests {
         workspace.set_compiled_preview(std::slice::from_ref(&page), "main.typ");
         drive(Duration::from_millis(100));
         let picture = workspace.preview_pictures.borrow()[0].widget.clone();
+        let wait_for_page = |picture: &gtk::Picture| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !super::super::page_paintable::is_current(picture) && Instant::now() < deadline {
+                drive(Duration::from_millis(10));
+            }
+            assert!(super::super::page_paintable::is_current(picture));
+        };
+        wait_for_page(&picture);
+        assert!(!picture.has_tooltip());
+        assert!(picture.tooltip_text().is_none());
         // Click the integral below its baseline, where Typst's glyph hit test
         // misses. This must exercise the enclosing-equation fallback.
         let (x, y) = (102.0, 42.0);
@@ -2895,6 +2908,78 @@ mod tests {
                 .line(),
             27
         );
+
+        // A changed layout retains the previous image while its new pixels are
+        // decoded. A click must not use the new source map during that interval.
+        let previous_size = (picture.width(), picture.height());
+        let shifted_source = workspace
+            .source_text()
+            .replace("$ integral", "#v(24pt)\n$ integral");
+        workspace.show_text_file("main.typ", &shifted_source);
+        std::fs::write(dir.path().join("main.typ"), &shifted_source).unwrap();
+        let preview = compiler
+            .compile(&project, "main.typ", &options)
+            .unwrap()
+            .artifact
+            .unwrap();
+        let map = preview.source_map.clone();
+        let formula_line = shifted_source
+            .lines()
+            .position(|line| line.contains("$ integral"))
+            .unwrap()
+            + 1;
+        let (new_y, location) = (1..180)
+            .find_map(|y| {
+                map.jump(0, x, f64::from(y))
+                    .filter(|location| location.line == formula_line)
+                    .filter(|location| {
+                        [(-0.1, 0.0), (0.1, 0.0), (0.0, -0.1), (0.0, 0.1)]
+                            .into_iter()
+                            .all(|(dx, dy)| {
+                                map.jump(0, x + dx, f64::from(y) + dy).as_ref() == Some(location)
+                            })
+                    })
+                    .map(|location| (f64::from(y), location))
+            })
+            .expect("formula moved down in the new layout");
+        assert!(new_y > y);
+        std::fs::write(&page, &preview.pages[0].svg).unwrap();
+        workspace.set_source_map(Some(preview.source_map));
+        workspace.set_compiled_preview(std::slice::from_ref(&page), "main.typ");
+        let replacement = workspace.preview_pictures.borrow()[0].widget.clone();
+        assert_ne!(replacement, picture);
+        assert!(!super::super::page_paintable::is_current(&replacement));
+        replacement.allocate(previous_size.0, previous_size.1, -1, None);
+        assert!(replacement.width() > 0 && replacement.height() > 0);
+        let new_point = |picture: &gtk::Picture| {
+            let height =
+                f64::from(picture.height()).min(f64::from(picture.width()) / (240.0 / 180.0));
+            (
+                (f64::from(picture.width()) - height * 240.0 / 180.0) / 2.0 + x * height / 180.0,
+                (f64::from(picture.height()) - height) / 2.0 + new_y * height / 180.0,
+            )
+        };
+        let (widget_x, widget_y) = new_point(&replacement);
+        let controllers = replacement.observe_controllers();
+        let click = (0..controllers.n_items())
+            .find_map(|index| {
+                controllers
+                    .item(index)?
+                    .downcast::<gtk::GestureClick>()
+                    .ok()
+            })
+            .unwrap();
+        let cursor = workspace.buffer.cursor_position();
+        click.emit_by_name::<()>("released", &[&1_i32, &widget_x, &widget_y]);
+        assert_eq!(workspace.buffer.cursor_position(), cursor);
+        wait_for_page(&replacement);
+        let (widget_x, widget_y) = new_point(&replacement);
+        click.emit_by_name::<()>("released", &[&1_i32, &widget_x, &widget_y]);
+        let cursor = workspace
+            .buffer
+            .iter_at_mark(&workspace.buffer.get_insert());
+        assert_eq!(cursor.line() as usize + 1, location.line);
+        assert_eq!(cursor.line_offset() as usize + 1, location.column);
 
         let errors = [DiagnosticRow {
             severity: DiagnosticKind::Error,

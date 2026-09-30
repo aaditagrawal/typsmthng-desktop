@@ -50,6 +50,11 @@ jobs:
         run: cargo test --locked --manifest-path native/gtk/Cargo.toml --all-targets
       - name: Preview navigation and diagnostic timing
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_preview_clicks_and_diagnostic_idle_timing -- --ignored --test-threads=1
+      - name: Preview rendering at zoom and display scale
+        run: |
+          for scale in 1 2; do
+            dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo GDK_SCALE="$scale" cargo test --locked --bin typsmthng native_svg_pages_follow_zoom_and_display_scale -- --ignored --test-threads=1
+          done
       - name: Click-triggered native updates
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
       - name: Clippy
