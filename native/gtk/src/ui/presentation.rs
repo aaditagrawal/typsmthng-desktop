@@ -498,8 +498,8 @@ impl PresentationController {
             Rc::new(move || {
                 let state = state.borrow();
                 if let Some(path) = pages.borrow().get(state.slide) {
-                    if picture.file().and_then(|file| file.path()).as_ref() != Some(path) {
-                        picture.set_filename(Some(path));
+                    if !super::page_paintable::is_file(&picture, path) {
+                        super::page_paintable::load(&picture, path);
                     }
                 } else {
                     picture.set_paintable(gtk::gdk::Paintable::NONE);
@@ -725,7 +725,7 @@ impl PresentationController {
                 let slide = state.borrow().slide;
                 aside.set_visible(state.borrow().notes_visible);
                 if let Some(path) = pages.borrow().get(slide + 1) {
-                    next_picture.set_filename(Some(path));
+                    super::page_paintable::load(&next_picture, path);
                 } else {
                     next_picture.set_paintable(gtk::gdk::Paintable::NONE);
                 }
@@ -751,7 +751,7 @@ impl PresentationController {
                 );
                 inline_note.set_visible(!inline_note.label().is_empty());
                 if let Some(Some(path)) = rendered_notes.borrow().get(slide) {
-                    rendered_note.set_filename(Some(path));
+                    super::page_paintable::load(&rendered_note, path);
                     rendered_note.set_visible(true);
                 } else {
                     rendered_note.set_paintable(gtk::gdk::Paintable::NONE);
@@ -928,7 +928,7 @@ impl PresentationController {
                 let slide = state.borrow().slide;
                 aside.set_visible(state.borrow().notes_visible);
                 if let Some(path) = pages.borrow().get(slide + 1) {
-                    next_picture.set_filename(Some(path));
+                    super::page_paintable::load(&next_picture, path);
                 } else {
                     next_picture.set_paintable(gtk::gdk::Paintable::NONE);
                 }
@@ -954,7 +954,7 @@ impl PresentationController {
                 );
                 inline_note.set_visible(!inline_note.label().is_empty());
                 if let Some(Some(path)) = rendered_notes.borrow().get(slide) {
-                    rendered_note.set_filename(Some(path));
+                    super::page_paintable::load(&rendered_note, path);
                     rendered_note.set_visible(true);
                 } else {
                     rendered_note.set_paintable(gtk::gdk::Paintable::NONE);
@@ -1480,7 +1480,8 @@ impl PresentationController {
                 button.set_tooltip_text(Some("Current slide"));
             }
             let cell = gtk::Box::new(gtk::Orientation::Vertical, 5);
-            let picture = gtk::Picture::for_filename(page);
+            let picture = gtk::Picture::new();
+            super::page_paintable::load(&picture, page);
             picture.set_content_fit(gtk::ContentFit::Contain);
             picture.set_size_request(210, 118);
             cell.append(&picture);
