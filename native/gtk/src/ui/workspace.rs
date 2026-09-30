@@ -240,6 +240,8 @@ pub struct WorkspaceView {
     callbacks: WorkspaceCallbacks,
     vim_context: Rc<RefCell<Option<sourceview5::VimIMContext>>>,
     vim_status: gtk::Label,
+    editor_pane: gtk::Widget,
+    view_buttons: [gtk::ToggleButton; 3],
 }
 
 impl WorkspaceView {
@@ -863,7 +865,12 @@ impl WorkspaceView {
             let select = callbacks.select_file.clone();
             let buffer = buffer.clone();
             let editor = editor.clone();
+            let reveal_source = view_buttons[1].clone();
+            let editor_pane = editor_scroll.clone();
             move |_, row| {
+                if !editor_pane.is_visible() {
+                    reveal_source.set_active(true);
+                }
                 let Some((path, line, column)) =
                     locations.borrow().get(row.index() as usize).cloned()
                 else {
@@ -1061,6 +1068,8 @@ impl WorkspaceView {
             callbacks,
             vim_context,
             vim_status,
+            editor_pane: editor_scroll.upcast(),
+            view_buttons,
         }
     }
 
@@ -1542,6 +1551,8 @@ impl WorkspaceView {
                     let picture = picture.downgrade();
                     let status = self.compile_label.clone();
                     let file_label = self.file_label.clone();
+                    let reveal_source = self.view_buttons[1].clone();
+                    let editor_pane = self.editor_pane.clone();
                     move |_, press_count, x, y| {
                         if press_count != 1 {
                             return;
@@ -1573,6 +1584,10 @@ impl WorkspaceView {
                             return;
                         };
                         if let Some(location) = map.jump(index, x, y) {
+                            // Jumping to source from a preview-only layout needs the editor.
+                            if !editor_pane.is_visible() {
+                                reveal_source.set_active(true);
+                            }
                             if file_label.text().as_str() != location.path {
                                 select(location.path.clone());
                             }
