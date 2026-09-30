@@ -17,15 +17,23 @@ use super::model::{
     page_size_label, zoom_editor_font, SearchMode, Theme, UiSettings, ViewMode,
     DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, PAGE_SIZES,
 };
-use super::zoom::{connect_ctrl_scroll, ZoomBadge};
+use super::zoom::{
+    connect_ctrl_scroll, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
+    PIXELS_PER_POINT, PREVIEW_SCROLL_FACTOR,
+};
 
 type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
+
+/// Apply a preview zoom, optionally anchored at a viewport point.
+type SetPreviewZoom = Rc<dyn Fn(PreviewZoom, Option<(f64, f64)>)>;
 
 type DiagnosticLocation = (String, Option<usize>, Option<usize>);
 
 const DEFAULT_PREVIEW_WIDTH: f64 = 560.0;
 const DEFAULT_PREVIEW_ASPECT: f64 = 16.0 / 9.0;
 const PREVIEW_HORIZONTAL_INSET: i32 = 64;
+/// Page width assumed for SVGs without a usable viewBox (560 px at 100%).
+const FALLBACK_PAGE_WIDTH: f64 = DEFAULT_PREVIEW_WIDTH / PIXELS_PER_POINT;
 
 #[derive(Debug, PartialEq, Eq)]
 struct PreviewIdentity {
@@ -71,6 +79,74 @@ struct PreviewPicture {
     sheet: gtk::Box,
     widget: gtk::Picture,
     aspect_ratio: f64,
+    /// Page width in SVG user units (points for Typst output).
+    page_width: f64,
+}
+
+/// A document point, as a fraction of one page, held under a viewport point.
+struct PreviewAnchor {
+    page: usize,
+    fraction: (f64, f64),
+    pointer: (f64, f64),
+}
+
+fn preview_anchor(
+    pictures: &[PreviewPicture],
+    scroll: &gtk::ScrolledWindow,
+    pointer: (f64, f64),
+) -> Option<PreviewAnchor> {
+    let bounds = pictures
+        .iter()
+        .map(|picture| picture.widget.compute_bounds(scroll))
+        .collect::<Option<Vec<_>>>()?;
+    // Prefer the page under the pointer, else the vertically nearest page.
+    let distance = |rect: &gtk::graphene::Rect| {
+        let (top, bottom) = (f64::from(rect.y()), f64::from(rect.y() + rect.height()));
+        if pointer.1 < top {
+            top - pointer.1
+        } else if pointer.1 > bottom {
+            pointer.1 - bottom
+        } else {
+            0.0
+        }
+    };
+    let (page, rect) = bounds
+        .iter()
+        .enumerate()
+        .filter(|(_, rect)| rect.width() > 0.0 && rect.height() > 0.0)
+        .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))?;
+    Some(PreviewAnchor {
+        page,
+        fraction: (
+            (pointer.0 - f64::from(rect.x())) / f64::from(rect.width()),
+            (pointer.1 - f64::from(rect.y())) / f64::from(rect.height()),
+        ),
+        pointer,
+    })
+}
+
+fn restore_preview_anchor(
+    pictures: &[PreviewPicture],
+    scroll: &gtk::ScrolledWindow,
+    anchor: &PreviewAnchor,
+) {
+    let Some(rect) = pictures
+        .get(anchor.page)
+        .and_then(|picture| picture.widget.compute_bounds(scroll))
+    else {
+        return;
+    };
+    let x = f64::from(rect.x()) + anchor.fraction.0 * f64::from(rect.width());
+    let y = f64::from(rect.y()) + anchor.fraction.1 * f64::from(rect.height());
+    for (adjustment, drift) in [
+        (scroll.hadjustment(), x - anchor.pointer.0),
+        (scroll.vadjustment(), y - anchor.pointer.1),
+    ] {
+        adjustment.set_value((adjustment.value() + drift).clamp(
+            adjustment.lower(),
+            adjustment.upper() - adjustment.page_size(),
+        ));
+    }
 }
 
 #[derive(Clone)]
@@ -550,39 +626,198 @@ impl WorkspaceView {
         preview_heading.set_halign(gtk::Align::Start);
         preview_controls.append(&preview_heading);
         let zoom_out = icon_button("zoom-out-symbolic", "Zoom out");
-        let zoom_fit = gtk::Button::with_label("Fit");
-        zoom_fit.add_css_class("flat");
+        let zoom_menu = gtk::MenuButton::new();
+        zoom_menu.set_label("Fit");
+        zoom_menu.add_css_class("flat");
+        zoom_menu.add_css_class("zoom-level");
+        zoom_menu.set_tooltip_text(Some("Zoom level"));
         let zoom_in = icon_button("zoom-in-symbolic", "Zoom in");
         let prev_page = icon_button("go-up-symbolic", "Previous page");
         let next_page = icon_button("go-down-symbolic", "Next page");
         preview_controls.append(&zoom_out);
-        preview_controls.append(&zoom_fit);
+        preview_controls.append(&zoom_menu);
         preview_controls.append(&zoom_in);
         preview_controls.append(&prev_page);
         preview_controls.append(&next_page);
         let preview_panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
         preview_panel.append(&preview_controls);
         preview_panel.append(&preview_overlay);
-        let zoom = Rc::new(Cell::new(1.0_f64));
-        let fit_to_viewport = Rc::new(Cell::new(true));
+        let preview_badge = ZoomBadge::new();
+        preview_overlay.add_overlay(preview_badge.widget());
+        let zoom = Rc::new(Cell::new(PreviewZoom::FitWidth));
+        let displayed_scale: Rc<dyn Fn() -> f64> = {
+            let pictures = preview_pictures.clone();
+            let zoom = zoom.clone();
+            let preview_scroll = preview_scroll.clone();
+            Rc::new(move || {
+                let page_width = pictures
+                    .borrow()
+                    .first()
+                    .map_or(FALLBACK_PAGE_WIDTH, |picture| picture.page_width);
+                zoom.get().scale(
+                    f64::from(preview_scroll.width() - PREVIEW_HORIZONTAL_INSET),
+                    page_width,
+                )
+            })
+        };
         let resize_preview: Rc<dyn Fn()> = {
             let pictures = preview_pictures.clone();
             let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
             let preview_scroll = preview_scroll.clone();
+            let zoom_menu = zoom_menu.clone();
+            let displayed_scale = displayed_scale.clone();
             Rc::new(move || {
                 let viewport_width = preview_scroll.width();
                 for picture in pictures.borrow().iter() {
                     let (width, height) = preview_dimensions(
                         viewport_width,
                         zoom.get(),
-                        fit_to_viewport.get(),
+                        picture.page_width,
                         picture.aspect_ratio,
                     );
                     picture.widget.set_size_request(width, height);
                 }
+                let scale = format_scale(displayed_scale());
+                zoom_menu.set_label(&match zoom.get() {
+                    PreviewZoom::FitWidth if viewport_width > PREVIEW_HORIZONTAL_INSET => {
+                        format!("Fit · {scale}")
+                    }
+                    PreviewZoom::FitWidth => "Fit".into(),
+                    PreviewZoom::Scale(_) => scale,
+                });
             })
         };
+        // Zooming keeps the document point under the pointer (or the viewport
+        // centre) fixed. Page sizes change only after the next allocation, so
+        // remember where the anchor sat on its page and restore it afterwards.
+        let pending_anchor = Rc::new(RefCell::new(None::<PreviewAnchor>));
+        let set_zoom: SetPreviewZoom = {
+            let zoom = zoom.clone();
+            let resize = resize_preview.clone();
+            let pictures = preview_pictures.clone();
+            let preview_scroll = preview_scroll.clone();
+            let preview_pages = preview_pages.clone();
+            let badge = preview_badge.clone();
+            let displayed_scale = displayed_scale.clone();
+            Rc::new(move |next, pointer| {
+                let pointer = pointer.unwrap_or_else(|| {
+                    (
+                        f64::from(preview_scroll.width()) / 2.0,
+                        f64::from(preview_scroll.height()) / 2.0,
+                    )
+                });
+                let schedule = {
+                    let mut pending = pending_anchor.borrow_mut();
+                    match pending.as_mut() {
+                        // Rapid wheel events: the layout is still stale, keep
+                        // the original page fraction and follow the pointer.
+                        Some(anchor) => {
+                            anchor.pointer = pointer;
+                            false
+                        }
+                        None => {
+                            *pending = preview_anchor(&pictures.borrow(), &preview_scroll, pointer);
+                            pending.is_some()
+                        }
+                    }
+                };
+                zoom.set(next);
+                resize();
+                badge.show(&format_scale(displayed_scale()));
+                if schedule {
+                    let pending_anchor = pending_anchor.clone();
+                    let pictures = pictures.clone();
+                    let preview_scroll = preview_scroll.clone();
+                    let allocated_once = Cell::new(false);
+                    preview_pages.add_tick_callback(move |_, _| {
+                        if !allocated_once.replace(true) {
+                            return glib::ControlFlow::Continue;
+                        }
+                        if let Some(anchor) = pending_anchor.borrow_mut().take() {
+                            restore_preview_anchor(&pictures.borrow(), &preview_scroll, &anchor);
+                        }
+                        glib::ControlFlow::Break
+                    });
+                }
+            })
+        };
+        let zoom_popover = gtk::Popover::new();
+        let zoom_choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        zoom_choices.set_margin_top(6);
+        zoom_choices.set_margin_bottom(6);
+        zoom_choices.set_margin_start(6);
+        zoom_choices.set_margin_end(6);
+        let fit_width = gtk::Button::with_label("Fit page width");
+        fit_width.add_css_class("flat");
+        fit_width.connect_clicked({
+            let set_zoom = set_zoom.clone();
+            let popover = zoom_popover.clone();
+            move |_| {
+                popover.popdown();
+                set_zoom(PreviewZoom::FitWidth, None);
+            }
+        });
+        zoom_choices.append(&fit_width);
+        zoom_choices.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        for scale in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] {
+            let label = if scale == 1.0 {
+                "100% · actual size".to_string()
+            } else {
+                format_scale(scale)
+            };
+            let choice = gtk::Button::with_label(&label);
+            choice.add_css_class("flat");
+            if let Some(label) = choice.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
+            }
+            choice.connect_clicked({
+                let set_zoom = set_zoom.clone();
+                let popover = zoom_popover.clone();
+                move |_| {
+                    popover.popdown();
+                    set_zoom(PreviewZoom::Scale(scale), None);
+                }
+            });
+            zoom_choices.append(&choice);
+        }
+        if let Some(label) = fit_width.child().and_downcast::<gtk::Label>() {
+            label.set_xalign(0.0);
+        }
+        zoom_popover.set_child(Some(&zoom_choices));
+        zoom_menu.set_popover(Some(&zoom_popover));
+        for (button, direction) in [(&zoom_out, -1), (&zoom_in, 1)] {
+            let set_zoom = set_zoom.clone();
+            let displayed_scale = displayed_scale.clone();
+            button.connect_clicked(move |_| {
+                set_zoom(
+                    PreviewZoom::clamped(step_preview_scale(displayed_scale(), direction)),
+                    None,
+                );
+            });
+        }
+        connect_ctrl_scroll(&preview_scroll, {
+            let set_zoom = set_zoom.clone();
+            let displayed_scale = displayed_scale.clone();
+            move |steps, x, y| {
+                let scale = displayed_scale() * PREVIEW_SCROLL_FACTOR.powi(steps);
+                set_zoom(PreviewZoom::clamped(scale), Some((x, y)));
+            }
+        });
+        let pinch = gtk::GestureZoom::new();
+        let pinch_start = Rc::new(Cell::new(1.0));
+        pinch.connect_begin({
+            let pinch_start = pinch_start.clone();
+            let displayed_scale = displayed_scale.clone();
+            move |_, _| pinch_start.set(displayed_scale())
+        });
+        pinch.connect_scale_changed({
+            let set_zoom = set_zoom.clone();
+            move |gesture, delta| {
+                let centre = gesture.bounding_box_center();
+                set_zoom(PreviewZoom::clamped(pinch_start.get() * delta), centre);
+            }
+        });
+        preview_scroll.add_controller(pinch);
         // GdkSurface::layout reports actual native resize events. GTK's
         // default-width is only a requested size, and Widget has no width
         // property notification. Wait for allocation without an idle frame loop.
@@ -590,11 +825,11 @@ impl WorkspaceView {
         let refresh_layout: Rc<dyn Fn()> = {
             let root = root.downgrade();
             let resize = resize_preview.clone();
-            let fit = fit_to_viewport.clone();
+            let zoom = zoom.clone();
             Rc::new(move || {
                 if let Some(root) = root.upgrade() {
                     adapt_layout(root.width());
-                    if fit.get() {
+                    if zoom.get() == PreviewZoom::FitWidth {
                         resize();
                     }
                 }
@@ -634,36 +869,6 @@ impl WorkspaceView {
             paned.connect_position_notify(move |_| schedule());
         }
         sidebar.connect_visible_notify(move |_| schedule_layout());
-        zoom_out.connect_clicked({
-            let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
-            let resize = resize_preview.clone();
-            move |_| {
-                zoom.set((zoom.get() - 0.1).max(0.3));
-                fit_to_viewport.set(false);
-                resize();
-            }
-        });
-        zoom_in.connect_clicked({
-            let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
-            let resize = resize_preview.clone();
-            move |_| {
-                zoom.set((zoom.get() + 0.1).min(3.0));
-                fit_to_viewport.set(false);
-                resize();
-            }
-        });
-        zoom_fit.connect_clicked({
-            let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
-            let resize = resize_preview.clone();
-            move |_| {
-                zoom.set(1.0);
-                fit_to_viewport.set(true);
-                resize();
-            }
-        });
         prev_page.connect_clicked({
             let scroll = preview_scroll.clone();
             let pictures = preview_pictures.clone();
@@ -1571,10 +1776,10 @@ impl WorkspaceView {
                 }
             }
             let svg = &contents[index];
-            let aspect_ratio = svg
-                .as_deref()
-                .and_then(svg_aspect_ratio)
-                .unwrap_or(DEFAULT_PREVIEW_ASPECT);
+            let (page_width, aspect_ratio) = svg.as_deref().and_then(svg_page_size).map_or(
+                (FALLBACK_PAGE_WIDTH, DEFAULT_PREVIEW_ASPECT),
+                |(width, height)| (width, width / height),
+            );
             let links = svg
                 .as_deref()
                 .map(extract_external_links)
@@ -1699,6 +1904,7 @@ impl WorkspaceView {
                 sheet: sheet.clone(),
                 widget: picture,
                 aspect_ratio,
+                page_width,
             });
             self.preview_pages.append(&sheet);
         }
@@ -2104,8 +2310,8 @@ fn should_uncomment_lines(lines: &[String]) -> bool {
 
 fn preview_dimensions(
     viewport_width: i32,
-    zoom: f64,
-    fit_to_viewport: bool,
+    zoom: PreviewZoom,
+    page_width: f64,
     aspect_ratio: f64,
 ) -> (i32, i32) {
     let aspect_ratio = if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
@@ -2113,16 +2319,29 @@ fn preview_dimensions(
     } else {
         DEFAULT_PREVIEW_ASPECT
     };
-    let width = if fit_to_viewport && viewport_width > PREVIEW_HORIZONTAL_INSET {
-        f64::from(viewport_width - PREVIEW_HORIZONTAL_INSET)
+    let page_width = if page_width.is_finite() && page_width > 0.0 {
+        page_width
     } else {
-        DEFAULT_PREVIEW_WIDTH * zoom.clamp(0.3, 3.0)
+        FALLBACK_PAGE_WIDTH
+    };
+    let width = match zoom {
+        PreviewZoom::FitWidth if viewport_width > PREVIEW_HORIZONTAL_INSET => {
+            f64::from(viewport_width - PREVIEW_HORIZONTAL_INSET)
+        }
+        PreviewZoom::FitWidth => DEFAULT_PREVIEW_WIDTH,
+        PreviewZoom::Scale(scale) => page_width * PIXELS_PER_POINT * scale,
     }
-    .max(180.0);
+    .max(48.0);
     (width.round() as i32, (width / aspect_ratio).round() as i32)
 }
 
+#[cfg(test)]
 fn svg_aspect_ratio(svg: &str) -> Option<f64> {
+    svg_page_size(svg).map(|(width, height)| width / height)
+}
+
+/// The root viewBox (or width/height) size; Typst emits points.
+fn svg_page_size(svg: &str) -> Option<(f64, f64)> {
     let root_start = svg.find("<svg")?;
     let root_end = svg[root_start..].find('>')? + root_start;
     let svg = &svg[root_start..=root_end];
@@ -2139,7 +2358,7 @@ fn svg_aspect_ratio(svg: &str) -> Option<f64> {
         let width = captures.get(1)?.as_str().parse::<f64>().ok()?;
         let height = captures.get(2)?.as_str().parse::<f64>().ok()?;
         if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
-            return Some(width / height);
+            return Some((width, height));
         }
     }
     let width_regex = WIDTH.get_or_init(|| {
@@ -2161,7 +2380,7 @@ fn svg_aspect_ratio(svg: &str) -> Option<f64> {
         .parse::<f64>()
         .ok()?;
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
-        .then_some(width / height)
+        .then_some((width, height))
 }
 
 fn extract_external_links(svg: &str) -> Vec<String> {
@@ -2820,7 +3039,7 @@ mod tests {
     use super::{
         document_match_offsets, document_regex, extract_external_links, preview_dimensions,
         preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
-        svg_aspect_ratio,
+        svg_aspect_ratio, PreviewZoom,
     };
 
     #[test]
@@ -2890,9 +3109,18 @@ mod tests {
 
     #[test]
     fn preview_fit_uses_viewport_and_svg_aspect() {
-        assert_eq!(preview_dimensions(900, 1.0, true, 2.0), (836, 418));
-        assert_eq!(preview_dimensions(900, 1.5, false, 2.0), (840, 420));
-        assert_eq!(preview_dimensions(0, 1.0, true, 2.0), (560, 280));
+        let fit = PreviewZoom::FitWidth;
+        assert_eq!(preview_dimensions(900, fit, 595.0, 2.0), (836, 418));
+        assert_eq!(
+            preview_dimensions(900, PreviewZoom::Scale(1.5), 420.0, 2.0),
+            (840, 420)
+        );
+        // 100% is the page's physical size at 96 DPI: A4 is 794 px wide.
+        assert_eq!(
+            preview_dimensions(900, PreviewZoom::Scale(1.0), 595.28, 595.28 / 841.89).0,
+            794
+        );
+        assert_eq!(preview_dimensions(0, fit, 595.0, 2.0), (560, 280));
         assert_eq!(
             svg_aspect_ratio(r#"<svg viewBox="0 0 800 400"></svg>"#),
             Some(2.0)

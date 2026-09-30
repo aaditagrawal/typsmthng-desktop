@@ -100,3 +100,89 @@ impl ZoomBadge {
         self.hide.replace(Some(timer));
     }
 }
+
+/// Logical pixels per typographic point at 100% (CSS reference pixel, 96 DPI).
+pub const PIXELS_PER_POINT: f64 = 96.0 / 72.0;
+pub const MIN_PREVIEW_SCALE: f64 = 0.1;
+pub const MAX_PREVIEW_SCALE: f64 = 5.0;
+/// Button and menu stops, as in document viewers such as Evince and Okular.
+pub const PREVIEW_SCALE_PRESETS: [f64; 15] = [
+    0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0,
+];
+/// Ctrl+scroll zooms continuously by this factor per wheel notch.
+pub const PREVIEW_SCROLL_FACTOR: f64 = 1.1;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PreviewZoom {
+    /// Every page fills the viewport width.
+    FitWidth,
+    /// Fixed scale where 1.0 shows pages at their physical size.
+    Scale(f64),
+}
+
+impl PreviewZoom {
+    pub fn clamped(scale: f64) -> Self {
+        PreviewZoom::Scale(scale.clamp(MIN_PREVIEW_SCALE, MAX_PREVIEW_SCALE))
+    }
+
+    /// The scale actually displayed for a page `page_width` points wide.
+    pub fn scale(self, available_width: f64, page_width: f64) -> f64 {
+        match self {
+            PreviewZoom::Scale(scale) => scale,
+            PreviewZoom::FitWidth => available_width / (page_width * PIXELS_PER_POINT),
+        }
+    }
+}
+
+/// The next preset strictly beyond `scale` in `direction` (±1).
+pub fn step_preview_scale(scale: f64, direction: i32) -> f64 {
+    // Tolerate rounding so 1.0 → 1.1 rather than 1.0 → 1.0.
+    let epsilon = 0.005;
+    let next = if direction > 0 {
+        PREVIEW_SCALE_PRESETS
+            .iter()
+            .copied()
+            .find(|preset| *preset > scale + epsilon)
+    } else {
+        PREVIEW_SCALE_PRESETS
+            .iter()
+            .rev()
+            .copied()
+            .find(|preset| *preset < scale - epsilon)
+    };
+    next.unwrap_or(scale)
+        .clamp(MIN_PREVIEW_SCALE, MAX_PREVIEW_SCALE)
+}
+
+pub fn format_scale(scale: f64) -> String {
+    format!("{}%", (scale * 100.0).round() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_steps_leave_fitted_scales_in_the_right_direction() {
+        assert_eq!(step_preview_scale(1.0, 1), 1.1);
+        assert_eq!(step_preview_scale(1.0, -1), 0.9);
+        // A fitted 87% steps to the neighbouring presets, never backwards.
+        assert_eq!(step_preview_scale(0.87, 1), 0.9);
+        assert_eq!(step_preview_scale(0.87, -1), 0.75);
+        assert_eq!(step_preview_scale(4.0, 1), 4.0);
+        assert_eq!(step_preview_scale(0.25, -1), 0.25);
+    }
+
+    #[test]
+    fn fit_width_reports_the_scale_it_displays() {
+        let a4 = 595.28;
+        let fitted = PreviewZoom::FitWidth.scale(a4 * PIXELS_PER_POINT, a4);
+        assert!((fitted - 1.0).abs() < 1e-9);
+        assert_eq!(PreviewZoom::Scale(1.5).scale(10.0, a4), 1.5);
+        assert_eq!(
+            PreviewZoom::clamped(9.0),
+            PreviewZoom::Scale(MAX_PREVIEW_SCALE)
+        );
+        assert_eq!(format_scale(0.874), "87%");
+    }
+}
