@@ -12,7 +12,7 @@ use typst::introspection::{Location, PagedPosition, Tag};
 use typst::layout::{Abs, Frame, FrameItem, Point, Rect, Transform};
 use typst::math::EquationElem;
 use typst::syntax::{FileId, RootedPath, Source, Span, VirtualPath, VirtualRoot};
-use typst::text::{Font, FontBook};
+use typst::text::{Font, FontBook, TextItem};
 use typst::utils::{LazyHash, Numeric};
 use typst::visualize::{FillRule, FixedStroke, Geometry, Paint};
 use typst::{Library, LibraryExt, World};
@@ -63,12 +63,7 @@ pub struct ContentBounds {
 
 impl SourceMap {
     fn new(document: PagedDocument, world: Snapshot) -> Self {
-        let content = document
-            .pages()
-            .iter()
-            .map(|page| PageContent::measure(&page.frame))
-            .collect::<Vec<_>>();
-        let column = content_column(&content);
+        let (content, column) = measure_pages(&document);
         Self {
             document,
             world,
@@ -141,6 +136,17 @@ impl SourceMap {
     }
 }
 
+fn measure_pages(document: &PagedDocument) -> (Vec<PageContent>, Option<(f64, f64)>) {
+    let mut glyphs = GlyphBoxes::default();
+    let content = document
+        .pages()
+        .iter()
+        .map(|page| PageContent::measure(&page.frame, &mut glyphs))
+        .collect::<Vec<_>>();
+    let column = content_column(&content);
+    (content, column)
+}
+
 /// Ink measured on one page. `column` omits backdrops; see [`content_column`].
 #[derive(Debug, Clone, Copy)]
 struct PageContent {
@@ -150,7 +156,7 @@ struct PageContent {
 }
 
 impl PageContent {
-    fn measure(frame: &Frame) -> Self {
+    fn measure(frame: &Frame, glyphs: &mut GlyphBoxes) -> Self {
         let page = Rect::from_pos_size(Point::zero(), frame.size());
         // Anything this close to both paper edges is a backdrop, not text column.
         let tolerance = frame.width() * 0.02;
@@ -163,6 +169,7 @@ impl PageContent {
             frame,
             Transform::identity(),
             page,
+            glyphs,
             &mut |ink, backdrop_candidate| {
                 content.bounds = Some(union(content.bounds, ink));
                 let backdrop = backdrop_candidate
@@ -245,7 +252,13 @@ fn visible_stroke(stroke: Option<&FixedStroke>) -> Option<&FixedStroke> {
 /// `ts` maps `frame` coordinates to page coordinates; `clip` is the page-space
 /// bounding box of all enclosing clips. Rotated clips are approximated by
 /// their bounding box, which can only over-estimate the ink.
-fn visit_ink(frame: &Frame, ts: Transform, clip: Rect, emit: &mut dyn FnMut(Rect, bool)) {
+fn visit_ink(
+    frame: &Frame,
+    ts: Transform,
+    clip: Rect,
+    glyphs: &mut GlyphBoxes,
+    emit: &mut dyn FnMut(Rect, bool),
+) {
     for (pos, item) in frame.items() {
         let local = ts.pre_concat(Transform::translate(pos.x, pos.y));
         let (bounds, backdrop_candidate) = match item {
@@ -258,7 +271,7 @@ fn visit_ink(frame: &Frame, ts: Transform, clip: Rect, emit: &mut dyn FnMut(Rect
                     },
                     None => clip,
                 };
-                visit_ink(&group.frame, ts, clip, emit);
+                visit_ink(&group.frame, ts, clip, glyphs, emit);
                 continue;
             }
             FrameItem::Text(text) => {
@@ -268,10 +281,8 @@ fn visit_ink(frame: &Frame, ts: Transform, clip: Rect, emit: &mut dyn FnMut(Rect
                 }
                 // Ink boxes rather than advances: spaces have no ink, and
                 // italic overhangs and accents may leave the advance box.
-                let bbox = text.bbox();
+                let bbox = glyphs.ink(text);
                 let grow = stroke.map_or(Abs::zero(), |stroke| stroke.thickness / 2.0);
-                // Text bounding boxes use a Y-up font coordinate system.
-                let bbox = Rect::new(bbox.min.min(bbox.max), bbox.min.max(bbox.max));
                 (
                     Rect::new(bbox.min - Point::splat(grow), bbox.max + Point::splat(grow)),
                     false,
@@ -304,6 +315,48 @@ fn visit_ink(frame: &Frame, ts: Transform, clip: Rect, emit: &mut dyn FnMut(Rect
         if let Some(bounds) = intersect(transformed(bounds, local), clip) {
             emit(bounds, backdrop_candidate);
         }
+    }
+}
+
+/// Glyph outline boxes in font units, keyed by face and glyph id.
+///
+/// This computes the same box as `TextItem::bbox`, which is far too slow to
+/// call per run: bounding a CFF glyph (the embedded Libertinus fonts) means
+/// outlining it, and its comemo cache is evicted between compiles. Documents
+/// repeat a few hundred glyphs, so caching per face makes ink boxes about as
+/// cheap as advances. Faces are keyed by address, which is only stable while
+/// the document owning them is alive, so a cache must not outlive one pass.
+#[derive(Default)]
+struct GlyphBoxes(HashMap<(usize, u16), Option<ttf_parser::Rect>>);
+
+impl GlyphBoxes {
+    /// Ink box of a text run in frame coordinates (y down), or an infinite
+    /// box when no glyph has an outline, e.g. a run of spaces.
+    fn ink(&mut self, text: &TextItem) -> Rect {
+        let face = text.font.ttf();
+        let key = std::ptr::from_ref(face) as usize;
+        let em = |units: i16| text.font.to_em(units).at(text.size);
+        let mut min = Point::splat(Abs::inf());
+        let mut max = Point::splat(-Abs::inf());
+        let mut cursor = Point::zero();
+        for glyph in &text.glyphs {
+            let rect = *self
+                .0
+                .entry((key, glyph.id))
+                .or_insert_with(|| face.glyph_bounding_box(ttf_parser::GlyphId(glyph.id)));
+            if let Some(rect) = rect {
+                // Font units and glyph offsets are y-up; frames are y-down.
+                let origin = cursor
+                    + Point::new(glyph.x_offset.at(text.size), -glyph.y_offset.at(text.size));
+                min = min.min(origin + Point::new(em(rect.x_min), -em(rect.y_max)));
+                max = max.max(origin + Point::new(em(rect.x_max), -em(rect.y_min)));
+            }
+            cursor += Point::new(
+                glyph.x_advance.at(text.size),
+                -glyph.y_advance.at(text.size),
+            );
+        }
+        Rect::new(min, max)
     }
 }
 
