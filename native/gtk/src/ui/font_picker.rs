@@ -91,13 +91,16 @@ impl FontPicker {
             FontPickerKind::Ui => "Interface Font",
             FontPickerKind::Editor => "Editor Font",
         };
-        let window = gtk::Window::builder()
+        // adw::Window draws the ToolbarView header as its own titlebar; a
+        // plain gtk::Window without one gets server-side decorations too.
+        let window = adw::Window::builder()
             .title(format!("{title} — typsmthng"))
             .modal(true)
             .default_width(480)
             .default_height(600)
             .hide_on_close(true)
             .build();
+        let window: gtk::Window = window.upcast();
         super::dismiss_on_escape(&window);
         window.add_css_class("font-picker");
 
@@ -186,7 +189,10 @@ impl FontPicker {
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&content));
-        window.set_child(Some(&toolbar));
+        window
+            .downcast_ref::<adw::Window>()
+            .expect("font picker is an adw::Window")
+            .set_content(Some(&toolbar));
 
         let inner = Rc::new(Inner {
             window,
