@@ -1362,6 +1362,42 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual benchmark; run with --release --ignored --nocapture"]
+    // Release build, embedded fonts: about 1.6 ms to measure all 20 pages
+    // against a 55 ms warm compile (26 ms before caching glyph boxes).
+    fn benchmark_content_bounds() {
+        let source = (0..20)
+            .map(|page| {
+                format!(
+                    "= Section {page}\n#lorem(250)\n$ sum_(i=1)^n x_i^2 = integral_0^1 f(x) dif x $\n#table(columns: 3, [a], [b], [c], [d], [e], [f])\n#rotate(10deg)[Rotated]"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n#pagebreak()\n");
+        let (_dir, project) = fixture(&format!("#set page(numbering: \"1\")\n{source}"));
+        let compiler = PreviewCompiler::default();
+        let mut compiles = Vec::new();
+        for _ in 0..5 {
+            let output = compiler.compile(&project, "main.typ", &options()).unwrap();
+            assert!(output.success(), "{}", output.stderr);
+            compiles.push(output.elapsed);
+        }
+        let map = compiled(&compiler, &project).source_map;
+        assert_eq!(map.document.pages().len(), 20);
+        let runs = 50;
+        let start = Instant::now();
+        for _ in 0..runs {
+            assert!(measure_pages(&map.document).1.is_some());
+        }
+        let measure = start.elapsed() / runs;
+        compiles.sort();
+        eprintln!(
+            "20 pages: content bounds {measure:?} per document, warm compile median {:?}",
+            compiles[2]
+        );
+    }
+
+    #[test]
     #[ignore = "manual release benchmark requiring Typst 0.15.1"]
     fn benchmark_incremental_preview_against_cli() {
         let tool = super::super::TypstTool::detect().unwrap();
