@@ -533,8 +533,12 @@ impl WorkspaceView {
 
         let buffer = sourceview5::Buffer::new(None::<&gtk::TextTagTable>);
         let language_manager = sourceview5::LanguageManager::default();
-        for path in language_search_paths() {
+        for path in data_search_paths("language-specs") {
             language_manager.append_search_path(path.to_string_lossy().as_ref());
+        }
+        let scheme_manager = sourceview5::StyleSchemeManager::default();
+        for path in data_search_paths("styles") {
+            scheme_manager.append_search_path(path.to_string_lossy().as_ref());
         }
         if let Some(language) = language_manager.language("typst") {
             buffer.set_language(Some(&language));
@@ -2066,15 +2070,12 @@ impl WorkspaceView {
         // GtkSourceView's buffer scheme controls text-node background, syntax,
         // selection and gutter separately from the surrounding GTK theme.
         let schemes = sourceview5::StyleSchemeManager::default();
-        let scheme = if dark {
-            schemes
-                .scheme("Adwaita-dark")
-                .or_else(|| schemes.scheme("classic-dark"))
+        let preferred: &[&str] = if dark {
+            &["typsmthng-dark", "Adwaita-dark", "classic-dark"]
         } else {
-            schemes
-                .scheme("Adwaita")
-                .or_else(|| schemes.scheme("classic"))
+            &["typsmthng-light", "Adwaita", "classic"]
         };
+        let scheme = preferred.iter().find_map(|id| schemes.scheme(id));
         self.buffer.set_style_scheme(scheme.as_ref());
         self.editor_style
             .load_from_string(&editor_css(settings.font_size));
@@ -2321,16 +2322,23 @@ fn ancestor_directories(path: &str) -> impl Iterator<Item = &str> {
     path.match_indices('/').map(|(index, _)| &path[..index])
 }
 
-fn language_search_paths() -> Vec<PathBuf> {
+/// Candidate directories for bundled GtkSourceView data (`language-specs`,
+/// `styles`): macOS bundle resources, installed Linux/Windows prefixes, then
+/// the source tree for development builds.
+fn data_search_paths(name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(executable) = std::env::current_exe() {
         if let Some(directory) = executable.parent() {
-            paths.push(directory.join("../Resources/language-specs"));
-            paths.push(directory.join("../share/typsmthng/language-specs"));
-            paths.push(directory.join("share/typsmthng/language-specs"));
+            paths.push(directory.join("../Resources").join(name));
+            paths.push(directory.join("../share/typsmthng").join(name));
+            paths.push(directory.join("share/typsmthng").join(name));
         }
     }
-    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/language-specs"));
+    paths.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join(name),
+    );
     paths
 }
 

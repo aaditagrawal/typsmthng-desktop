@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  typsmthng light scheme: Adwaita plus Typst-specific styles.
+
+  Prose keeps the base text colour. Code uses a One-like palette (purple
+  keywords, blue functions, green strings, orange numbers). Math sits on a
+  faint violet wash with its own inks (italic indigo variables, teal symbols,
+  magenta delimiters and relations) so equations read apart from prose.
+  Headings are bold and underlined with dimmed `=` markers. Every foreground
+  meets WCAG AA (4.5:1) against the editor background.
+-->
+<style-scheme id="typsmthng-light" name="typsmthng Light" version="1.0" parent-scheme="Adwaita">
+  <author>typsmthng</author>
+  <description>Adwaita with Typst markup, code and math styles</description>
+
+  <metadata>
+    <property name="variant">light</property>
+    <property name="dark-variant">typsmthng-dark</property>
+  </metadata>
+
+  <!-- Palette -->
+  <color name="heading"       value="#1D1B22"/>
+  <color name="heading_rule"  value="#8FA9E0"/>
+  <color name="dim"           value="#6E6D75"/>
+  <color name="soft"          value="#5E5C64"/>
+  <color name="orange"        value="#A35200"/>
+  <color name="raw"           value="#2E6B5E"/>
+  <color name="purple"        value="#9B2C9E"/>
+  <color name="blue"          value="#2B5FC7"/>
+  <color name="cyan"          value="#0F6F8A"/>
+  <color name="green"         value="#3C7A2E"/>
+  <color name="red"           value="#BA3A3A"/>
+  <color name="math_wash"     value="#F4F1FB"/>
+  <color name="magenta"       value="#B0306F"/>
+  <color name="violet"        value="#7C5A99"/>
+  <color name="indigo"        value="#2E3A8C"/>
+  <color name="teal"          value="#075E5E"/>
+  <color name="teal_soft"     value="#2F7775"/>
+
+  <!-- Markup -->
+  <style name="typst:heading"             foreground="heading" bold="true" underline="single" underline-color="heading_rule"/>
+  <style name="typst:heading-marker"      foreground="dim" bold="false" underline="none"/>
+  <style name="typst:strong"              bold="true"/>
+  <style name="typst:emph"                italic="true"/>
+  <style name="typst:term"                bold="true"/>
+  <style name="typst:list-marker"         foreground="orange" bold="true"/>
+  <style name="typst:raw"                 foreground="raw"/>
+  <style name="typst:raw-block"           foreground="raw"/>
+  <style name="typst:raw-delimiter"       foreground="dim"/>
+  <style name="typst:raw-lang"            foreground="purple"/>
+  <style name="typst:link"                foreground="blue" underline="low"/>
+  <style name="typst:label"               foreground="cyan"/>
+  <style name="typst:ref"                 foreground="cyan" underline="low"/>
+  <style name="typst:escape"              foreground="cyan"/>
+  <style name="typst:shorthand"           foreground="cyan"/>
+  <style name="typst:linebreak"           foreground="cyan" bold="true"/>
+  <style name="typst:comment"             foreground="dim" italic="true"/>
+
+  <!-- Code -->
+  <style name="typst:keyword"             foreground="purple"/>
+  <style name="typst:boolean"             foreground="orange"/>
+  <style name="typst:constant"            foreground="orange"/>
+  <style name="typst:number"              foreground="orange"/>
+  <style name="typst:string"              foreground="green"/>
+  <style name="typst:string-escape"       foreground="cyan"/>
+  <style name="typst:function"            foreground="blue"/>
+  <style name="typst:interpolated"        foreground="red"/>
+  <style name="typst:named-argument"      foreground="soft" italic="true"/>
+  <style name="typst:operator"            foreground="cyan"/>
+  <style name="typst:punctuation"         foreground="dim"/>
+
+  <!-- Math -->
+  <style name="typst:math"                background="math_wash"/>
+  <style name="typst:math-delimiter"      foreground="magenta" bold="true"/>
+  <style name="typst:math-operator"       foreground="magenta"/>
+  <style name="typst:math-alignment"      foreground="magenta" bold="true"/>
+  <style name="typst:math-attach"         foreground="violet"/>
+  <style name="typst:math-group"          foreground="dim"/>
+  <style name="typst:math-variable"       foreground="indigo" italic="true"/>
+  <style name="typst:math-symbol"         foreground="teal"/>
+  <style name="typst:math-modifier"       foreground="teal_soft"/>
+  <style name="typst:math-function"       foreground="blue"/>
+  <style name="typst:math-number"         foreground="orange"/>
+  <style name="typst:math-string"         foreground="green"/>
+  <style name="typst:math-named-argument" foreground="soft" italic="true"/>
+
+</style-scheme>
