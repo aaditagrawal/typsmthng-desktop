@@ -18,7 +18,7 @@ use super::model::{
     DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, PAGE_SIZES,
 };
 use super::zoom::{
-    connect_ctrl_scroll, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
+    connect_ctrl_scroll, fit_text_crop, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
     PIXELS_PER_POINT, PREVIEW_SCROLL_FACTOR,
 };
 
@@ -295,6 +295,8 @@ pub struct WorkspaceView {
     preview_identity: Rc<RefCell<Option<PreviewIdentity>>>,
     preview_pictures: Rc<RefCell<Vec<PreviewPicture>>>,
     resize_preview: Rc<dyn Fn()>,
+    preview_zoom: Rc<Cell<PreviewZoom>>,
+    content_column: Rc<Cell<Option<(f64, f64)>>>,
     preview_placeholder: gtk::Box,
     diagnostics_list: gtk::ListBox,
     diagnostic_locations: Rc<RefCell<Vec<DiagnosticLocation>>>,
@@ -630,7 +632,6 @@ impl WorkspaceView {
         zoom_menu.set_label("Fit");
         zoom_menu.add_css_class("flat");
         zoom_menu.add_css_class("zoom-level");
-        zoom_menu.set_tooltip_text(Some("Zoom level"));
         let zoom_in = icon_button("zoom-in-symbolic", "Zoom in");
         let prev_page = icon_button("go-up-symbolic", "Previous page");
         let next_page = icon_button("go-down-symbolic", "Next page");
@@ -645,10 +646,14 @@ impl WorkspaceView {
         let preview_badge = ZoomBadge::new();
         preview_overlay.add_overlay(preview_badge.widget());
         let zoom = Rc::new(Cell::new(PreviewZoom::FitWidth));
+        // Kept across edits: the source map is dropped on every keystroke, but
+        // the text column should not jump while the next compile is pending.
+        let content_column = Rc::new(Cell::new(None::<(f64, f64)>));
         let displayed_scale: Rc<dyn Fn() -> f64> = {
             let pictures = preview_pictures.clone();
             let zoom = zoom.clone();
             let preview_scroll = preview_scroll.clone();
+            let content_column = content_column.clone();
             Rc::new(move || {
                 let page_width = pictures
                     .borrow()
@@ -657,6 +662,7 @@ impl WorkspaceView {
                 zoom.get().scale(
                     f64::from(preview_scroll.width() - PREVIEW_HORIZONTAL_INSET),
                     page_width,
+                    content_column.get(),
                 )
             })
         };
@@ -666,23 +672,30 @@ impl WorkspaceView {
             let preview_scroll = preview_scroll.clone();
             let zoom_menu = zoom_menu.clone();
             let displayed_scale = displayed_scale.clone();
+            let content_column = content_column.clone();
             Rc::new(move || {
                 let viewport_width = preview_scroll.width();
                 for picture in pictures.borrow().iter() {
-                    let (width, height) = preview_dimensions(
+                    let size = preview_dimensions(
                         viewport_width,
                         zoom.get(),
                         picture.page_width,
                         picture.aspect_ratio,
+                        content_column.get(),
                     );
-                    picture.widget.set_size_request(width, height);
+                    picture.widget.set_size_request(size.width, size.height);
+                    picture.widget.set_content_fit(if size.cropped {
+                        gtk::ContentFit::Cover
+                    } else {
+                        gtk::ContentFit::Contain
+                    });
                 }
                 let scale = format_scale(displayed_scale());
+                let fitted = viewport_width > PREVIEW_HORIZONTAL_INSET;
                 zoom_menu.set_label(&match zoom.get() {
-                    PreviewZoom::FitWidth if viewport_width > PREVIEW_HORIZONTAL_INSET => {
-                        format!("Fit · {scale}")
-                    }
-                    PreviewZoom::FitWidth => "Fit".into(),
+                    PreviewZoom::FitWidth if fitted => format!("Fit · {scale}"),
+                    PreviewZoom::FitText if fitted => format!("Text · {scale}"),
+                    PreviewZoom::FitWidth | PreviewZoom::FitText => "Fit".into(),
                     PreviewZoom::Scale(_) => scale,
                 });
             })
@@ -747,6 +760,17 @@ impl WorkspaceView {
         zoom_choices.set_margin_bottom(6);
         zoom_choices.set_margin_start(6);
         zoom_choices.set_margin_end(6);
+        let fit_text = gtk::Button::with_label("Fit text width");
+        fit_text.add_css_class("flat");
+        fit_text.set_tooltip_text(Some("Crop the side margins"));
+        fit_text.connect_clicked({
+            let set_zoom = set_zoom.clone();
+            let popover = zoom_popover.clone();
+            move |_| {
+                popover.popdown();
+                set_zoom(PreviewZoom::FitText, None);
+            }
+        });
         let fit_width = gtk::Button::with_label("Fit page width");
         fit_width.add_css_class("flat");
         fit_width.connect_clicked({
@@ -758,6 +782,7 @@ impl WorkspaceView {
             }
         });
         zoom_choices.append(&fit_width);
+        zoom_choices.append(&fit_text);
         zoom_choices.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         for scale in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] {
             let label = if scale == 1.0 {
@@ -780,8 +805,10 @@ impl WorkspaceView {
             });
             zoom_choices.append(&choice);
         }
-        if let Some(label) = fit_width.child().and_downcast::<gtk::Label>() {
-            label.set_xalign(0.0);
+        for button in [&fit_width, &fit_text] {
+            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
+            }
         }
         zoom_popover.set_child(Some(&zoom_choices));
         zoom_menu.set_popover(Some(&zoom_popover));
@@ -829,7 +856,7 @@ impl WorkspaceView {
             Rc::new(move || {
                 if let Some(root) = root.upgrade() {
                     adapt_layout(root.width());
-                    if zoom.get() == PreviewZoom::FitWidth {
+                    if matches!(zoom.get(), PreviewZoom::FitWidth | PreviewZoom::FitText) {
                         resize();
                     }
                 }
@@ -1257,6 +1284,8 @@ impl WorkspaceView {
             preview_identity: Rc::new(RefCell::new(None)),
             preview_pictures,
             resize_preview,
+            preview_zoom: zoom,
+            content_column,
             preview_placeholder,
             diagnostics_list,
             diagnostic_locations,
@@ -1845,6 +1874,7 @@ impl WorkspaceView {
                             f64::from(picture.width()),
                             f64::from(picture.height()),
                             aspect_ratio,
+                            picture.content_fit() == gtk::ContentFit::Cover,
                             page_height,
                             x,
                             y,
@@ -1924,6 +1954,14 @@ impl WorkspaceView {
     }
 
     pub fn set_source_map(&self, source_map: Option<Arc<SourceMap>>) {
+        if let Some(map) = &source_map {
+            let column = map.content_column();
+            if self.content_column.replace(column) != column
+                && self.preview_zoom.get() == PreviewZoom::FitText
+            {
+                (self.resize_preview)();
+            }
+        }
         self.source_map.replace(source_map);
     }
 
@@ -2308,12 +2346,21 @@ fn should_uncomment_lines(lines: &[String]) -> bool {
         })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewSize {
+    width: i32,
+    height: i32,
+    /// The widget shows a centred strip of the page (`ContentFit::Cover`).
+    cropped: bool,
+}
+
 fn preview_dimensions(
     viewport_width: i32,
     zoom: PreviewZoom,
     page_width: f64,
     aspect_ratio: f64,
-) -> (i32, i32) {
+    content_column: Option<(f64, f64)>,
+) -> PreviewSize {
     let aspect_ratio = if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
         aspect_ratio
     } else {
@@ -2324,15 +2371,25 @@ fn preview_dimensions(
     } else {
         FALLBACK_PAGE_WIDTH
     };
-    let width = match zoom {
-        PreviewZoom::FitWidth if viewport_width > PREVIEW_HORIZONTAL_INSET => {
-            f64::from(viewport_width - PREVIEW_HORIZONTAL_INSET)
+    let available = viewport_width - PREVIEW_HORIZONTAL_INSET;
+    let (width, visible_width) = match (zoom, content_column) {
+        (PreviewZoom::FitWidth | PreviewZoom::FitText, _) if available <= 0 => {
+            (DEFAULT_PREVIEW_WIDTH, page_width)
         }
-        PreviewZoom::FitWidth => DEFAULT_PREVIEW_WIDTH,
-        PreviewZoom::Scale(scale) => page_width * PIXELS_PER_POINT * scale,
+        (PreviewZoom::FitText, Some(column)) => {
+            (f64::from(available), fit_text_crop(page_width, column))
+        }
+        (PreviewZoom::FitWidth | PreviewZoom::FitText, _) => (f64::from(available), page_width),
+        (PreviewZoom::Scale(scale), _) => (page_width * PIXELS_PER_POINT * scale, page_width),
+    };
+    let width = width.max(48.0);
+    // The full page height at the scale that makes the visible strip `width`.
+    let height = width * page_width / visible_width / aspect_ratio;
+    PreviewSize {
+        width: width.round() as i32,
+        height: height.round() as i32,
+        cropped: visible_width < page_width,
     }
-    .max(48.0);
-    (width.round() as i32, (width / aspect_ratio).round() as i32)
 }
 
 #[cfg(test)]
@@ -2438,6 +2495,7 @@ fn preview_point(
     width: f64,
     height: f64,
     aspect: f64,
+    cropped: bool,
     page_height: f64,
     x: f64,
     y: f64,
@@ -2445,7 +2503,12 @@ fn preview_point(
     if width <= 0.0 || height <= 0.0 || aspect <= 0.0 {
         return None;
     }
-    let drawn_height = height.min(width / aspect);
+    // Contain letterboxes the page; Cover overflows and crops it centrally.
+    let drawn_height = if cropped {
+        height.max(width / aspect)
+    } else {
+        height.min(width / aspect)
+    };
     let drawn_width = drawn_height * aspect;
     let x = x - (width - drawn_width) / 2.0;
     let y = y - (height - drawn_height) / 2.0;
@@ -3109,18 +3172,20 @@ mod tests {
 
     #[test]
     fn preview_fit_uses_viewport_and_svg_aspect() {
+        let size = |viewport, zoom, page_width, aspect| {
+            let size = preview_dimensions(viewport, zoom, page_width, aspect, None);
+            (size.width, size.height)
+        };
         let fit = PreviewZoom::FitWidth;
-        assert_eq!(preview_dimensions(900, fit, 595.0, 2.0), (836, 418));
-        assert_eq!(
-            preview_dimensions(900, PreviewZoom::Scale(1.5), 420.0, 2.0),
-            (840, 420)
-        );
+        assert_eq!(size(900, fit, 595.0, 2.0), (836, 418));
+        assert_eq!(size(900, PreviewZoom::Scale(1.5), 420.0, 2.0), (840, 420));
         // 100% is the page's physical size at 96 DPI: A4 is 794 px wide.
         assert_eq!(
-            preview_dimensions(900, PreviewZoom::Scale(1.0), 595.28, 595.28 / 841.89).0,
+            size(900, PreviewZoom::Scale(1.0), 595.28, 595.28 / 841.89).0,
             794
         );
-        assert_eq!(preview_dimensions(0, fit, 595.0, 2.0), (560, 280));
+        assert_eq!(size(0, fit, 595.0, 2.0), (560, 280));
+        assert_eq!(size(900, PreviewZoom::FitText, 595.0, 2.0), (836, 418));
         assert_eq!(
             svg_aspect_ratio(r#"<svg viewBox="0 0 800 400"></svg>"#),
             Some(2.0)
@@ -3150,17 +3215,44 @@ mod tests {
     }
 
     #[test]
+    fn fit_text_crops_margins_and_keeps_full_page_height() {
+        let a4 = (595.28, 841.89);
+        let column = (70.87, 524.41);
+        let size = preview_dimensions(436, PreviewZoom::FitText, a4.0, a4.0 / a4.1, Some(column));
+        assert!(size.cropped);
+        assert_eq!(size.width, 372);
+        let crop = super::fit_text_crop(a4.0, column);
+        let expected = 372.0 * a4.0 / crop * a4.1 / a4.0;
+        assert_eq!(size.height, expected.round() as i32);
+        // A click on the strip's left edge lands on the column's left side.
+        let (x, _) = preview_point(
+            f64::from(size.width),
+            f64::from(size.height),
+            a4.0 / a4.1,
+            true,
+            a4.1,
+            0.0,
+            10.0,
+        )
+        .unwrap();
+        assert!((x - (a4.0 - crop) / 2.0).abs() < 0.5);
+    }
+
+    #[test]
     fn clicks_account_for_letterboxing_zoom_and_cropped_pages() {
         assert_eq!(
-            preview_point(800.0, 600.0, 2.0, 400.0, 200.0, 200.0),
+            preview_point(800.0, 600.0, 2.0, false, 400.0, 200.0, 200.0),
             Some((200.0, 100.0))
         );
-        assert_eq!(preview_point(800.0, 600.0, 2.0, 400.0, 200.0, 50.0), None);
         assert_eq!(
-            preview_point(400.0, 200.0, 2.0, 400.0, 100.0, 50.0),
+            preview_point(800.0, 600.0, 2.0, false, 400.0, 200.0, 50.0),
+            None
+        );
+        assert_eq!(
+            preview_point(400.0, 200.0, 2.0, false, 400.0, 100.0, 50.0),
             Some((200.0, 100.0))
         );
-        assert_eq!(preview_point(0.0, 0.0, 2.0, 400.0, 0.0, 0.0), None);
+        assert_eq!(preview_point(0.0, 0.0, 2.0, false, 400.0, 0.0, 0.0), None);
     }
     #[test]
     #[ignore = "requires a display; run under xvfb-run with --test-threads=1"]
