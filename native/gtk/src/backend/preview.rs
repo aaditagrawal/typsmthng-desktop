@@ -304,12 +304,13 @@ impl PreviewCompiler {
         main: &str,
         options: &CompileOptions,
     ) -> Result<CompileOutput<Preview>> {
+        let options = options.resolved()?;
         let (reply, response) = mpsc::channel();
         self.requests
             .send(Request {
                 project: project.clone(),
                 main: main.into(),
-                options: options.clone(),
+                options,
                 reply,
                 font_revision: self.font_revision.load(Ordering::Relaxed),
             })
@@ -325,9 +326,10 @@ struct Config {
     root: PathBuf,
     font_paths: Vec<PathBuf>,
     ignore_system_fonts: bool,
+    ignore_embedded_fonts: bool,
     package_path: Option<PathBuf>,
     package_cache_path: Option<PathBuf>,
-    creation_timestamp: Option<u64>,
+    creation_timestamp: Option<i64>,
 }
 
 impl Config {
@@ -336,6 +338,7 @@ impl Config {
             root: project.root().to_path_buf(),
             font_paths: options.font_paths.clone(),
             ignore_system_fonts: options.ignore_system_fonts,
+            ignore_embedded_fonts: options.ignore_embedded_fonts,
             package_path: options.package_path.clone(),
             package_cache_path: options.package_cache_path.clone(),
             creation_timestamp: options.creation_timestamp,
@@ -361,7 +364,9 @@ impl Engine {
         if !config.ignore_system_fonts {
             fonts.extend(fonts::system());
         }
-        fonts.extend(fonts::embedded());
+        if !config.ignore_embedded_fonts {
+            fonts.extend(fonts::embedded());
+        }
         for path in &config.font_paths {
             fonts.extend(fonts::scan(path));
         }
@@ -379,11 +384,8 @@ impl Engine {
             UniversePackages::new(PackageDownloader),
         );
         let now = match config.creation_timestamp {
-            Some(timestamp) => Time::fixed_timestamp(
-                i64::try_from(timestamp)
-                    .map_err(|error| BackendError::Process(error.to_string()))?,
-            )
-            .map_err(|error| BackendError::Process(error.to_string()))?,
+            Some(timestamp) => Time::fixed_timestamp(timestamp)
+                .map_err(|error| BackendError::Process(error.to_string()))?,
             None => Time::system(),
         };
         Ok(Self {
@@ -578,6 +580,7 @@ mod tests {
         CompileOptions {
             ignore_system_fonts: true,
             creation_timestamp: Some(0),
+            inherit_environment: false,
             ..Default::default()
         }
     }

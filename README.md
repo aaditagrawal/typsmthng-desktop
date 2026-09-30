@@ -93,11 +93,29 @@ The binary is written to `target/release/typsmthng`.
 
 ## Test
 
+Run backend and Typst compatibility tests without GTK development libraries:
+
+```bash
+scripts/test-typst-compatibility.sh
+```
+
+The script uses Typst 0.15.1 from `TYPSMTHNG_TYPST` or `PATH`, or downloads the checksum-verified compiler to `target/tools/typst` on supported platforms (under `CARGO_TARGET_DIR` when set). A supplied compiler must match the pinned version. The suite compares preview and CLI SVG, checks PDF compilation, and tests fonts, packages, dates, diagnostics, and document features. Environment cases run in separate processes so they can run safely alongside other tests.
+
+With the pinned compiler already installed, the equivalent Cargo command is:
+
+```bash
+cargo test --locked --workspace --no-default-features --all-targets
+```
+
+CLI-dependent tests fail if the compiler is missing or incompatible. The desktop feature is enabled by default; the following full workspace checks also require the GTK development libraries:
+
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+Preview, PDF export, and speaker-note queries share resolved Typst settings. They honor `TYPST_FONT_PATHS`, `TYPST_PACKAGE_PATH`, `TYPST_PACKAGE_CACHE_PATH`, `SOURCE_DATE_EPOCH`, `TYPST_IGNORE_SYSTEM_FONTS`, and `TYPST_IGNORE_EMBEDDED_FONTS`. Ignore-font variables accept `true` or `false`. Explicit paths, timestamps, and enabled ignore-font flags override environment defaults. Invalid settings produce the same configuration error in both compilation paths. The app keeps environment font directories when adding its Google Fonts cache.
 
 Linux CI also starts the application in Xvfb with `--smoke-test`, then compiles the bundled three-slide fixture and opens both presenter and audience windows with `--presentation-smoke-test`. The same smoke modes can run against a logged-in X11 or Wayland session. `scripts/capture-gtk4.sh` captures the native home, editor, settings, narrow layout, 125% text scaling, and presentation screens into `build/gtk4-screenshots`. It requires Xvfb and dbus-run-session.
 

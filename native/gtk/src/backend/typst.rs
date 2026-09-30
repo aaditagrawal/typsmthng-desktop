@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, LazyLock, Mutex,
+    LazyLock, Mutex,
 };
 use std::time::{Duration, Instant, SystemTime};
 
@@ -21,6 +21,7 @@ use crate::backend::paths::{relative_pathbuf, safe_existing_path};
 use crate::backend::project::Project;
 
 pub const REQUIRED_TYPST_VERSION: &str = "0.15.1";
+pub use super::compile_options::CompileOptions;
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Probe once per executable revision, while still respecting environment/PATH
@@ -38,17 +39,6 @@ static DETECTED_TOOL: LazyLock<Mutex<Option<CachedTypstTool>>> = LazyLock::new(|
 pub struct TypstTool {
     executable: PathBuf,
     version: Version,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct CompileOptions {
-    pub font_paths: Vec<PathBuf>,
-    pub ignore_system_fonts: bool,
-    pub page_preamble: Option<String>,
-    pub package_path: Option<PathBuf>,
-    pub package_cache_path: Option<PathBuf>,
-    pub creation_timestamp: Option<u64>,
-    pub cancellation: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +188,7 @@ impl TypstTool {
         options: &CompileOptions,
     ) -> Result<CompileOutput<Vec<SvgPage>>> {
         self.require_supported()?;
+        let options = options.resolved()?;
         let (main, _) = safe_existing_path(project.root(), main)?;
         let output_dir =
             tempdir().map_err(|error| BackendError::io("temporary render directory", error))?;
@@ -211,8 +202,8 @@ impl TypstTool {
             .arg("short")
             .arg("--root")
             .arg(project.root());
-        apply_options(&mut command, options);
-        let (entrypoint, _wrapper) = compile_entry(project, &main, options)?;
+        options.apply_to_command(&mut command);
+        let (entrypoint, _wrapper) = compile_entry(project, &main, &options)?;
         command.arg(entrypoint).arg(&output_pattern);
         let started = Instant::now();
         let process = run_command_cancellable(
@@ -269,6 +260,7 @@ impl TypstTool {
         options: &CompileOptions,
     ) -> Result<CompileOutput<Vec<u8>>> {
         self.require_supported()?;
+        let options = options.resolved()?;
         let (main, _) = safe_existing_path(project.root(), main)?;
         let output_dir =
             tempdir().map_err(|error| BackendError::io("temporary render directory", error))?;
@@ -282,8 +274,8 @@ impl TypstTool {
             .arg("short")
             .arg("--root")
             .arg(project.root());
-        apply_options(&mut command, options);
-        let (entrypoint, _wrapper) = compile_entry(project, &main, options)?;
+        options.apply_to_command(&mut command);
+        let (entrypoint, _wrapper) = compile_entry(project, &main, &options)?;
         command.arg(entrypoint).arg(&output);
         let started = Instant::now();
         let process = run_command_cancellable(
@@ -314,11 +306,12 @@ impl TypstTool {
         options: &CompileOptions,
     ) -> Result<Vec<InlineNote>> {
         self.require_supported()?;
+        let options = options.resolved()?;
         let (main, _) = safe_existing_path(project.root(), main)?;
-        let (entrypoint, _wrapper) = compile_entry(project, &main, options)?;
+        let (entrypoint, _wrapper) = compile_entry(project, &main, &options)?;
         let mut command = Command::new(&self.executable);
         command.arg("query").arg("--root").arg(project.root());
-        apply_options(&mut command, options);
+        options.apply_to_command(&mut command);
         command
             .arg(entrypoint)
             .arg("<typsmthng-note>")
@@ -395,26 +388,6 @@ fn inline_note(value: Value) -> Option<InlineNote> {
         .find_map(|key| object.get(key).and_then(Value::as_str))?
         .to_string();
     (page > 0).then_some(InlineNote { page, text })
-}
-
-fn apply_options(command: &mut Command, options: &CompileOptions) {
-    for path in &options.font_paths {
-        command.arg("--font-path").arg(path);
-    }
-    if let Some(path) = &options.package_path {
-        command.arg("--package-path").arg(path);
-    }
-    if let Some(path) = &options.package_cache_path {
-        command.arg("--package-cache-path").arg(path);
-    }
-    if let Some(timestamp) = options.creation_timestamp {
-        command
-            .arg("--creation-timestamp")
-            .arg(timestamp.to_string());
-    }
-    if options.ignore_system_fonts {
-        command.arg("--ignore-system-fonts");
-    }
 }
 
 pub(super) fn compile_entry(
@@ -825,10 +798,8 @@ mod tests {
     }
 
     #[test]
-    fn compiles_multiple_svg_pages_and_pdf_with_cli_when_available() {
-        let Ok(tool) = TypstTool::detect() else {
-            return;
-        };
+    fn compiles_multiple_svg_pages_and_pdf_with_cli() {
+        let tool = TypstTool::detect().expect("install Typst 0.15.1 or set TYPSMTHNG_TYPST");
         let directory = tempdir().unwrap();
         let root = directory.path().join("project");
         fs::create_dir(&root).unwrap();
@@ -843,9 +814,7 @@ mod tests {
 
     #[test]
     fn returns_structured_compiler_diagnostics() {
-        let Ok(tool) = TypstTool::detect() else {
-            return;
-        };
+        let tool = TypstTool::detect().expect("install Typst 0.15.1 or set TYPSMTHNG_TYPST");
         let directory = tempdir().unwrap();
         let root = directory.path().join("project");
         fs::create_dir(&root).unwrap();
@@ -859,10 +828,8 @@ mod tests {
     }
 
     #[test]
-    fn queries_inline_presentation_notes_when_cli_is_available() {
-        let Ok(tool) = TypstTool::detect() else {
-            return;
-        };
+    fn queries_inline_presentation_notes_with_cli() {
+        let tool = TypstTool::detect().expect("install Typst 0.15.1 or set TYPSMTHNG_TYPST");
         let directory = tempdir().unwrap();
         let root = directory.path().join("project");
         fs::create_dir(&root).unwrap();

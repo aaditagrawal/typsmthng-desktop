@@ -10,6 +10,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  typst-compatibility:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read pinned Rust toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)"
+          [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "version=$toolchain" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: native-${{ runner.os }}-${{ runner.arch }}-dev
+      - name: Backend and Typst compatibility without GTK
+        run: scripts/test-typst-compatibility.sh
+      - name: Headless Clippy
+        run: cargo clippy --locked --workspace --no-default-features --all-targets -- -D warnings
+
   rust-quality:
     runs-on: ubuntu-24.04
     steps:

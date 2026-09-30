@@ -1,6 +1,7 @@
 //! Cross-platform application backend.
 
 pub mod archive;
+mod compile_options;
 pub mod error;
 pub mod fonts;
 pub mod latex;
