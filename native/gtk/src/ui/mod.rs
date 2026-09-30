@@ -20,6 +20,11 @@ pub fn install_css() {
     }
 }
 
+/// The locale's default paper as a Typst paper name.
+pub fn locale_page_size() -> &'static str {
+    model::locale_page_size(&gtk::PaperSize::default())
+}
+
 /// Keep reusable utility windows alive while allowing Escape to dismiss them.
 pub fn dismiss_on_escape(window: &gtk::Window) {
     use gtk::prelude::*;

@@ -243,6 +243,48 @@ impl SlideNumberBuffer {
     }
 }
 
+/// Explicit page sizes offered in settings, in dropdown order after "Auto".
+pub const PAGE_SIZES: [(&str, &str); 8] = [
+    ("a3", "A3"),
+    ("a4", "A4"),
+    ("a5", "A5"),
+    ("a6", "A6"),
+    ("us-letter", "US Letter"),
+    ("us-legal", "US Legal"),
+    ("iso-b5", "ISO B5"),
+    ("presentation-16-9", "Presentation 16:9"),
+];
+
+/// Map a GTK/PWG paper name (`gtk_paper_size_get_default`, which follows
+/// `LC_PAPER` on glibc and the user's region elsewhere) to a Typst paper.
+pub fn locale_page_size(paper_name: &str) -> &'static str {
+    match paper_name {
+        "na_letter" => "us-letter",
+        "na_legal" => "us-legal",
+        "iso_a3" => "a3",
+        "iso_a5" => "a5",
+        "iso_a6" => "a6",
+        "iso_b5" => "iso-b5",
+        _ => "a4",
+    }
+}
+
+/// Resolve the "auto" setting against the locale's paper size.
+pub fn effective_page_size<'a>(setting: &'a str, locale_paper: &'a str) -> &'a str {
+    if PAGE_SIZES.iter().any(|(id, _)| *id == setting) {
+        setting
+    } else {
+        locale_paper
+    }
+}
+
+pub fn page_size_label(id: &str) -> &'static str {
+    PAGE_SIZES
+        .iter()
+        .find(|(candidate, _)| *candidate == id)
+        .map_or("A4", |(_, label)| label)
+}
+
 /// A positional `.typ` argument opens its containing vault and selects the file;
 /// any other positional path is treated as a vault directory.
 pub fn resolve_startup_path(path: impl AsRef<Path>) -> (PathBuf, Option<PathBuf>) {
@@ -287,6 +329,16 @@ pub fn format_elapsed(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_page_size_follows_locale_paper() {
+        assert_eq!(locale_page_size("na_letter"), "us-letter");
+        assert_eq!(locale_page_size("iso_a4"), "a4");
+        assert_eq!(locale_page_size("unknown"), "a4");
+        assert_eq!(effective_page_size("auto", "us-letter"), "us-letter");
+        assert_eq!(effective_page_size("a5", "us-letter"), "a5");
+        assert_eq!(page_size_label("us-letter"), "US Letter");
+    }
 
     #[test]
     fn startup_typ_file_selects_file_inside_parent_vault() {
