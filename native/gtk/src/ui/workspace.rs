@@ -4164,6 +4164,7 @@ mod tests {
             settings.centered_scrolling = centered;
             workspace.apply_settings(settings.clone());
             workspace.show_text_file("main.typ", &unformatted);
+            drive(500); // Let the old file's PRIMARY ownership and layout settle before selecting.
             let start = unformatted[..unformatted.rfind("café").unwrap()]
                 .chars()
                 .count() as i32;
@@ -4184,6 +4185,16 @@ mod tests {
                 );
             }
             let before_scroll = adjustment.value();
+            let (selection_start, selection_end) =
+                workspace.buffer.selection_bounds().unwrap_or_else(|| {
+                    panic!("selection must be present before formatting: centered={centered}")
+                });
+            assert_eq!(
+                workspace
+                    .buffer
+                    .text(&selection_start, &selection_end, true),
+                "café"
+            );
             workspace.format_document();
             drive(250);
             assert_eq!(workspace.compile_label.text(), "Formatted");
@@ -4193,10 +4204,16 @@ mod tests {
                 formatted.lines().count() > unformatted.lines().count(),
                 "fixture must exercise formatting that changes line count"
             );
-            let (start, end) = workspace
-                .buffer
-                .selection_bounds()
-                .expect("formatting must preserve selection in both scroll modes");
+            let (start, end) = workspace.buffer.selection_bounds().unwrap_or_else(|| {
+                panic!(
+                    "formatting must preserve selection: centered={centered}, caret={}, anchor={}",
+                    workspace.buffer.cursor_position(),
+                    workspace
+                        .buffer
+                        .iter_at_mark(&workspace.buffer.selection_bound())
+                        .offset()
+                )
+            });
             assert_eq!(workspace.buffer.text(&start, &end, true), "café");
             if centered {
                 assert_centered();

@@ -413,7 +413,7 @@ impl EditorTools {
                     let adjustments = adjustments.clone();
                     let revision = revision.clone();
                     // GtkTextView validates changed line heights at priority 125.
-                    // Default-idle runs after that work and queued PRIMARY detaches.
+                    // Default-idle priority 200 runs after pending layout validation.
                     glib::idle_add_local_once(move || {
                         if revision.get() != expected {
                             return;
