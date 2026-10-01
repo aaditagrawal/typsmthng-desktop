@@ -1,0 +1,71 @@
+# The checksum-verified upstream Typst musl binary has no GNU build ID.
+# Keep build IDs mandatory for our own executable through the check below.
+%global _missing_build_ids_terminate_build 0
+
+Name:           typsmthng
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Native GTK Typst editor and presentation studio
+License:        @LICENSES@
+URL:            https://github.com/aaditagrawal/typsmthng-desktop
+Source0:        %{name}-%{version}.tar.gz
+Source1:        %{name}-%{version}-vendor.tar.gz
+Source2:        typst-x86_64-unknown-linux-musl.tar.xz
+ExclusiveArch:  x86_64
+
+BuildRequires:  rust >= @RUST_VERSION@
+BuildRequires:  cargo
+BuildRequires:  gcc
+BuildRequires:  binutils
+BuildRequires:  pkgconfig(gtk4) >= 4.12
+BuildRequires:  pkgconfig(gtksourceview-5) >= 5.4
+BuildRequires:  pkgconfig(libadwaita-1) >= 1.5
+BuildRequires:  desktop-file-utils
+Requires:       librsvg2
+Requires:       adwaita-icon-theme
+Provides:       bundled(typst) = 0.15.1
+
+%description
+A native GTK 4 editor for folder-backed Typst projects, with live document
+preview, PDF export, and presentation tools. Includes the pinned Typst compiler
+for exports and templates. Rust dependencies are vendored in the source RPM.
+
+%prep
+%setup -q
+tar -xzf %{SOURCE1}
+tar -xJf %{SOURCE2}
+rm -f rust-toolchain.toml
+
+%build
+export CARGO_HOME="$PWD/.cargo-home"
+export CARGO_BUILD_JOBS="%{_smp_build_ncpus}"
+cargo build --frozen --release --package typsmthng-gtk --bin typsmthng
+
+%install
+install -Dm755 target/release/typsmthng %{buildroot}%{_bindir}/typsmthng
+install -Dm755 typst-x86_64-unknown-linux-musl/typst %{buildroot}%{_prefix}/lib/typsmthng/typst
+install -Dm644 native/gtk/data/language-specs/typst.lang %{buildroot}%{_datadir}/typsmthng/language-specs/typst.lang
+install -Dm644 -t %{buildroot}%{_datadir}/typsmthng/styles native/gtk/data/styles/*.xml
+install -Dm644 packaging/linux/dev.typsmthng.Typsmthng.desktop %{buildroot}%{_datadir}/applications/dev.typsmthng.Typsmthng.desktop
+install -Dm644 packaging/linux/dev.typsmthng.Typsmthng.metainfo.xml %{buildroot}%{_datadir}/metainfo/dev.typsmthng.Typsmthng.metainfo.xml
+install -Dm644 icon.iconset/icon_512x512.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png
+install -Dm644 assets/typst.xml %{buildroot}%{_datadir}/mime/packages/typsmthng.xml
+install -Dm644 typst-x86_64-unknown-linux-musl/LICENSE %{buildroot}%{_licensedir}/%{name}/typst/LICENSE
+install -Dm644 typst-x86_64-unknown-linux-musl/NOTICE %{buildroot}%{_licensedir}/%{name}/typst/NOTICE
+
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/dev.typsmthng.Typsmthng.desktop
+readelf -n %{buildroot}%{_bindir}/typsmthng | grep 'Build ID:'
+typst-x86_64-unknown-linux-musl/typst --version | grep -E '^typst 0\.15\.1( |$)'
+
+%files
+%license LICENSE bundled-licenses
+%license %{_licensedir}/%{name}/typst/
+%doc README.md
+%{_bindir}/typsmthng
+%{_prefix}/lib/typsmthng/
+%{_datadir}/typsmthng/
+%{_datadir}/applications/dev.typsmthng.Typsmthng.desktop
+%{_datadir}/metainfo/dev.typsmthng.Typsmthng.metainfo.xml
+%{_datadir}/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png
+%{_datadir}/mime/packages/typsmthng.xml
