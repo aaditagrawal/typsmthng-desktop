@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -39,6 +39,172 @@ static DETECTED_TOOL: LazyLock<Mutex<Option<CachedTypstTool>>> = LazyLock::new(|
 pub struct TypstTool {
     executable: PathBuf,
     version: Version,
+}
+
+/// Profiles accepted by the pinned Typst 0.15.1 CLI. Typst checks document
+/// requirements during compilation; selecting a profile is not certification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PdfStandard {
+    pub label: &'static str,
+    cli: &'static str,
+}
+
+impl PdfStandard {
+    pub const ALL: [Self; 17] = [
+        Self {
+            label: "PDF 1.4",
+            cli: "1.4",
+        },
+        Self {
+            label: "PDF 1.5",
+            cli: "1.5",
+        },
+        Self {
+            label: "PDF 1.6",
+            cli: "1.6",
+        },
+        Self {
+            label: "PDF 1.7",
+            cli: "1.7",
+        },
+        Self {
+            label: "PDF 2.0",
+            cli: "2.0",
+        },
+        Self {
+            label: "PDF/A-1b",
+            cli: "a-1b",
+        },
+        Self {
+            label: "PDF/A-1a",
+            cli: "a-1a",
+        },
+        Self {
+            label: "PDF/A-2b",
+            cli: "a-2b",
+        },
+        Self {
+            label: "PDF/A-2u",
+            cli: "a-2u",
+        },
+        Self {
+            label: "PDF/A-2a",
+            cli: "a-2a",
+        },
+        Self {
+            label: "PDF/A-3b",
+            cli: "a-3b",
+        },
+        Self {
+            label: "PDF/A-3u",
+            cli: "a-3u",
+        },
+        Self {
+            label: "PDF/A-3a",
+            cli: "a-3a",
+        },
+        Self {
+            label: "PDF/A-4",
+            cli: "a-4",
+        },
+        Self {
+            label: "PDF/A-4f",
+            cli: "a-4f",
+        },
+        Self {
+            label: "PDF/A-4e",
+            cli: "a-4e",
+        },
+        Self {
+            label: "PDF/UA-1",
+            cli: "ua-1",
+        },
+    ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Pdf(Option<PdfStandard>),
+    Svg,
+    Png,
+    Html,
+}
+
+impl ExportFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pdf(_) => "PDF",
+            Self::Svg => "SVG pages",
+            Self::Png => "PNG pages",
+            Self::Html => "HTML",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Pdf(_) => "pdf",
+            Self::Svg | Self::Png => "zip",
+            Self::Html => "html",
+        }
+    }
+
+    fn cli_format(self) -> &'static str {
+        match self {
+            Self::Pdf(_) => "pdf",
+            Self::Svg => "svg",
+            Self::Png => "png",
+            Self::Html => "html",
+        }
+    }
+
+    fn is_pages(self) -> bool {
+        matches!(self, Self::Svg | Self::Png)
+    }
+}
+
+#[derive(Debug)]
+pub struct ExportArtifact {
+    pub format: ExportFormat,
+    pub bytes: Vec<u8>,
+}
+
+impl ExportArtifact {
+    /// Stage in the destination directory so failures never leave a partial
+    /// file. Page bundles refuse replacement, including existing symlinks.
+    pub fn save(&self, destination: &Path) -> Result<()> {
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|error| BackendError::io(parent, error))?;
+        temporary
+            .write_all(&self.bytes)
+            .map_err(|error| BackendError::io(temporary.path(), error))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| BackendError::io(temporary.path(), error))?;
+        if self.format.is_pages() {
+            temporary.persist_noclobber(destination).map_err(|error| {
+                if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+                    BackendError::AlreadyExists(destination.to_path_buf())
+                } else {
+                    BackendError::io(destination, error.error)
+                }
+            })?;
+        } else {
+            temporary
+                .persist(destination)
+                .map_err(|error| BackendError::io(destination, error.error))?;
+        }
+        Ok(())
+    }
+}
+
+struct CompiledFile {
+    name: String,
+    bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -187,65 +353,33 @@ impl TypstTool {
         main: &str,
         options: &CompileOptions,
     ) -> Result<CompileOutput<Vec<SvgPage>>> {
-        self.require_supported()?;
-        let options = options.resolved()?;
-        let (main, _) = safe_existing_path(project.root(), main)?;
-        let output_dir =
-            tempdir().map_err(|error| BackendError::io("temporary render directory", error))?;
-        let output_pattern = output_dir.path().join("page-{0p}.svg");
-        let mut command = Command::new(&self.executable);
-        command
-            .arg("compile")
-            .arg("--format")
-            .arg("svg")
-            .arg("--diagnostic-format")
-            .arg("short")
-            .arg("--root")
-            .arg(project.root());
-        options.apply_to_command(&mut command);
-        let (entrypoint, _wrapper) = compile_entry(project, &main, &options)?;
-        command.arg(entrypoint).arg(&output_pattern);
-        let started = Instant::now();
-        let process = run_command_cancellable(
-            &mut command,
-            PROCESS_TIMEOUT,
-            options.cancellation.as_deref(),
-        )?;
-        let elapsed = started.elapsed();
-        let diagnostics = parse_diagnostics(&process.stderr, project.root());
-        let artifact = if process.status == Some(0) {
-            let mut paths = fs::read_dir(output_dir.path())
-                .map_err(|error| BackendError::io(output_dir.path(), error))?
-                .filter_map(std::result::Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| path.extension() == Some(OsStr::new("svg")))
-                .collect::<Vec<_>>();
-            paths.sort_by_key(|path| page_number(path));
-            let pages = paths
-                .into_iter()
-                .enumerate()
-                .map(|(index, path)| {
-                    let svg = fs::read_to_string(&path)
-                        .map_err(|error| BackendError::io(&path, error))?;
-                    let (width_points, height_points) = svg_dimensions(&svg);
-                    Ok(SvgPage {
-                        page: page_number(&path).unwrap_or(index + 1),
-                        svg,
-                        width_points,
-                        height_points,
+        let output = self.compile_files(project, main, ExportFormat::Svg, options)?;
+        let pages = output
+            .artifact
+            .map(|files| {
+                files
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, file)| {
+                        let svg = String::from_utf8(file.bytes)
+                            .map_err(|error| BackendError::Process(error.to_string()))?;
+                        let (width_points, height_points) = svg_dimensions(&svg);
+                        Ok(SvgPage {
+                            page: page_number(Path::new(&file.name)).unwrap_or(index + 1),
+                            svg,
+                            width_points,
+                            height_points,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Some(pages)
-        } else {
-            None
-        };
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
         Ok(CompileOutput {
-            artifact,
-            diagnostics,
-            stdout: process.stdout,
-            stderr: process.stderr,
-            elapsed,
+            artifact: pages,
+            diagnostics: output.diagnostics,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            elapsed: output.elapsed,
         })
     }
 
@@ -259,21 +393,91 @@ impl TypstTool {
         main: &str,
         options: &CompileOptions,
     ) -> Result<CompileOutput<Vec<u8>>> {
+        let output = self.compile_export(project, main, ExportFormat::Pdf(None), options)?;
+        Ok(CompileOutput {
+            artifact: output.artifact.map(|artifact| artifact.bytes),
+            diagnostics: output.diagnostics,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            elapsed: output.elapsed,
+        })
+    }
+
+    pub fn compile_export(
+        &self,
+        project: &Project,
+        main: &str,
+        format: ExportFormat,
+        options: &CompileOptions,
+    ) -> Result<CompileOutput<ExportArtifact>> {
+        let output = self.compile_files(project, main, format, options)?;
+        let artifact = output
+            .artifact
+            .map(|files| -> Result<ExportArtifact> {
+                let bytes = if format.is_pages() {
+                    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+                    let settings = zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated)
+                        .unix_permissions(0o644);
+                    for file in files {
+                        archive.start_file(file.name, settings)?;
+                        archive
+                            .write_all(&file.bytes)
+                            .map_err(|error| BackendError::io("page archive", error))?;
+                    }
+                    archive.finish()?.into_inner()
+                } else {
+                    files
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| BackendError::Process("Typst produced no output".into()))?
+                        .bytes
+                };
+                Ok(ExportArtifact { format, bytes })
+            })
+            .transpose()?;
+        Ok(CompileOutput {
+            artifact,
+            diagnostics: output.diagnostics,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            elapsed: output.elapsed,
+        })
+    }
+
+    fn compile_files(
+        &self,
+        project: &Project,
+        main: &str,
+        format: ExportFormat,
+        options: &CompileOptions,
+    ) -> Result<CompileOutput<Vec<CompiledFile>>> {
         self.require_supported()?;
         let options = options.resolved()?;
         let (main, _) = safe_existing_path(project.root(), main)?;
         let output_dir =
             tempdir().map_err(|error| BackendError::io("temporary render directory", error))?;
-        let output = output_dir.path().join("document.pdf");
+        let extension = format.cli_format();
+        let output = output_dir.path().join(if format.is_pages() {
+            format!("page-{{0p}}.{extension}")
+        } else {
+            format!("document.{extension}")
+        });
         let mut command = Command::new(&self.executable);
         command
             .arg("compile")
             .arg("--format")
-            .arg("pdf")
+            .arg(extension)
             .arg("--diagnostic-format")
             .arg("short")
             .arg("--root")
             .arg(project.root());
+        if let ExportFormat::Pdf(Some(standard)) = format {
+            command.arg("--pdf-standard").arg(standard.cli);
+        }
+        if format == ExportFormat::Html {
+            command.arg("--features").arg("html");
+        }
         options.apply_to_command(&mut command);
         let (entrypoint, _wrapper) = compile_entry(project, &main, &options)?;
         command.arg(entrypoint).arg(&output);
@@ -286,7 +490,25 @@ impl TypstTool {
         let elapsed = started.elapsed();
         let diagnostics = parse_diagnostics(&process.stderr, project.root());
         let artifact = if process.status == Some(0) {
-            Some(fs::read(&output).map_err(|error| BackendError::io(&output, error))?)
+            let mut paths = fs::read_dir(output_dir.path())
+                .map_err(|error| BackendError::io(output_dir.path(), error))?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|error| BackendError::io(output_dir.path(), error))?;
+            paths.retain(|path| path.extension() == Some(OsStr::new(extension)));
+            paths.sort_by_key(|path| page_number(path));
+            Some(
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        Ok(CompiledFile {
+                            name: path.file_name().unwrap().to_string_lossy().into_owned(),
+                            bytes: fs::read(&path)
+                                .map_err(|error| BackendError::io(&path, error))?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
         } else {
             None
         };
@@ -657,6 +879,239 @@ fn svg_dimensions(svg: &str) -> (Option<f64>, Option<f64>) {
 
 #[cfg(test)]
 mod tests {
+    fn export_fixture(source: &str) -> (tempfile::TempDir, Project) {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("project");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("main.typ"), source).unwrap();
+        (directory, Project::open(root).unwrap())
+    }
+
+    #[test]
+    fn exports_all_pdf_profiles_with_pinned_cli() {
+        let tool = TypstTool::detect().unwrap();
+        let (_directory, project) = export_fixture(
+            "#set document(title: \"Export test\")\n#set text(lang: \"en\")\n= Document\nHello",
+        );
+        for standard in PdfStandard::ALL {
+            let output = tool
+                .compile_export(
+                    &project,
+                    "main.typ",
+                    ExportFormat::Pdf(Some(standard)),
+                    &CompileOptions::default(),
+                )
+                .unwrap();
+            assert!(output.success(), "{}: {}", standard.label, output.stderr);
+            let artifact = output.artifact.unwrap();
+            assert!(artifact.bytes.starts_with(b"%PDF"));
+            if standard.cli.chars().next().unwrap().is_ascii_digit() {
+                assert!(artifact
+                    .bytes
+                    .starts_with(format!("%PDF-{}", standard.cli).as_bytes()));
+            }
+        }
+    }
+
+    #[test]
+    fn exports_all_svg_and_png_pages_as_ordered_zip() {
+        let tool = TypstTool::detect().unwrap();
+        let (_directory, project) = export_fixture(&["Page"; 12].join("#pagebreak()"));
+        for format in [ExportFormat::Svg, ExportFormat::Png] {
+            let output = tool
+                .compile_export(&project, "main.typ", format, &CompileOptions::default())
+                .unwrap();
+            assert!(output.success(), "{}", output.stderr);
+            let mut archive =
+                zip::ZipArchive::new(Cursor::new(output.artifact.unwrap().bytes)).unwrap();
+            assert_eq!(archive.len(), 12);
+            for index in 0..12 {
+                let mut page = archive.by_index(index).unwrap();
+                assert_eq!(
+                    page.name(),
+                    format!("page-{:02}.{}", index + 1, format.cli_format())
+                );
+                let mut bytes = Vec::new();
+                page.read_to_end(&mut bytes).unwrap();
+                match format {
+                    ExportFormat::Svg => {
+                        assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"))
+                    }
+                    ExportFormat::Png => assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n")),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn html_export_enables_experimental_feature_and_returns_structure() {
+        let tool = TypstTool::detect().unwrap();
+        let (_directory, project) = export_fixture("= Web heading\nHello *web*.");
+        let output = tool
+            .compile_export(
+                &project,
+                "main.typ",
+                ExportFormat::Html,
+                &CompileOptions::default(),
+            )
+            .unwrap();
+        assert!(output.success(), "{}", output.stderr);
+        let html = String::from_utf8(output.artifact.unwrap().bytes).unwrap();
+        assert!(
+            html.contains("<h2") && html.contains("Web heading"),
+            "{html}"
+        );
+        assert!(html.contains("<strong>web</strong>"));
+    }
+
+    #[test]
+    fn export_profile_requirements_fail_with_diagnostics_and_no_artifact() {
+        let tool = TypstTool::detect().unwrap();
+        let (_directory, project) = export_fixture("Hello");
+        let standard = PdfStandard::ALL
+            .iter()
+            .find(|standard| standard.cli == "ua-1")
+            .copied()
+            .unwrap();
+        let output = tool
+            .compile_export(
+                &project,
+                "main.typ",
+                ExportFormat::Pdf(Some(standard)),
+                &CompileOptions::default(),
+            )
+            .unwrap();
+        assert!(!output.success());
+        assert!(output.artifact.is_none());
+        assert!(output.stderr.contains("title"), "{}", output.stderr);
+        assert!(output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error));
+    }
+
+    #[test]
+    fn export_reuses_packages_page_settings_signed_timestamp_and_cancellation() {
+        let tool = TypstTool::detect().unwrap();
+        let (directory, project) =
+            export_fixture("#import \"@local/export-test:0.1.0\": greeting\n#greeting");
+        let packages = directory.path().join("packages");
+        let package = packages.join("local/export-test/0.1.0");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("typst.toml"),
+            "[package]\nname = \"export-test\"\nversion = \"0.1.0\"\nentrypoint = \"lib.typ\"",
+        )
+        .unwrap();
+        fs::write(
+            package.join("lib.typ"),
+            "#let greeting = [Configured export]",
+        )
+        .unwrap();
+        let options = CompileOptions {
+            package_path: Some(packages),
+            package_cache_path: Some(directory.path().join("cache")),
+            creation_timestamp: Some(-1),
+            page_preamble: Some("#set page(width: 200pt, height: 300pt)".into()),
+            ignore_system_fonts: true,
+            inherit_environment: false,
+            ..Default::default()
+        };
+        let output = tool
+            .compile_export(&project, "main.typ", ExportFormat::Pdf(None), &options)
+            .unwrap();
+        assert!(output.success(), "{}", output.stderr);
+        let bytes = output.artifact.unwrap().bytes;
+        let pdf = String::from_utf8_lossy(&bytes);
+        assert!(pdf.contains("D:19691231235959"), "signed timestamp missing");
+        let svg = tool
+            .compile_svg_with_options(&project, "main.typ", &options)
+            .unwrap();
+        assert!(svg.success(), "{}", svg.stderr);
+        let page = &svg.artifact.unwrap()[0];
+        assert_eq!(
+            (page.width_points, page.height_points),
+            (Some(200.0), Some(300.0))
+        );
+        assert_eq!(
+            fs::read_dir(project.root()).unwrap().count(),
+            1,
+            "entry wrapper must be removed"
+        );
+        let invalid = CompileOptions {
+            creation_timestamp: Some(i64::MAX),
+            ..options.clone()
+        };
+        assert!(matches!(
+            tool.compile_export(&project, "main.typ", ExportFormat::Png, &invalid),
+            Err(BackendError::InvalidTypstConfiguration { .. })
+        ));
+        let cancelled = CompileOptions {
+            cancellation: Some(std::sync::Arc::new(AtomicBool::new(true))),
+            ..options
+        };
+        assert!(tool
+            .compile_export(&project, "main.typ", ExportFormat::Html, &cancelled)
+            .is_err());
+    }
+
+    #[test]
+    fn page_bundle_save_refuses_existing_files_and_single_exports_are_atomic() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("pages.zip");
+        let artifact = ExportArtifact {
+            format: ExportFormat::Svg,
+            bytes: b"complete bundle".to_vec(),
+        };
+        artifact.save(&path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), artifact.bytes);
+        let replacement = ExportArtifact {
+            format: ExportFormat::Png,
+            bytes: b"replacement".to_vec(),
+        };
+        assert!(matches!(
+            replacement.save(&path),
+            Err(BackendError::AlreadyExists(_))
+        ));
+        assert_eq!(fs::read(&path).unwrap(), artifact.bytes);
+        let missing_parent = directory.path().join("missing/document.pdf");
+        let pdf = ExportArtifact {
+            format: ExportFormat::Pdf(None),
+            bytes: b"complete PDF".to_vec(),
+        };
+        assert!(pdf.save(&missing_parent).is_err());
+        assert!(!missing_parent.exists());
+        pdf.save(&path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), pdf.bytes);
+        assert_eq!(
+            fs::read_dir(directory.path()).unwrap().count(),
+            1,
+            "staging files must be removed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn page_bundle_save_refuses_symlinks_including_dangling_links() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("pages.zip");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let artifact = ExportArtifact {
+            format: ExportFormat::Svg,
+            bytes: vec![1, 2, 3],
+        };
+        assert!(matches!(
+            artifact.save(&link),
+            Err(BackendError::AlreadyExists(_))
+        ));
+        assert!(!target.exists());
+        fs::write(&target, b"keep").unwrap();
+        assert!(artifact.save(&link).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+    }
+
     #[cfg(unix)]
     #[test]
     fn superseded_process_is_killed_without_waiting_for_timeout() {

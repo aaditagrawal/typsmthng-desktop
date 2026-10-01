@@ -282,6 +282,7 @@ pub struct WorkspaceCallbacks {
     pub preview_asset: Rc<dyn Fn(String)>,
     pub check_update: Rc<dyn Fn()>,
     pub export_pdf: Rc<dyn Fn()>,
+    pub export_document: Rc<dyn Fn()>,
     pub export_project: Rc<dyn Fn()>,
     pub present_single: Rc<dyn Fn()>,
     pub present_dual: Rc<dyn Fn()>,
@@ -383,6 +384,10 @@ impl WorkspaceView {
         let document_search = icon_button("edit-find-symbolic", "Find and replace (Ctrl+F)");
         let compile = icon_button("view-refresh-symbolic", "Compile now (Ctrl+Enter)");
         let export = icon_button("document-save-symbolic", "Export PDF (Ctrl+Shift+E)");
+        let export_document = icon_button(
+            "document-send-symbolic",
+            "Export document (PDF profiles, SVG, PNG, HTML)",
+        );
         let export_project = icon_button("package-x-generic-symbolic", "Export project ZIP");
         let present = gtk::MenuButton::new();
         present.set_icon_name("media-playback-start-symbolic");
@@ -430,6 +435,7 @@ impl WorkspaceView {
         let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         more_actions.append(&document_search);
         more_actions.append(&compile);
+        more_actions.append(&export_document);
         more_actions.append(&export_project);
         more_actions.append(&update_button);
         more_popover.set_child(Some(&more_actions));
@@ -1063,6 +1069,10 @@ impl WorkspaceView {
         {
             let callback = callbacks.export_pdf.clone();
             export.connect_clicked(move |_| callback());
+        }
+        {
+            let callback = callbacks.export_document.clone();
+            export_document.connect_clicked(move |_| callback());
         }
         {
             let callback = callbacks.export_project.clone();
@@ -3554,6 +3564,7 @@ mod tests {
                 preview_asset: path_noop.clone(),
                 check_update: noop.clone(),
                 export_pdf: noop.clone(),
+                export_document: noop.clone(),
                 export_project: noop.clone(),
                 present_single: noop.clone(),
                 present_dual: noop,
