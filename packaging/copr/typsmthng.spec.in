@@ -1,3 +1,7 @@
+# The checksum-verified upstream Typst musl binary has no GNU build ID.
+# Keep build IDs mandatory for our own executable through the check below.
+%global _missing_build_ids_terminate_build 0
+
 Name:           typsmthng
 Version:        @VERSION@
 Release:        1%{?dist}
@@ -12,6 +16,7 @@ ExclusiveArch:  x86_64
 BuildRequires:  rust >= @RUST_VERSION@
 BuildRequires:  cargo
 BuildRequires:  gcc
+BuildRequires:  binutils
 BuildRequires:  pkgconfig(gtk4) >= 4.12
 BuildRequires:  pkgconfig(gtksourceview-5) >= 5.4
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.5
@@ -48,6 +53,7 @@ install -Dm644 assets/typst.xml %{buildroot}%{_datadir}/mime/packages/typsmthng.
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/dev.typsmthng.Typsmthng.desktop
+readelf -n %{buildroot}%{_bindir}/typsmthng | grep 'Build ID:'
 typst-x86_64-unknown-linux-musl/typst --version | grep -E '^typst 0\.15\.1( |$)'
 
 %files
