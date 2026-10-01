@@ -36,7 +36,8 @@ pub use model::*;
 pub use persistence::StateStore;
 pub use project::Project;
 pub use typst::{
-    CompileOptions, CompileOutput, InlineNote, SvgPage, TypstTool, REQUIRED_TYPST_VERSION,
+    CompileOptions, CompileOutput, ExportArtifact, ExportFormat, InlineNote, PdfStandard, SvgPage,
+    TypstTool, REQUIRED_TYPST_VERSION,
 };
 pub use universe::{UniverseClient, UniverseTemplate};
 pub use update::{ReleaseAsset, UpdateClient, UpdateStatus};

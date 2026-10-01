@@ -13,9 +13,10 @@ use typsmthng_gtk::backend::app_fonts;
 use typsmthng_gtk::backend::{
     convert_latex_to_typst, export_project, export_projects, import_project, import_projects,
     ArchiveLimits, BackendError, CompileOptions, CompileOutput, DiagnosticSeverity, EntryKind,
-    ExternalEventKind, ExternalWatcher, FileContent, GoogleFontCache, InlineNote, Project,
-    StateStore, SvgPage, Theme as BackendTheme, TypstTool, UniverseClient, UniverseTemplate,
-    UpdateClient, UpdateStatus, UserSettings, WindowState as BackendWindowState,
+    ExportArtifact, ExportFormat, ExternalEventKind, ExternalWatcher, FileContent, GoogleFontCache,
+    InlineNote, PdfStandard, Project, StateStore, SvgPage, Theme as BackendTheme, TypstTool,
+    UniverseClient, UniverseTemplate, UpdateClient, UpdateStatus, UserSettings,
+    WindowState as BackendWindowState,
 };
 
 use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
@@ -458,6 +459,7 @@ impl AppController {
             match std::env::var("TYPSMTHNG_SMOKE_VIEW").as_deref() {
                 Ok("settings") => controller.show_settings(),
                 Ok("font-picker") => controller.show_font_picker_smoke(),
+                Ok("export") => controller.choose_document_export(),
                 Ok("templates") => controller.create_from_template(),
                 Ok("import") => controller.show_import_options(),
                 Ok("name") => controller.prompt_name("New project", "Project name", |_, _| {}),
@@ -652,6 +654,7 @@ impl AppController {
                 preview_asset: callback1(&weak, Self::preview_asset),
                 check_update: callback0(&weak, Self::check_update),
                 export_pdf: callback0(&weak, Self::export_pdf),
+                export_document: callback0(&weak, Self::choose_document_export),
                 export_project: callback0(&weak, Self::export_current_project),
                 present_single: callback0(&weak, Self::present_single),
                 present_dual: callback0(&weak, Self::present_dual),
@@ -714,6 +717,7 @@ impl AppController {
             &["<Primary><Shift>e", "<Primary><Shift>Return"],
             Self::export_pdf,
         );
+        self.add_action("export-document", &[], Self::choose_document_export);
         self.add_action(
             "export-project",
             &["<Primary><Shift>s"],
@@ -1006,6 +1010,7 @@ impl AppController {
                     }
                 }
                 "export" => self.export_pdf(),
+                "export-document" => self.choose_document_export(),
                 "present" => self.present_single(),
                 "presenter" => self.present_dual(),
                 "new-file" => self.prompt_create_file(),
@@ -1615,12 +1620,85 @@ impl AppController {
         }
     }
 
+    fn choose_document_export(&self) {
+        let dialog = adw::AlertDialog::builder()
+            .heading("Export document")
+            .build();
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("export", "Export");
+        dialog.set_response_appearance("export", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("export"));
+        dialog.set_close_response("cancel");
+        let format = adw::ComboRow::builder()
+            .title("Format")
+            .model(&gtk::StringList::new(&[
+                "PDF",
+                "SVG pages (ZIP)",
+                "PNG pages (ZIP)",
+                "HTML (experimental)",
+            ]))
+            .build();
+        let mut profiles = vec!["Default PDF"];
+        profiles.extend(PdfStandard::ALL.iter().map(|standard| standard.label));
+        let profile = adw::ComboRow::builder()
+            .title("PDF profile")
+            .model(&gtk::StringList::new(&profiles))
+            .build();
+        let group = adw::PreferencesGroup::new();
+        group.add(&format);
+        group.add(&profile);
+        let description = gtk::Label::new(Some("Typst checks the selected profile's requirements during export. Documents may need a title, language, or image descriptions."));
+        description.set_wrap(true);
+        description.set_xalign(0.0);
+        description.add_css_class("dim-label");
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.append(&group);
+        content.append(&description);
+        dialog.set_extra_child(Some(&content));
+        format.connect_selected_notify({
+            let profile = profile.clone();
+            move |format| {
+                profile.set_sensitive(format.selected() == 0);
+                description.set_text(match format.selected() {
+                    1 | 2 => "Every page is saved in one ZIP. Choose a new filename; page exports do not replace existing files.",
+                    3 => "HTML export is experimental. It exports document structure and does not preserve the PDF page layout.",
+                    _ => "Typst checks the selected profile's requirements during export. Documents may need a title, language, or image descriptions.",
+                });
+            }
+        });
+        let weak = self.weak();
+        dialog.connect_response(None, move |_, response| {
+            if response == "export" {
+                if let Some(this) = weak.upgrade() {
+                    let format = match format.selected() {
+                        1 => ExportFormat::Svg,
+                        2 => ExportFormat::Png,
+                        3 => ExportFormat::Html,
+                        _ => ExportFormat::Pdf(
+                            profile
+                                .selected()
+                                .checked_sub(1)
+                                .and_then(|index| PdfStandard::ALL.get(index as usize))
+                                .copied(),
+                        ),
+                    };
+                    this.export_document(format);
+                }
+            }
+        });
+        dialog.present(Some(&self.window));
+    }
+
     fn export_pdf(&self) {
+        self.export_document(ExportFormat::Pdf(None));
+    }
+
+    fn export_document(&self, format: ExportFormat) {
         let (Some(project), Some(current)) = (
             self.project.borrow().clone(),
             self.current_file.borrow().clone(),
         ) else {
-            self.show_error("Export PDF", "Open a Typst project first.");
+            self.show_error("Export document", "Open a Typst project first.");
             return;
         };
         if let Some(workspace) = self.workspace.borrow().as_ref() {
@@ -1631,20 +1709,35 @@ impl AppController {
         let main = match project.resolve_main_file(Some(&current)) {
             Ok(main) => main,
             Err(error) => {
-                self.show_error("Export PDF failed", &error.to_string());
+                self.show_error("Export failed", &error.to_string());
                 return;
             }
         };
-        let options = match self.compile_options() {
+        let mut options = match self.compile_options() {
             Ok(options) => options,
             Err(error) => {
-                self.show_error("Export PDF failed", &error.to_string());
+                self.show_error("Export failed", &error.to_string());
                 return;
             }
         };
         if let Some(workspace) = self.workspace.borrow().as_ref() {
-            workspace.set_compile_status("Rendering PDF…");
+            workspace.set_compile_status(&format!("Rendering {}…", format.label()));
         }
+        let cancellation = Arc::new(AtomicBool::new(false));
+        options.cancellation = Some(cancellation.clone());
+        let progress = adw::AlertDialog::builder()
+            .heading("Exporting document")
+            .body("Preparing fonts and compiling with Typst…")
+            .build();
+        progress.add_response("cancel", "Cancel");
+        progress.set_close_response("cancel");
+        progress.connect_response(None, {
+            let cancellation = cancellation.clone();
+            move |_, _| {
+                cancellation.store(true, Ordering::Relaxed);
+            }
+        });
+        progress.present(Some(&self.window));
         let google_fonts = self.settings.borrow().google_fonts;
         let source = project
             .read_file(&main)
@@ -1666,35 +1759,55 @@ impl AppController {
                 }
             }
             let result = TypstTool::detect()
-                .and_then(|tool| tool.compile_pdf_with_options(&project, &main, &options));
+                .and_then(|tool| tool.compile_export(&project, &main, format, &options));
             let _ = sender.send(result);
         });
         let weak = self.weak();
         glib::timeout_add_local(Duration::from_millis(25), move || {
             match receiver.try_recv() {
                 Ok(result) => {
+                    let cancelled = cancellation.load(Ordering::Relaxed);
+                    progress.force_close();
                     if let Some(this) = weak.upgrade() {
+                        if cancelled {
+                            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                                workspace.set_compile_status("Export cancelled");
+                            }
+                            return glib::ControlFlow::Break;
+                        }
                         match result {
                             Ok(output) => {
-                                if let Some(pdf) = output.artifact {
-                                    this.choose_pdf_destination(&project_name, pdf);
+                                if let Some(artifact) = output.artifact {
+                                    this.choose_export_destination(&project_name, artifact);
                                     if let Some(workspace) = this.workspace.borrow().as_ref() {
                                         workspace.set_compile_status(&format!(
-                                            "PDF rendered in {} ms",
+                                            "{} rendered in {} ms",
+                                            format.label(),
                                             output.elapsed.as_millis()
                                         ));
                                     }
                                 } else {
-                                    this.show_error("Export PDF failed", output.stderr.trim());
+                                    if let Some(workspace) = this.workspace.borrow().as_ref() {
+                                        workspace.set_compile_status("Export failed");
+                                    }
+                                    this.show_error("Export failed", output.stderr.trim());
                                 }
                             }
-                            Err(error) => this.show_error("Export PDF failed", &error.to_string()),
+                            Err(error) => {
+                                if let Some(workspace) = this.workspace.borrow().as_ref() {
+                                    workspace.set_compile_status("Export failed");
+                                }
+                                this.show_error("Export failed", &error.to_string());
+                            }
                         }
                     }
                     glib::ControlFlow::Break
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    progress.force_close();
+                    glib::ControlFlow::Break
+                }
             }
         });
     }
@@ -1731,20 +1844,23 @@ impl AppController {
         });
     }
 
-    fn choose_pdf_destination(&self, project_name: &str, pdf: Vec<u8>) {
+    fn choose_export_destination(&self, project_name: &str, artifact: ExportArtifact) {
         let chooser = gtk::FileDialog::builder()
-            .title("Export PDF")
+            .title(format!("Export {}", artifact.format.label()))
             .accept_label("Export")
             .build();
-        chooser.set_initial_name(Some(&format!("{project_name}.pdf")));
+        chooser.set_initial_name(Some(&format!(
+            "{project_name}.{}",
+            artifact.format.extension()
+        )));
         chooser.save(Some(&self.window), None::<&gio::Cancellable>, {
             let weak = self.weak();
             move |result| {
                 if result.is_ok() {
                     if let Some(path) = result.as_ref().ok().and_then(|file| file.path()) {
-                        if let Err(error) = std::fs::write(&path, &pdf) {
+                        if let Err(error) = artifact.save(&path) {
                             if let Some(this) = weak.upgrade() {
-                                this.show_error("Could not save PDF", &error.to_string());
+                                this.show_error("Could not save export", &error.to_string());
                             }
                         }
                     }
@@ -1772,6 +1888,11 @@ impl AppController {
             let rows = [
                 ("Compile document", "Ctrl+Enter", "compile"),
                 ("Export PDF", "Ctrl+Shift+E", "export"),
+                (
+                    "Export document…",
+                    "PDF profiles, SVG, PNG, HTML",
+                    "export-document",
+                ),
                 ("Present here", "F5", "present"),
                 ("Presenter view", "Shift+F5", "presenter"),
                 ("New file", "File tree", "new-file"),
@@ -3435,7 +3556,7 @@ impl AppController {
         guide_section(
             &content,
             "EXPORTING AND UPDATES",
-            "Export the current document as PDF or package one, selected, or all projects as portable archives. Template metadata is retained but private .typsmthng state is excluded. Update checks show a button when a stable release is available. Click to download, then restart to install. Downloads are verified against the release SHA-256 checksums. Linux system packages update through their package manager.",
+            "Export the current document as PDF with an optional PDF/A or PDF/UA profile, all SVG or PNG pages in a ZIP, or experimental HTML. The PDF toolbar button and Ctrl+Shift+E use the default PDF profile. More actions opens the format chooser. Package one, selected, or all projects as portable archives. Template metadata is retained but private .typsmthng state is excluded. Update checks show a button when a stable release is available. Click to download, then restart to install. Downloads are verified against the release SHA-256 checksums. Linux system packages update through their package manager.",
         );
         guide_section(
             &content,
@@ -4148,6 +4269,97 @@ mod tests {
         import_latex_sources, parse_note_sections, project_layout_locked, serialize_note_sections,
         sidecar_slide_heading, write_template_metadata,
     };
+
+    #[test]
+    #[ignore = "requires a display; run under Xvfb"]
+    fn native_export_dialog_keeps_default_pdf_and_scopes_profiles() {
+        use adw::prelude::*;
+        adw::init().unwrap();
+        let app: gtk::Application = adw::Application::builder()
+            .application_id("dev.typsmthng.ExportTest")
+            .build()
+            .upcast();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "Export review").unwrap();
+        let original = fs::read(project.root().join("main.typ")).unwrap();
+        let controller = super::AppController::build(
+            &app,
+            super::LaunchOptions {
+                smoke_test: true,
+                startup_path: Some(project.root().to_path_buf()),
+                ..Default::default()
+            },
+        );
+        assert!(app.lookup_action("export-document").is_some());
+        assert!(app
+            .accels_for_action("app.export")
+            .iter()
+            .any(|accel| gtk::accelerator_parse(accel)
+                == gtk::accelerator_parse("<Primary><Shift>e")));
+        let capture = |phase: &str| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+            while std::time::Instant::now() < deadline {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if let Some(base) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") {
+                std::env::set_var(
+                    "TYPSMTHNG_SNAPSHOT_DIR",
+                    std::path::PathBuf::from(&base).join(phase),
+                );
+                super::super::smoke::capture_windows(&app);
+                std::env::set_var("TYPSMTHNG_SNAPSHOT_DIR", base);
+            }
+        };
+        capture("before");
+        controller.choose_document_export();
+        let window = controller
+            .window
+            .downcast_ref::<adw::ApplicationWindow>()
+            .unwrap();
+        let dialog = window
+            .visible_dialog()
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        fn find_rows(widget: &gtk::Widget, rows: &mut Vec<adw::ComboRow>) {
+            if let Some(row) = widget.downcast_ref::<adw::ComboRow>() {
+                rows.push(row.clone());
+                return;
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                find_rows(&widget, rows);
+                child = widget.next_sibling();
+            }
+        }
+        let mut rows = Vec::new();
+        find_rows(&dialog.extra_child().unwrap(), &mut rows);
+        assert_eq!(rows.len(), 2);
+        let format = &rows[0];
+        let profile = &rows[1];
+        assert_eq!(format.model().unwrap().n_items(), 4);
+        assert_eq!(profile.model().unwrap().n_items(), 18);
+        assert_eq!((format.selected(), profile.selected()), (0, 0));
+        profile.set_selected(17);
+        for selected in 1..=3 {
+            format.set_selected(selected);
+            assert!(!profile.is_sensitive());
+            assert_eq!(profile.selected(), 17);
+        }
+        format.set_selected(0);
+        assert!(profile.is_sensitive());
+        capture("after");
+        dialog.emit_by_name::<()>("response", &[&"cancel"]);
+        dialog.force_close();
+        assert_eq!(fs::read(project.root().join("main.typ")).unwrap(), original);
+        assert!(!project.root().join("Export review.pdf").exists());
+        assert!(!project.root().join("Export review.zip").exists());
+        controller.window.close();
+    }
 
     #[test]
     #[ignore = "requires a display; run under Xvfb"]
