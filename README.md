@@ -144,6 +144,8 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Save, compile, or export PDF: `Ctrl+S`, `Ctrl+Enter`, `Ctrl+Shift+E`
 - Search, settings, or file tree: `Ctrl+K`, `Ctrl+,`, `Ctrl+\`
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
+- Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.
+- Toggle the preview magnifier in the preview toolbar to inspect rendered text at 2× without changing the page zoom.
 - Cycle system, light, and dark themes: `Ctrl+J`
 
 On macOS, use Command in place of Control.

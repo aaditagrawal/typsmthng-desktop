@@ -148,6 +148,7 @@ pub struct UserSettings {
     pub translucent: bool,
     pub view_mode: String,
     pub minimap: bool,
+    pub centered_scrolling: bool,
     pub editor_font_family: String,
     pub editor_line_height: u32,
     pub editor_ligatures: bool,
@@ -175,6 +176,7 @@ impl Default for UserSettings {
             translucent: false,
             view_mode: "split".into(),
             minimap: true,
+            centered_scrolling: false,
             editor_font_family: String::new(),
             editor_line_height: 100,
             editor_ligatures: true,
@@ -221,4 +223,23 @@ pub struct Diagnostic {
     pub line: Option<usize>,
     pub column: Option<usize>,
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UserSettings;
+
+    #[test]
+    fn centered_scrolling_defaults_off_and_round_trips_saved_preferences() {
+        let mut settings: UserSettings =
+            serde_json::from_str(r#"{"fontSize":18,"minimap":false}"#).unwrap();
+        assert!(!settings.centered_scrolling);
+        settings.centered_scrolling = true;
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""centeredScrolling":true"#));
+        let restored: UserSettings = serde_json::from_str(&json).unwrap();
+        assert!(restored.centered_scrolling);
+        assert_eq!(restored.font_size, 18.0);
+        assert!(!restored.minimap);
+    }
 }

@@ -65,6 +65,7 @@ pub struct UiSettings {
     pub translucent: bool,
     pub view_mode: ViewMode,
     pub minimap: bool,
+    pub centered_scrolling: bool,
     /// Empty uses the desktop's monospace font.
     pub editor_font_family: String,
     /// Line height as a percentage of the font's own line height.
@@ -94,6 +95,7 @@ impl Default for UiSettings {
             translucent: false,
             view_mode: ViewMode::Split,
             minimap: true,
+            centered_scrolling: false,
             editor_font_family: String::new(),
             editor_line_height: 100,
             editor_ligatures: true,

@@ -76,6 +76,11 @@ jobs:
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_preview_clicks_and_diagnostic_idle_timing -- --ignored --test-threads=1
       - name: Compiled document navigation and statistics
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::workspace::tests::native_compiled_headings_statistics_and_cursor_navigation -- --exact --ignored --test-threads=1
+      - name: Centered scrolling and cached preview magnifier
+        run: |
+          for scale in 1 2; do
+            dbus-run-session -- xvfb-run -a -s "-screen 0 3200x2000x24" env GTK_A11Y=none GSK_RENDERER=cairo GDK_SCALE="$scale" G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::workspace::tests::native_centered_scrolling_and_cached_preview_magnifier -- --exact --ignored --test-threads=1
+          done
       - name: Preview rendering at zoom and display scale
         run: |
           for scale in 1 2; do
