@@ -87,6 +87,8 @@ jobs:
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
       - name: Semantic completion keyboard and stale response checks
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_completion_inserts_snippet_once_and_discards_stale_reply -- --exact --ignored --test-threads=1
+      - name: Explicit formatting undo, cursor, scroll and stale responses
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_formatting_preserves_selection_scroll_and_single_undo -- --exact --ignored --test-threads=1
       - name: Clippy
         run: cargo clippy --locked --manifest-path native/gtk/Cargo.toml --all-targets -- -D warnings
       - name: Dead dependency and migration-artifact audit

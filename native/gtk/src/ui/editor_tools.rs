@@ -8,7 +8,7 @@ use gtk::prelude::*;
 use typsmthng_gtk::backend::editor::{
     byte_to_char, char_to_byte, flatten_snippet, EditorQuery, EditorRequest, EditorResponse,
 };
-use typsmthng_gtk::backend::Result;
+use typsmthng_gtk::backend::{BackendError, Result};
 
 type HoverCache = Option<(usize, Option<String>)>;
 
@@ -21,6 +21,7 @@ pub struct EditorTools {
     popup: gtk::Popover,
     hover: Rc<RefCell<HoverCache>>,
     hover_pending: Rc<Cell<bool>>,
+    query: EditorCallback,
 }
 
 struct CompletionSession {
@@ -59,6 +60,7 @@ impl EditorTools {
             popup,
             hover: hover.clone(),
             hover_pending: hover_pending.clone(),
+            query: callback.clone(),
         };
         let buffer = editor.buffer();
         let session = Rc::new(RefCell::new(None::<CompletionSession>));
@@ -179,7 +181,7 @@ impl EditorTools {
                 let session = session.clone();
                 let editor = editor.downgrade();
                 poll(receiver, tools.epoch.clone(), epoch, move |response| {
-                    let Some(response) = response else {
+                    let Ok(response) = response else {
                         return;
                     };
                     let Some(editor) = editor.upgrade() else {
@@ -297,7 +299,7 @@ impl EditorTools {
                 let editor = editor.downgrade();
                 poll(receiver, tools.epoch.clone(), epoch, move |response| {
                     pending.set(false);
-                    if let Some(EditorResponse::Hover(value)) = response {
+                    if let Ok(EditorResponse::Hover(value)) = response {
                         hover.replace(Some((cursor, value)));
                         if let Some(editor) = editor.upgrade() {
                             editor.trigger_tooltip_query();
@@ -318,6 +320,121 @@ impl EditorTools {
         self.invalidate();
         self.path.replace(path.into());
     }
+
+    pub fn format_document(
+        &self,
+        editor: &sourceview5::View,
+        root: &gtk::Box,
+        status: &gtk::Label,
+    ) {
+        if !editor.is_editable() || !self.path.borrow().ends_with(".typ") {
+            return;
+        }
+        let buffer = editor.buffer();
+        let text = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+            .to_string();
+        let Some(cursor) = char_to_byte(&text, buffer.cursor_position() as usize) else {
+            return;
+        };
+        let Some(anchor) = char_to_byte(
+            &text,
+            buffer.iter_at_mark(&buffer.selection_bound()).offset() as usize,
+        ) else {
+            return;
+        };
+        self.invalidate();
+        let epoch = self.epoch.get();
+        let Some(receiver) = (self.query)(EditorRequest {
+            path: self.path.borrow().clone(),
+            text: text.clone(),
+            cursor,
+            query: EditorQuery::Format { anchor },
+        }) else {
+            return;
+        };
+        let editor = editor.downgrade();
+        let root = root.downgrade();
+        let status = status.downgrade();
+        let revision = self.epoch.clone();
+        poll(receiver, revision.clone(), epoch, move |response| {
+            let (Some(editor), Some(root), Some(status)) =
+                (editor.upgrade(), root.upgrade(), status.upgrade())
+            else {
+                return;
+            };
+            let (formatted, cursor, anchor) = match response {
+                Ok(EditorResponse::Formatted {
+                    text,
+                    cursor,
+                    anchor,
+                }) => (text, cursor, anchor),
+                Err(error) => {
+                    status.set_text(&format!("Could not format: {error}"));
+                    return;
+                }
+                _ => return,
+            };
+            if formatted == text {
+                status.set_text("Already formatted");
+                return;
+            }
+            let (Some(cursor), Some(anchor)) = (
+                byte_to_char(&formatted, cursor),
+                byte_to_char(&formatted, anchor),
+            ) else {
+                return;
+            };
+            let buffer = editor.buffer();
+            let adjustments = [editor.hadjustment(), editor.vadjustment()]
+                .into_iter()
+                .flatten()
+                .map(|adjustment| {
+                    let value = adjustment.value();
+                    (adjustment.downgrade(), value)
+                })
+                .collect::<Vec<_>>();
+            buffer.begin_user_action();
+            buffer.delete(&mut buffer.start_iter(), &mut buffer.end_iter());
+            buffer.insert(&mut buffer.start_iter(), &formatted);
+            buffer.select_range(
+                &buffer.iter_at_offset(cursor as i32),
+                &buffer.iter_at_offset(anchor as i32),
+            );
+            buffer.end_user_action();
+            status.set_text("Formatted");
+            let expected = revision.get();
+            let buffer = buffer.downgrade();
+            super::workspace::schedule_after_allocation(
+                &root,
+                Rc::new(Cell::new(false)),
+                Rc::new(move || {
+                    let buffer = buffer.clone();
+                    let adjustments = adjustments.clone();
+                    let revision = revision.clone();
+                    // GtkTextView validates changed line heights at priority 125.
+                    // Default-idle priority 200 runs after pending layout validation.
+                    glib::idle_add_local_once(move || {
+                        if revision.get() != expected {
+                            return;
+                        }
+                        let Some(buffer) = buffer.upgrade() else {
+                            return;
+                        };
+                        buffer.select_range(
+                            &buffer.iter_at_offset(cursor as i32),
+                            &buffer.iter_at_offset(anchor as i32),
+                        );
+                        for (adjustment, value) in &adjustments {
+                            if let Some(adjustment) = adjustment.upgrade() {
+                                adjustment.set_value(*value);
+                            }
+                        }
+                    });
+                }),
+            );
+        });
+    }
     fn invalidate(&self) {
         self.epoch.set(self.epoch.get().wrapping_add(1));
         self.hover.borrow_mut().take();
@@ -330,7 +447,7 @@ fn poll(
     receiver: Receiver<Result<EditorResponse>>,
     epoch: Rc<Cell<u64>>,
     expected: u64,
-    done: impl FnOnce(Option<EditorResponse>) + 'static,
+    done: impl FnOnce(Result<EditorResponse>) + 'static,
 ) {
     let mut done = Some(done);
     glib::timeout_add_local(Duration::from_millis(16), move || {
@@ -339,12 +456,12 @@ fn poll(
         }
         match receiver.try_recv() {
             Ok(response) => {
-                done.take().unwrap()(response.ok());
+                done.take().unwrap()(response);
                 glib::ControlFlow::Break
             }
             Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
             _ => {
-                done.take().unwrap()(None);
+                done.take().unwrap()(Err(BackendError::Process("Editor worker stopped".into())));
                 glib::ControlFlow::Break
             }
         }
@@ -385,6 +502,159 @@ fn apply_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires its own GTK process under xvfb-run"]
+    fn native_formatting_preserves_selection_scroll_and_single_undo() {
+        adw::init().unwrap();
+        let buffer = sourceview5::Buffer::new(None::<&gtk::TextTagTable>);
+        let editor = sourceview5::View::with_buffer(&buffer);
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_child(Some(&editor));
+        scroll.set_vexpand(true);
+        let anchor = gtk::Overlay::new();
+        anchor.set_child(Some(&scroll));
+        anchor.set_vexpand(true);
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.append(&anchor);
+        let status = gtk::Label::new(None);
+        root.append(&status);
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let tools = EditorTools::new(
+            &editor,
+            &anchor,
+            Rc::new({
+                let pending = pending.clone();
+                move |request| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    pending.borrow_mut().push((request, tx));
+                    Some(rx)
+                }
+            }),
+        );
+        tools.set_file("main.typ");
+        let window = gtk::Window::new();
+        window.set_default_size(640, 400);
+        window.set_child(Some(&root));
+        window.present();
+        let drive = || {
+            let deadline = std::time::Instant::now() + Duration::from_millis(100);
+            while std::time::Instant::now() < deadline {
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let reset = |text| {
+            buffer.begin_irreversible_action();
+            buffer.set_text(text);
+            buffer.end_irreversible_action();
+            assert!(!buffer.can_undo());
+        };
+        let answer = || {
+            let (request, tx) = pending.borrow_mut().pop().unwrap();
+            let EditorQuery::Format { anchor } = request.query else {
+                panic!()
+            };
+            let _ = tx.send(typsmthng_gtk::backend::editor::format_source(
+                typst::syntax::Source::detached(request.text),
+                request.cursor,
+                anchor,
+            ));
+        };
+        let tuple = (0..60)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let source = format!(
+            "{}#let café=({tuple})\n#café\n",
+            "// unchanged line\n".repeat(50)
+        );
+        editor.grab_focus();
+        drive();
+        reset(&source);
+        let start = source[..source.rfind("café").unwrap()].chars().count() as i32;
+        buffer.select_range(
+            &buffer.iter_at_offset(start + 4),
+            &buffer.iter_at_offset(start),
+        );
+        for _ in 0..5 {
+            drive();
+        }
+        scroll.vadjustment().set_value(300.0);
+        drive();
+        let before_scroll = scroll.vadjustment().value();
+        assert_eq!(before_scroll, 300.0);
+        assert!(
+            buffer.selection_bounds().is_some(),
+            "selection before format"
+        );
+        tools.format_document(&editor, &root, &status);
+        answer();
+        for _ in 0..3 {
+            drive();
+        }
+        let formatted = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+            .to_string();
+        assert_ne!(formatted, source);
+        assert!(formatted.lines().count() > source.lines().count());
+        let (start, end) = buffer.selection_bounds().unwrap();
+        assert_eq!(buffer.text(&start, &end, true), "café");
+        assert!((scroll.vadjustment().value() - before_scroll).abs() < 1.0);
+        assert!(buffer.can_undo());
+        buffer.undo();
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            source
+        );
+        assert!(!buffer.can_undo(), "format must be one undo step");
+        reset(&formatted);
+        tools.format_document(&editor, &root, &status);
+        answer();
+        drive();
+        assert!(!buffer.can_undo(), "unchanged format must not add undo");
+        reset("#let café=(");
+        tools.format_document(&editor, &root, &status);
+        answer();
+        drive();
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            "#let café=("
+        );
+        assert!(!buffer.can_undo());
+        assert!(status.text().starts_with("Could not format:"));
+        editor.set_editable(false);
+        tools.format_document(&editor, &root, &status);
+        assert!(
+            pending.borrow().is_empty(),
+            "read-only and missing files cannot format"
+        );
+        editor.set_editable(true);
+        tools.set_file("asset.svg");
+        tools.format_document(&editor, &root, &status);
+        assert!(pending.borrow().is_empty(), "assets cannot format");
+        tools.set_file("main.typ");
+        reset("#let x=(1,2)");
+        tools.format_document(&editor, &root, &status);
+        buffer.insert(&mut buffer.end_iter(), " // new edit");
+        answer();
+        drive();
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            "#let x=(1,2) // new edit"
+        );
+        tools.format_document(&editor, &root, &status);
+        tools.set_file("other.typ");
+        reset("Other source");
+        answer();
+        drive();
+        assert_eq!(
+            buffer.text(&buffer.start_iter(), &buffer.end_iter(), true),
+            "Other source"
+        );
+        assert!(!buffer.can_undo());
+        window.destroy();
+    }
 
     #[test]
     #[ignore = "requires its own GTK process under xvfb-run"]
