@@ -150,6 +150,12 @@ impl SourceMap {
         Some((frame.width().to_pt(), frame.height().to_pt()))
     }
 
+    /// Share the laid-out glyphs and assets with background display renderers.
+    /// Frames are cheaply cloned and retain their own fonts and image data.
+    pub fn page(&self, page: usize) -> Option<typst_layout::Page> {
+        self.document.pages().get(page).cloned()
+    }
+
     /// Union of everything visibly drawn on `page` (text ink, stroked shapes,
     /// images, headers, footers, page backgrounds), clipped to the page.
     /// `page.fill` is not part of the frame and never counts. `None` for a

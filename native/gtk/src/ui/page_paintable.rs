@@ -1,4 +1,4 @@
-//! Rasterize visible SVG pages at their allocated display resolution. Decoding
+//! Rasterize visible Typst/SVG pages at their allocated display resolution. Rendering
 //! runs on two shared workers; GTK keeps the last image while a resize finishes.
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::VecDeque;
@@ -17,15 +17,21 @@ struct Pixels {
     width: i32,
     height: i32,
     stride: usize,
-    alpha: bool,
+    format: gdk::MemoryFormat,
     bytes: glib::Bytes,
+}
+
+#[derive(Clone)]
+enum PageSource {
+    Svg(Arc<[u8]>),
+    Typst(typst_layout::Page),
 }
 
 struct RenderJob {
     page: u64,
     generation: u64,
     latest: Arc<AtomicU64>,
-    svg: Arc<[u8]>,
+    source: PageSource,
     size: (i32, i32),
     complete: Box<dyn FnOnce(Option<Pixels>) + Send>,
 }
@@ -58,7 +64,7 @@ impl Workers {
                         if job.latest.load(Ordering::Relaxed) != job.generation {
                             continue;
                         }
-                        let pixels = rasterize(&job.svg, job.size);
+                        let pixels = rasterize(&job.source, job.size);
                         if job.latest.load(Ordering::Relaxed) == job.generation {
                             (job.complete)(pixels);
                         }
@@ -90,7 +96,7 @@ mod imp {
 
     #[derive(Default)]
     pub struct PagePaintable {
-        pub(super) svg: OnceCell<Arc<[u8]>>,
+        pub(super) source: OnceCell<PageSource>,
         pub(super) original: RefCell<Option<gdk::Paintable>>,
         pub(super) dimensions: Cell<(i32, i32)>,
         pub(super) aspect: Cell<f64>,
@@ -100,7 +106,8 @@ mod imp {
         pub(super) scroll: RefCell<Option<glib::WeakRef<gtk::ScrolledWindow>>>,
         pub(super) scroll_handlers:
             RefCell<Vec<(glib::WeakRef<gtk::Adjustment>, glib::SignalHandlerId)>>,
-        pub(super) scale: Cell<i32>,
+        pub(super) scale: Cell<f64>,
+        pub(super) surface: RefCell<Option<(glib::WeakRef<gdk::Surface>, glib::SignalHandlerId)>>,
         pub(super) active: Cell<bool>,
         pub(super) disposed: Cell<bool>,
         pub(super) id: Cell<u64>,
@@ -130,6 +137,7 @@ mod imp {
             self.disposed.set(true);
             self.cancel();
             self.disconnect_scroll();
+            self.disconnect_surface();
             if let Some(owner) = self.owner.get().and_then(|owner| owner.upgrade()) {
                 for handler in self.owner_handlers.take() {
                     owner.disconnect(handler);
@@ -153,6 +161,42 @@ mod imp {
                 }
             }
             self.scroll.take();
+        }
+
+        fn disconnect_surface(&self) {
+            if let Some((surface, handler)) = self.surface.take() {
+                if let Some(surface) = surface.upgrade() {
+                    surface.disconnect(handler);
+                }
+            }
+        }
+
+        fn watch_surface(&self, owner: &gtk::Picture) {
+            let surface = owner.native().and_then(|native| native.surface());
+            let previous = self
+                .surface
+                .borrow()
+                .as_ref()
+                .and_then(|(weak, _)| weak.upgrade());
+            if previous == surface {
+                return;
+            }
+            self.disconnect_surface();
+            if let Some(surface) = surface {
+                self.scale.set(surface.scale());
+                self.cancel();
+                let handler = surface.connect_scale_notify({
+                    let weak = self.obj().downgrade();
+                    move |surface| {
+                        if let Some(page) = weak.upgrade() {
+                            page.imp().scale.set(surface.scale());
+                            page.imp().cancel();
+                            page.invalidate_contents();
+                        }
+                    }
+                });
+                self.surface.replace(Some((surface.downgrade(), handler)));
+            }
         }
 
         fn watch_scroll(&self, owner: &gtk::Picture) {
@@ -293,6 +337,7 @@ mod imp {
                 return false;
             };
             self.watch_scroll(&owner);
+            self.watch_surface(&owner);
             let active = self.visible(&owner);
             if self.active.replace(active) != active {
                 if !active {
@@ -325,7 +370,9 @@ mod imp {
             {
                 return;
             }
-            let Some(svg) = self.svg.get() else { return };
+            let Some(source) = self.source.get() else {
+                return;
+            };
             let generation = self.latest.fetch_add(1, Ordering::Relaxed) + 1;
             self.pending.set(Some((generation, size)));
             let weak = glib::SendWeakRef::from(self.obj().downgrade());
@@ -333,7 +380,7 @@ mod imp {
                 page: self.id.get(),
                 generation,
                 latest: self.latest.clone(),
-                svg: svg.clone(),
+                source: source.clone(),
                 size,
                 complete: Box::new(move |pixels| {
                     glib::idle_add_once(move || {
@@ -347,15 +394,10 @@ mod imp {
                             return;
                         }
                         if let Some(pixels) = pixels {
-                            let format = if pixels.alpha {
-                                gdk::MemoryFormat::R8g8b8a8
-                            } else {
-                                gdk::MemoryFormat::R8g8b8
-                            };
                             let texture = gdk::MemoryTexture::new(
                                 pixels.width,
                                 pixels.height,
-                                format,
+                                pixels.format,
                                 &pixels.bytes,
                                 pixels.stride,
                             );
@@ -428,7 +470,38 @@ mod imp {
             };
             self.request(size);
             if let Some(page) = self.rendered.borrow().as_ref() {
-                page.texture.snapshot(snapshot, width, height);
+                if let Some(snapshot) = snapshot.downcast_ref::<gtk::Snapshot>() {
+                    // Draw current pixels at their exact device size rather
+                    // than stretching them to fractional fitted page bounds.
+                    // Use a regular TextureNode: Cairo's TextureScaleNode
+                    // fallback can first flatten at logical resolution.
+                    let scale = self.scale.get().max(1.0);
+                    if page.size == size
+                        && (f64::from(page.texture.width()) - width * scale).abs() <= 1.0
+                        && (f64::from(page.texture.height()) - height * scale).abs() <= 1.0
+                    {
+                        snapshot.push_clip(&gtk::graphene::Rect::new(
+                            0.0,
+                            0.0,
+                            width as f32,
+                            height as f32,
+                        ));
+                        snapshot.append_texture(
+                            &page.texture,
+                            &gtk::graphene::Rect::new(
+                                0.0,
+                                0.0,
+                                (f64::from(page.texture.width()) / scale) as f32,
+                                (f64::from(page.texture.height()) / scale) as f32,
+                            ),
+                        );
+                        snapshot.pop();
+                    } else {
+                        page.texture.snapshot(snapshot, width, height);
+                    }
+                } else {
+                    page.texture.snapshot(snapshot, width, height);
+                }
             } else if let Some(original) = self.original.borrow().as_ref() {
                 original.snapshot(snapshot, width, height);
             }
@@ -444,6 +517,12 @@ glib::wrapper! {
 /// Retain source bytes so unchanged pages still resize after compiler caches
 /// disappear. Non-SVG files retain GtkPicture's ordinary image loader.
 pub fn load(picture: &gtk::Picture, path: &Path) {
+    load_page(picture, path, None);
+}
+
+/// Compiled previews use Typst's glyph rasterizer; SVG/image imports keep the
+/// platform loader. The SVG still supplies identity, geometry, and hyperlinks.
+pub fn load_page(picture: &gtk::Picture, path: &Path, page: Option<typst_layout::Page>) {
     if is_file(picture, path) {
         return;
     }
@@ -465,17 +544,24 @@ pub fn load(picture: &gtk::Picture, path: &Path) {
     imp.dimensions.set(dimensions);
     imp.aspect.set(aspect);
     imp.original.replace(original);
-    imp.svg
-        .set(Arc::from(svg.unwrap()))
-        .expect("new SVG paintable");
+    let source = page.map_or_else(
+        || PageSource::Svg(Arc::from(svg.unwrap())),
+        PageSource::Typst,
+    );
+    assert!(imp.source.set(source).is_ok(), "new page paintable");
     imp.path.set(path.to_path_buf()).expect("new source path");
     imp.owner.set(picture.downgrade()).expect("new owner");
-    imp.scale.set(picture.scale_factor());
+    imp.scale.set(f64::from(picture.scale_factor()));
     let handler = picture.connect_scale_factor_notify({
         let weak = paintable.downgrade();
         move |picture| {
             if let Some(page) = weak.upgrade() {
-                page.imp().scale.set(picture.scale_factor());
+                page.imp().scale.set(
+                    picture
+                        .native()
+                        .and_then(|native| native.surface())
+                        .map_or(f64::from(picture.scale_factor()), |surface| surface.scale()),
+                );
                 page.imp().cancel();
                 page.invalidate_contents();
             }
@@ -571,12 +657,12 @@ pub fn is_current(picture: &gtk::Picture) -> bool {
     })
 }
 
-fn pixel_size(width: f64, height: f64, scale: i32) -> Option<(i32, i32)> {
+fn pixel_size(width: f64, height: f64, scale: f64) -> Option<(i32, i32)> {
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return None;
     }
-    let width = width * f64::from(scale.max(1));
-    let height = height * f64::from(scale.max(1));
+    let width = width * scale.max(1.0);
+    let height = height * scale.max(1.0);
     // Bound each image to 32 megapixels and GPU-compatible dimensions.
     let reduction = (32_000_000.0 / (width * height))
         .sqrt()
@@ -589,7 +675,29 @@ fn pixel_size(width: f64, height: f64, scale: i32) -> Option<(i32, i32)> {
     ))
 }
 
-fn rasterize(svg: &[u8], (width, height): (i32, i32)) -> Option<Pixels> {
+fn rasterize(source: &PageSource, (width, height): (i32, i32)) -> Option<Pixels> {
+    if let PageSource::Typst(page) = source {
+        // Keep the page transform uniform so text uses Typst's subpixel glyph
+        // rasterizer, rather than its general path fallback. Rounding can make
+        // the resulting height differ by one pixel from the requested bounds.
+        let options = typst_render::RenderOptions {
+            pixel_per_pt: (f64::from(width) / page.frame.width().to_pt())
+                .min(f64::from(height) / page.frame.height().to_pt())
+                .into(),
+            render_bleed: false,
+        };
+        let pixmap = typst_render::render(page, &options);
+        return Some(Pixels {
+            width: pixmap.width() as i32,
+            height: pixmap.height() as i32,
+            stride: pixmap.width() as usize * 4,
+            format: gdk::MemoryFormat::R8g8b8a8Premultiplied,
+            bytes: glib::Bytes::from_owned(pixmap.take()),
+        });
+    }
+    let PageSource::Svg(svg) = source else {
+        unreachable!()
+    };
     let loader = gdk_pixbuf::PixbufLoader::with_type("svg").ok()?;
     loader.set_size(width, height);
     let written = loader.write(svg);
@@ -601,7 +709,11 @@ fn rasterize(svg: &[u8], (width, height): (i32, i32)) -> Option<Pixels> {
         width: pixbuf.width(),
         height: pixbuf.height(),
         stride: usize::try_from(pixbuf.rowstride()).ok()?,
-        alpha: pixbuf.has_alpha(),
+        format: if pixbuf.has_alpha() {
+            gdk::MemoryFormat::R8g8b8a8
+        } else {
+            gdk::MemoryFormat::R8g8b8
+        },
         bytes: pixbuf.read_pixel_bytes(),
     })
 }
@@ -634,6 +746,164 @@ mod tests {
 
     fn rendered_size(page: &PagePaintable) -> Option<(i32, i32)> {
         page.imp().rendered.borrow().as_ref().map(|page| page.size)
+    }
+
+    fn compiled(source: &str) -> typsmthng_gtk::backend::preview::Preview {
+        use typsmthng_gtk::backend::{preview::PreviewCompiler, CompileOptions, Project};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.typ"), source).unwrap();
+        PreviewCompiler::default()
+            .compile(
+                &Project::open(dir.path()).unwrap(),
+                "main.typ",
+                &CompileOptions {
+                    ignore_system_fonts: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .artifact
+            .unwrap()
+    }
+
+    #[test]
+    fn native_page_pixels_preserve_transparency_and_display_bounds() {
+        let preview = compiled(
+            "#set page(width: 120pt, height: 80pt, margin: 0pt, fill: none)\n\
+             #rect(width: 30pt, height: 30pt, fill: rgb(255, 0, 0, 50%), stroke: none)",
+        );
+        let source = PageSource::Typst(preview.source_map.page(0).unwrap());
+        for scale in [1, 2, 3] {
+            let pixels = rasterize(&source, (240 * scale, 160 * scale)).unwrap();
+            assert_eq!((pixels.width, pixels.height), (240 * scale, 160 * scale));
+            assert_eq!(pixels.format, gdk::MemoryFormat::R8g8b8a8Premultiplied);
+            let pixel = |x: usize, y: usize| {
+                &pixels.bytes[y * pixels.stride + x * 4..y * pixels.stride + x * 4 + 4]
+            };
+            assert_eq!(pixel(10, 10), &[128, 0, 0, 128]);
+            assert_eq!(
+                pixel(100 * scale as usize, 50 * scale as usize),
+                &[0, 0, 0, 0]
+            );
+        }
+        let pixels = rasterize(&source, (241, 160)).unwrap();
+        assert!(pixels.width <= 241 && pixels.height <= 160);
+    }
+
+    #[test]
+    fn raster_sizes_are_bounded_at_large_zoom() {
+        for (width, height, scale) in [
+            (800.0, 1131.0, 2.0),
+            (40000.0, 60000.0, 4.0),
+            (1e12, 1.0, 1.0),
+        ] {
+            let (w, h) = pixel_size(width, height, scale).unwrap();
+            assert!(w <= 16384 && h <= 16384);
+            // Ceil can add at most one extra row and column to the area limit.
+            assert!(i64::from(w) * i64::from(h) <= 32_000_000 + i64::from(w + h));
+        }
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(pixel_size(invalid, 100.0, 1.0).is_none());
+        }
+        assert_eq!(pixel_size(480.0, 320.0, 1.25), Some((600, 400)));
+        assert_eq!(pixel_size(480.0, 320.0, 1.5), Some((720, 480)));
+    }
+
+    #[test]
+    #[ignore = "manual raster benchmark; run in release with --nocapture"]
+    fn benchmark_preview_rasterization() {
+        let mut text = String::from(
+            "#set page(paper: \"a4\", margin: 24mm)\n#set text(size: 11pt)\n= Text and mathematics 0\n",
+        );
+        for _ in 0..30 {
+            text.push_str("Subpixel typography, ligatures: affine office. $ integral_0^1 x^2 dif x = frac(1,3), sqrt(x^2+y^2) $\n\n");
+        }
+        let preview = compiled(&text);
+        let sources = [
+            (
+                "svg",
+                PageSource::Svg(Arc::from(preview.pages[0].svg.as_bytes())),
+            ),
+            (
+                "native",
+                PageSource::Typst(preview.source_map.page(0).unwrap()),
+            ),
+        ];
+        for scale in [1, 2] {
+            let size = pixel_size(794.0, 1123.0, f64::from(scale)).unwrap();
+            for (name, source) in &sources {
+                let cold = Instant::now();
+                let pixels = rasterize(source, size).unwrap();
+                let cold = cold.elapsed();
+                let mut times = Vec::new();
+                for _ in 0..11 {
+                    let start = Instant::now();
+                    std::hint::black_box(rasterize(source, size).unwrap());
+                    times.push(start.elapsed());
+                }
+                times.sort();
+                // Measure changed content too, rather than crediting redraws
+                // of an identical page as live-edit performance.
+                use typsmthng_gtk::backend::{preview::PreviewCompiler, CompileOptions, Project};
+                let dir = tempfile::tempdir().unwrap();
+                let project = Project::open(dir.path()).unwrap();
+                let compiler = PreviewCompiler::default();
+                let mut edits = Vec::new();
+                for revision in 1..=11 {
+                    std::fs::write(
+                        dir.path().join("main.typ"),
+                        text.replace("mathematics 0", &format!("mathematics {revision}")),
+                    )
+                    .unwrap();
+                    let changed = compiler
+                        .compile(
+                            &project,
+                            "main.typ",
+                            &CompileOptions {
+                                ignore_system_fonts: true,
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap()
+                        .artifact
+                        .unwrap();
+                    let source = if *name == "native" {
+                        PageSource::Typst(changed.source_map.page(0).unwrap())
+                    } else {
+                        PageSource::Svg(Arc::from(changed.pages[0].svg.as_bytes()))
+                    };
+                    let start = Instant::now();
+                    std::hint::black_box(rasterize(&source, size).unwrap());
+                    edits.push(start.elapsed());
+                }
+                edits.sort();
+                println!(
+                    "{name} scale={scale}: cold={cold:?}, redraw median={:?}, max={:?}, edit median={:?}, edit max={:?}, bytes={}",
+                    times[5],
+                    times[10],
+                    edits[5],
+                    edits[10],
+                    pixels.bytes.len()
+                );
+                if let Some(dir) = std::env::var_os("TYPSMTHNG_RASTER_ARTIFACT_DIR") {
+                    let dir = PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    // This fixture has an opaque white page, so native
+                    // premultiplied and straight RGBA bytes are identical.
+                    gdk_pixbuf::Pixbuf::from_bytes(
+                        &pixels.bytes,
+                        gdk_pixbuf::Colorspace::Rgb,
+                        pixels.format != gdk::MemoryFormat::R8g8b8,
+                        8,
+                        pixels.width,
+                        pixels.height,
+                        pixels.stride as i32,
+                    )
+                    .savev(dir.join(format!("{name}-{scale}.png")), "png", &[])
+                    .unwrap();
+                }
+            }
+        }
     }
 
     #[test]
@@ -672,7 +942,7 @@ mod tests {
         let page = paintable(&picture);
         drive_until(|| rendered_size(&page).is_some());
         let scale = picture.scale_factor();
-        assert_eq!(page.imp().scale.get(), scale);
+        assert_eq!(page.imp().scale.get(), f64::from(scale));
         assert_eq!(page.intrinsic_width(), 120);
         assert_eq!(page.intrinsic_height(), 80);
         assert_eq!(rendered_size(&page), Some((480 * scale, 320 * scale)));
@@ -692,8 +962,15 @@ mod tests {
             page.imp().rendered.borrow().as_ref().unwrap().texture,
             first
         );
+        let snapshot = gtk::Snapshot::new();
+        page.snapshot(&snapshot, 480.0, 320.0);
+        let node = snapshot.to_node().unwrap();
+        assert!(node.downcast_ref::<gtk::gsk::TextureNode>().is_some());
+        assert_eq!(node.bounds().width(), 480.0);
         // Zooming out to the cached size must cancel a pending larger request.
-        page.snapshot(&gtk::Snapshot::new(), 720.0, 480.0);
+        let snapshot = gtk::Snapshot::new();
+        page.snapshot(&snapshot, 720.0, 480.0);
+        assert_eq!(snapshot.to_node().unwrap().bounds().width(), 720.0);
         assert!(page.imp().pending.get().is_some());
         page.snapshot(&gtk::Snapshot::new(), 480.0, 320.0);
         assert!(page.imp().pending.get().is_none());
@@ -720,7 +997,7 @@ mod tests {
             page.imp().rendered.borrow().as_ref().unwrap().texture,
             first
         );
-        page.imp().scale.set(scale + 1);
+        page.imp().scale.set(f64::from(scale + 1));
         page.imp().cancel();
         page.invalidate_contents();
         drive_until(|| rendered_size(&page) == Some((960 * (scale + 1), 640 * (scale + 1))));
@@ -834,6 +1111,29 @@ mod tests {
         drop(temporary);
         drive(Duration::from_millis(40));
         assert!(weak.upgrade().is_none());
+
+        // The direct renderer uses the same asynchronous lifecycle. Fonts and
+        // frames survive the compiler snapshot and its temporary SVG cache.
+        let preview = compiled("#set page(width: 120pt, height: 80pt, margin: 8pt)\nSmall text $ frac(a,b) + sqrt(2) $");
+        let native_path = dir.path().join("native.svg");
+        std::fs::write(&native_path, &preview.pages[0].svg).unwrap();
+        let picture = gtk::Picture::new();
+        picture.set_size_request(480, 320);
+        load_page(&picture, &native_path, preview.source_map.page(0));
+        let page = paintable(&picture);
+        assert!(matches!(
+            page.imp().source.get(),
+            Some(PageSource::Typst(_))
+        ));
+        drop(preview);
+        std::fs::remove_file(native_path).unwrap();
+        let window = gtk::Window::new();
+        window.set_child(Some(&picture));
+        window.present();
+        drive_until(|| rendered_size(&page).is_some());
+        assert_eq!(rendered_size(&page), Some((480 * scale, 320 * scale)));
+        assert!(is_current(&picture));
+        window.destroy();
 
         // PNG and unsupported SVG units retain GTK's loader and file identity.
         let png = dir.path().join("image.png");

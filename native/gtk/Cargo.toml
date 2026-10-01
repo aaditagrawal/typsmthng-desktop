@@ -46,6 +46,7 @@ zip = { version = "6.0", default-features = false, features = ["deflate"] }
 typst = "=0.15.1"
 typst-layout = "=0.15.1"
 typst-svg = "=0.15.1"
+typst-render = "=0.15.1"
 typst-ide = "=0.15.1"
 typstyle-core = "=0.15.1"
 # Glyph ids for the font faces Typst exposes; same version Typst links.
