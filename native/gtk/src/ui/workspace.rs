@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use sourceview5::prelude::*;
 use url::Url;
 
+use super::editor_tools::{EditorCallback, EditorTools};
 use super::font_picker::{FontPicker, FontPickerKind};
 use super::home::icon_button;
 use super::minimap::HeadingMinimap;
@@ -263,6 +264,7 @@ pub enum DiagnosticKind {
 
 #[derive(Clone)]
 pub struct WorkspaceCallbacks {
+    pub editor_query: EditorCallback,
     pub go_home: Rc<dyn Fn()>,
     pub open_project: Rc<dyn Fn()>,
     pub save: Rc<dyn Fn(String) -> bool>,
@@ -304,6 +306,7 @@ pub struct SearchResultRow {
 
 #[derive(Clone)]
 pub struct WorkspaceView {
+    editor_tools: EditorTools,
     pub root: gtk::Box,
     pub editor: sourceview5::View,
     pub buffer: sourceview5::Buffer,
@@ -614,7 +617,6 @@ impl WorkspaceView {
             }
         });
         editor.add_controller(vim_keys);
-        install_pair_completion(&editor, &buffer, vim_context.clone());
         let editor_scroll = gtk::ScrolledWindow::new();
         editor_scroll.set_child(Some(&editor));
         editor_scroll.set_hexpand(true);
@@ -622,6 +624,9 @@ impl WorkspaceView {
         let editor_overlay = gtk::Overlay::new();
         editor_overlay.set_child(Some(&editor_scroll));
         editor_overlay.set_hexpand(true);
+        let editor_tools =
+            EditorTools::new(&editor, &editor_overlay, callbacks.editor_query.clone());
+        install_pair_completion(&editor, &buffer, vim_context.clone());
         let editor_badge = ZoomBadge::new();
         editor_overlay.add_overlay(editor_badge.widget());
         let minimap = HeadingMinimap::new(&editor);
@@ -1313,6 +1318,7 @@ impl WorkspaceView {
         }
 
         let view = Self {
+            editor_tools,
             root,
             editor,
             buffer,
@@ -1596,6 +1602,7 @@ impl WorkspaceView {
     }
 
     pub fn show_text_file(&self, path: &str, contents: &str) {
+        self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.suppress_changes.set(true);
         self.buffer.begin_irreversible_action();
@@ -1611,6 +1618,7 @@ impl WorkspaceView {
     }
 
     pub fn show_binary_file(&self, path: &Path) {
+        self.editor_tools.set_file(path.to_string_lossy().as_ref());
         self.cancel_pending_compile();
         self.file_label.set_text(path.to_string_lossy().as_ref());
         self.editor.set_editable(false);
@@ -1624,6 +1632,7 @@ impl WorkspaceView {
     }
 
     pub fn show_missing_file(&self, path: &str) {
+        self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.file_label.set_text(path);
         self.editor.set_editable(false);
@@ -3545,6 +3554,7 @@ mod tests {
         let workspace = WorkspaceView::new(
             &window,
             WorkspaceCallbacks {
+                editor_query: Rc::new(|_| None),
                 go_home: noop.clone(),
                 open_project: noop.clone(),
                 save: Rc::new(|_| true),

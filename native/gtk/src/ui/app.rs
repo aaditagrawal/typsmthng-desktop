@@ -634,6 +634,22 @@ impl AppController {
         let workspace = WorkspaceView::new(
             &self.window,
             WorkspaceCallbacks {
+                editor_query: {
+                    let weak = weak.clone();
+                    Rc::new(move |request| {
+                        let this = weak.upgrade()?;
+                        if this.current_file.borrow().as_deref() != Some(request.path.as_str())
+                            || !request.path.ends_with(".typ")
+                        {
+                            return None;
+                        }
+                        let project = this.project.borrow().clone()?;
+                        let options = this.compile_options().ok()?;
+                        this.preview_compiler
+                            .editor(&project, &options, request)
+                            .ok()
+                    })
+                },
                 go_home: callback0(&weak, Self::close_to_home),
                 open_project: callback0(&weak, Self::choose_open_project),
                 save: callback1_result(&weak, Self::save_current),

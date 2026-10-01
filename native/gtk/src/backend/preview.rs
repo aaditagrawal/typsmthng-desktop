@@ -25,6 +25,7 @@ use typst_kit::fonts::{self, FontStore};
 use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
 use typst_layout::PagedDocument;
 
+use super::editor::{EditorQuery, EditorRequest, EditorResponse};
 use super::typst::{compile_entry, parse_diagnostics, CompileOptions, CompileOutput, SvgPage};
 use super::{BackendError, Project, Result};
 
@@ -533,10 +534,14 @@ impl Downloader for PackageDownloader {
 
 struct Request {
     project: Project,
-    main: String,
     options: CompileOptions,
-    reply: mpsc::Sender<Result<CompileOutput<Preview>>>,
+    task: Task,
     font_revision: u64,
+}
+
+enum Task {
+    Compile(String, mpsc::Sender<Result<CompileOutput<Preview>>>),
+    Editor(EditorRequest, mpsc::Sender<Result<EditorResponse>>),
 }
 
 /// One thread retains Typst's memoization, parsed sources and fonts across edits.
@@ -556,7 +561,7 @@ impl Default for PreviewCompiler {
                 let mut font_revision = 0;
                 for request in receiver {
                     let started = Instant::now();
-                    let result = (|| {
+                    let ready = (|| {
                         let key = Config::new(&request.project, &request.options);
                         if font_revision != request.font_revision
                             || engine.as_ref().is_none_or(|engine| engine.config != key)
@@ -564,18 +569,32 @@ impl Default for PreviewCompiler {
                             font_revision = request.font_revision;
                             engine = Some(Engine::new(key)?);
                         }
-                        engine.as_mut().unwrap().compile(
-                            &request.project,
-                            &request.main,
-                            &request.options,
-                        )
-                    })()
-                    .map(|mut output| {
-                        output.elapsed = started.elapsed();
-                        output
-                    });
+                        Ok(())
+                    })();
+                    match request.task {
+                        Task::Compile(main, reply) => {
+                            let result = ready
+                                .and_then(|_| {
+                                    engine.as_mut().unwrap().compile(
+                                        &request.project,
+                                        &main,
+                                        &request.options,
+                                    )
+                                })
+                                .map(|mut output| {
+                                    output.elapsed = started.elapsed();
+                                    output
+                                });
+                            let _ = reply.send(result);
+                        }
+                        Task::Editor(query, reply) => {
+                            let result = ready.and_then(|_| {
+                                engine.as_mut().unwrap().editor(&request.project, query)
+                            });
+                            let _ = reply.send(result);
+                        }
+                    }
                     typst::comemo::evict(10);
-                    let _ = request.reply.send(result);
                 }
             })
             .expect("start preview compiler");
@@ -602,15 +621,33 @@ impl PreviewCompiler {
         self.requests
             .send(Request {
                 project: project.clone(),
-                main: main.into(),
                 options,
-                reply,
+                task: Task::Compile(main.into(), reply),
                 font_revision: self.font_revision.load(Ordering::Relaxed),
             })
             .map_err(|_| BackendError::Process("Preview compiler stopped".into()))?;
         response
             .recv()
             .map_err(|_| BackendError::Process("Preview compiler stopped".into()))?
+    }
+
+    /// Queue semantic work without evaluating Typst or waiting on the GTK thread.
+    pub fn editor(
+        &self,
+        project: &Project,
+        options: &CompileOptions,
+        query: EditorRequest,
+    ) -> Result<mpsc::Receiver<Result<EditorResponse>>> {
+        let (reply, response) = mpsc::channel();
+        self.requests
+            .send(Request {
+                project: project.clone(),
+                options: options.resolved()?,
+                task: Task::Editor(query, reply),
+                font_revision: self.font_revision.load(Ordering::Relaxed),
+            })
+            .map_err(|_| BackendError::Process("Preview compiler stopped".into()))?;
+        Ok(response)
     }
 }
 
@@ -649,6 +686,9 @@ struct Engine {
     wrapper: Option<tempfile::NamedTempFile>,
     wrapper_text: String,
     sources: Mutex<HashMap<FileId, Source>>,
+    overlay: Option<Source>,
+    known_files: Vec<FileId>,
+    last_document: Option<PagedDocument>,
 }
 
 impl Engine {
@@ -692,6 +732,9 @@ impl Engine {
             wrapper: None,
             wrapper_text: String::new(),
             sources: Mutex::new(HashMap::new()),
+            overlay: None,
+            known_files: Vec::new(),
+            last_document: None,
         })
     }
 
@@ -702,6 +745,7 @@ impl Engine {
         options: &CompileOptions,
     ) -> Result<CompileOutput<Preview>> {
         let started = Instant::now();
+        self.overlay = None;
         let cancelled = || {
             options
                 .cancellation
@@ -736,6 +780,7 @@ impl Engine {
         let mut stderr = self.diagnostics(&result.warnings);
         let artifact = match result.output {
             Ok(document) if !cancelled() => {
+                self.last_document = Some(document.clone());
                 let pages = document
                     .pages()
                     .iter()
@@ -785,6 +830,55 @@ impl Engine {
         let _ = diagnostics::emit(&mut buffer, self, messages, DiagnosticFormat::Short);
         String::from_utf8_lossy(buffer.as_slice()).into_owned()
     }
+
+    fn editor(&mut self, project: &Project, request: EditorRequest) -> Result<EditorResponse> {
+        super::paths::safe_existing_path(project.root(), &request.path)?;
+        let path = VirtualPath::new(&request.path)
+            .map_err(|error| BackendError::Process(error.to_string()))?;
+        self.main = RootedPath::new(VirtualRoot::Project, path).intern();
+        let source = Source::new(self.main, request.text);
+        if !source.text().is_char_boundary(request.cursor) {
+            return Err(BackendError::Process("Invalid editor byte offset".into()));
+        }
+        self.sources.get_mut().unwrap().clear();
+        self.files.reset();
+        self.now.reset();
+        self.overlay = Some(source.clone());
+        self.known_files = project
+            .entries(true)?
+            .into_iter()
+            .filter(|entry| entry.kind == super::EntryKind::File)
+            .filter_map(|entry| VirtualPath::new(&entry.path).ok())
+            .map(|path| RootedPath::new(VirtualRoot::Project, path).intern())
+            .collect();
+        Ok(match request.query {
+            EditorQuery::Complete => {
+                let (from, items) = typst_ide::autocomplete(
+                    self,
+                    self.last_document.as_ref(),
+                    &source,
+                    request.cursor,
+                    true,
+                )
+                .unwrap_or((request.cursor, Vec::new()));
+                EditorResponse::Completions { from, items }
+            }
+            EditorQuery::Hover => EditorResponse::Hover(
+                typst_ide::tooltip(
+                    self,
+                    self.last_document.as_ref(),
+                    &source,
+                    request.cursor,
+                    typst::syntax::Side::After,
+                )
+                .map(|tooltip| match tooltip {
+                    typst_ide::Tooltip::Text(text) | typst_ide::Tooltip::Code(text) => {
+                        text.to_string()
+                    }
+                }),
+            ),
+        })
+    }
 }
 
 impl World for Engine {
@@ -798,11 +892,17 @@ impl World for Engine {
         self.main
     }
     fn source(&self, id: FileId) -> FileResult<Source> {
+        if let Some(source) = self.overlay.as_ref().filter(|source| source.id() == id) {
+            return Ok(source.clone());
+        }
         let source = self.files.source(id)?;
         self.sources.lock().unwrap().insert(id, source.clone());
         Ok(source)
     }
     fn file(&self, id: FileId) -> FileResult<Bytes> {
+        if let Some(source) = self.overlay.as_ref().filter(|source| source.id() == id) {
+            return Ok(Bytes::from_string(source.text().to_string()));
+        }
         self.files.file(id)
     }
     fn font(&self, index: usize) -> Option<Font> {
@@ -810,6 +910,15 @@ impl World for Engine {
     }
     fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
         self.now.today(offset)
+    }
+}
+
+impl IdeWorld for Engine {
+    fn upcast(&self) -> &dyn World {
+        self
+    }
+    fn files(&self) -> Vec<FileId> {
+        self.known_files.clone()
     }
 }
 
@@ -889,6 +998,75 @@ mod tests {
         let output = compiler.compile(project, "main.typ", &options()).unwrap();
         assert!(output.success(), "{}", output.stderr);
         output.artifact.unwrap()
+    }
+
+    #[test]
+    fn semantic_requests_use_unsaved_current_file_and_relative_imports_before_compile() {
+        let (_dir, project) = fixture("#this-is-invalid(");
+        fs::create_dir(project.root().join("chapters")).unwrap();
+        fs::write(project.root().join("chapters/edit.typ"), "Disk contents").unwrap();
+        fs::write(
+            project.root().join("chapters/lib.typ"),
+            "#let imported = 42",
+        )
+        .unwrap();
+        let compiler = PreviewCompiler::default();
+        let query = |text: &str, cursor, query| {
+            compiler
+                .editor(
+                    &project,
+                    &options(),
+                    EditorRequest {
+                        path: "chapters/edit.typ".into(),
+                        text: text.into(),
+                        cursor,
+                        query,
+                    },
+                )
+                .unwrap()
+                .recv()
+                .unwrap()
+                .unwrap()
+        };
+        let text = "// café 🙂\n#import \"lib.typ\": imported\n#let café = 7\n#caf";
+        let EditorResponse::Completions { from, items } =
+            query(text, text.len(), EditorQuery::Complete)
+        else {
+            panic!()
+        };
+        assert_eq!(&text[from..], "caf");
+        assert!(items.iter().any(|item| item.label == "café"));
+        assert!(items.iter().any(|item| item.label == "imported"));
+        let text = "#import \"lib.typ\": imported\n#imported";
+        let EditorResponse::Hover(value) = query(text, text.len() - 2, EditorQuery::Hover) else {
+            panic!()
+        };
+        assert_eq!(value.as_deref(), Some("42"));
+        let text = "#include \"\"";
+        let EditorResponse::Completions { items, .. } =
+            query(text, text.len() - 1, EditorQuery::Complete)
+        else {
+            panic!()
+        };
+        assert!(items.iter().any(|item| item.label.contains("lib.typ")));
+        assert_eq!(
+            fs::read_to_string(project.root().join("chapters/edit.typ")).unwrap(),
+            "Disk contents"
+        );
+        // An editor overlay must never leak into a subsequent preview compile.
+        assert!(!compiler
+            .compile(&project, "main.typ", &options())
+            .unwrap()
+            .success());
+        fs::write(project.root().join("main.typ"), "= Chapter <chapter>").unwrap();
+        compiled(&compiler, &project);
+        let text = "@cha";
+        let EditorResponse::Completions { items, .. } =
+            query(text, text.len(), EditorQuery::Complete)
+        else {
+            panic!()
+        };
+        assert!(items.iter().any(|item| item.label == "chapter"));
     }
 
     fn find_jump(
