@@ -4,6 +4,7 @@
 pub mod app_fonts;
 pub mod archive;
 mod compile_options;
+pub mod editor;
 pub mod error;
 pub mod font_catalog;
 pub mod fonts;

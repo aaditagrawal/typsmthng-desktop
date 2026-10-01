@@ -1,4 +1,5 @@
 mod app;
+mod editor_tools;
 mod font_picker;
 mod home;
 mod minimap;
