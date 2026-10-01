@@ -3642,6 +3642,7 @@ mod tests {
         let workspace = Rc::new(WorkspaceView::new(
             &window,
             WorkspaceCallbacks {
+                editor_query: Rc::new(|_| None),
                 go_home: noop.clone(),
                 open_project: noop.clone(),
                 save: Rc::new(|_| true),
@@ -3661,6 +3662,7 @@ mod tests {
                 preview_asset: path_noop.clone(),
                 check_update: noop.clone(),
                 export_pdf: noop.clone(),
+                export_document: noop.clone(),
                 export_project: noop.clone(),
                 present_single: noop.clone(),
                 present_dual: noop,
