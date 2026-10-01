@@ -13,6 +13,9 @@ on:
       - '.github/workflows/copr*.yml'
 permissions:
   contents: read
+concurrency:
+  group: copr-check-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   offline-rpm:
     runs-on: ubuntu-24.04
@@ -36,7 +39,7 @@ jobs:
           unshare --net rpmbuild --rebuild build/copr/*.src.rpm --define "_topdir $PWD/build/rpmbuild"
       - name: Install and smoke-test Fedora package
         run: |
-          dnf install -y build/rpmbuild/RPMS/x86_64/typsmthng-*.rpm
+          dnf install -y build/rpmbuild/RPMS/x86_64/typsmthng-[0-9]*.rpm
           dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo GDK_DEBUG=no-portals timeout 30s typsmthng --smoke-test
           dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo GDK_DEBUG=no-portals timeout 45s typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
       - uses: actions/upload-artifact@v5
@@ -44,6 +47,6 @@ jobs:
           name: fedora-rpm
           path: |
             build/copr/*.src.rpm
-            build/rpmbuild/RPMS/x86_64/*.rpm
+            build/rpmbuild/RPMS/x86_64/typsmthng-[0-9]*.rpm
           if-no-files-found: error
           compression-level: 0

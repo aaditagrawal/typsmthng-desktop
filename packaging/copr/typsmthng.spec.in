@@ -50,6 +50,8 @@ install -Dm644 packaging/linux/dev.typsmthng.Typsmthng.desktop %{buildroot}%{_da
 install -Dm644 packaging/linux/dev.typsmthng.Typsmthng.metainfo.xml %{buildroot}%{_datadir}/metainfo/dev.typsmthng.Typsmthng.metainfo.xml
 install -Dm644 icon.iconset/icon_512x512.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/dev.typsmthng.Typsmthng.png
 install -Dm644 assets/typst.xml %{buildroot}%{_datadir}/mime/packages/typsmthng.xml
+install -Dm644 typst-x86_64-unknown-linux-musl/LICENSE %{buildroot}%{_licensedir}/%{name}/typst/LICENSE
+install -Dm644 typst-x86_64-unknown-linux-musl/NOTICE %{buildroot}%{_licensedir}/%{name}/typst/NOTICE
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/dev.typsmthng.Typsmthng.desktop
@@ -58,7 +60,7 @@ typst-x86_64-unknown-linux-musl/typst --version | grep -E '^typst 0\.15\.1( |$)'
 
 %files
 %license LICENSE bundled-licenses
-%license typst-x86_64-unknown-linux-musl/LICENSE typst-x86_64-unknown-linux-musl/NOTICE
+%license %{_licensedir}/%{name}/typst/
 %doc README.md
 %{_bindir}/typsmthng
 %{_prefix}/lib/typsmthng/
