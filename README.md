@@ -146,7 +146,10 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
 - Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.
 - Toggle the preview magnifier in the preview toolbar to inspect rendered text at 2× without changing the page zoom.
+- Format the current Typst document: `Ctrl+Shift+I`, or "Format document" in the command palette
 - Cycle system, light, and dark themes: `Ctrl+J`
+
+Formatting uses Typstyle 0.15.1 and takes one undo step. It preserves selected tokens and scroll position. Carets in whitespace stay near their previous line and character column. Files with syntax errors remain unchanged.
 
 On macOS, use Command in place of Control.
 

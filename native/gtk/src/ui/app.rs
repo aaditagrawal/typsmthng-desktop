@@ -764,6 +764,11 @@ impl AppController {
                 workspace.toggle_comment();
             }
         });
+        self.add_action("format-document", &["<Primary><Shift>i"], |this| {
+            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                workspace.format_document();
+            }
+        });
         self.add_action("duplicate-line", &["<Primary>d"], |this| {
             if let Some(workspace) = this.workspace.borrow().as_ref() {
                 workspace.duplicate_lines();
@@ -1024,6 +1029,11 @@ impl AppController {
     fn select_file(&self, path: String) {
         if let Some(command) = path.strip_prefix(":command:") {
             match command {
+                "format" => {
+                    if let Some(workspace) = self.workspace.borrow().as_ref() {
+                        workspace.format_document();
+                    }
+                }
                 "compile" => {
                     if let Some(workspace) = self.workspace.borrow().as_ref() {
                         workspace.request_compile();
@@ -1852,6 +1862,7 @@ impl AppController {
         if mode == SearchMode::Commands {
             let rows = [
                 ("Compile document", "Ctrl+Enter", "compile"),
+                ("Format document", "Ctrl+Shift+I", "format"),
                 ("Export PDF", "Ctrl+Shift+E", "export"),
                 ("Show cursor in preview", "Ctrl+Shift+J", "jump-to-preview"),
                 (

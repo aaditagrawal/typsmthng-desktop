@@ -946,6 +946,9 @@ impl Engine {
         if !source.text().is_char_boundary(request.cursor) {
             return Err(BackendError::Process("Invalid editor byte offset".into()));
         }
+        if let EditorQuery::Format { anchor } = request.query {
+            return super::editor::format_source(source, request.cursor, anchor);
+        }
         self.sources.get_mut().unwrap().clear();
         self.files.reset();
         self.now.reset();
@@ -983,6 +986,7 @@ impl Engine {
                     }
                 }),
             ),
+            EditorQuery::Format { .. } => unreachable!("format handled before semantic analysis"),
         })
     }
 }
@@ -1173,6 +1177,35 @@ mod tests {
             panic!()
         };
         assert!(items.iter().any(|item| item.label == "chapter"));
+    }
+
+    #[test]
+    fn explicit_formatting_preserves_rendered_document() {
+        let source = "#set page(width:240pt,height:180pt,margin:20pt)\n#let café=(2,3)\n= A heading\nHello café λ. $x^2+y^2=z^2$\n#text(weight:\"bold\")[Result: #café.at(0)]\n#pagebreak()\nSecond page\n";
+        let (_dir, project) = fixture(source);
+        let compiler = PreviewCompiler::default();
+        let before = compiled(&compiler, &project);
+        let response = compiler
+            .editor(
+                &project,
+                &options(),
+                EditorRequest {
+                    path: "main.typ".into(),
+                    text: source.into(),
+                    cursor: 0,
+                    query: EditorQuery::Format { anchor: 0 },
+                },
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap();
+        let EditorResponse::Formatted { text, .. } = response else {
+            panic!()
+        };
+        assert_ne!(text, source);
+        fs::write(project.root().join("main.typ"), text).unwrap();
+        assert_eq!(before.pages, compiled(&compiler, &project).pages);
     }
 
     fn find_jump(

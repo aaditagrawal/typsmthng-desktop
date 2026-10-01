@@ -1955,6 +1955,11 @@ impl WorkspaceView {
         self.buffer.insert(&mut finish, &text);
     }
 
+    pub fn format_document(&self) {
+        self.editor_tools
+            .format_document(&self.editor, &self.root, &self.compile_label);
+    }
+
     pub fn set_compiling(&self) {
         self.compile_label.set_text("Compiling…");
     }
@@ -2517,7 +2522,11 @@ fn apply_editor_typography(
 
 // Tick callbacks run before allocation. The second frame sees the first
 // frame's allocation; always remove the callback after that bounded wait.
-fn schedule_after_allocation(widget: &gtk::Box, pending: Rc<Cell<bool>>, callback: Rc<dyn Fn()>) {
+pub(super) fn schedule_after_allocation(
+    widget: &gtk::Box,
+    pending: Rc<Cell<bool>>,
+    callback: Rc<dyn Fn()>,
+) {
     if pending.replace(true) {
         return;
     }

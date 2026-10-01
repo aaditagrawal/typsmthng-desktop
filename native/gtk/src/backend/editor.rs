@@ -1,10 +1,13 @@
 //! Editor-only requests and UTF-8/snippet handling shared with the native UI.
+use super::{BackendError, Result};
 use std::ops::Range;
+use typst::syntax::{LinkedNode, Side, Source};
 
 #[derive(Debug, Clone)]
 pub enum EditorQuery {
     Complete,
     Hover,
+    Format { anchor: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +26,105 @@ pub enum EditorResponse {
         items: Vec<typst_ide::Completion>,
     },
     Hover(Option<String>),
+    Formatted {
+        text: String,
+        cursor: usize,
+        anchor: usize,
+    },
+}
+
+pub fn format_source(source: Source, cursor: usize, anchor: usize) -> Result<EditorResponse> {
+    if !source.text().is_char_boundary(cursor) || !source.text().is_char_boundary(anchor) {
+        return Err(BackendError::Process(
+            "Invalid selection byte offset".into(),
+        ));
+    }
+    let formatter = typstyle_core::Typstyle::new(typstyle_core::Config {
+        reorder_import_items: false,
+        ..Default::default()
+    });
+    let text = formatter
+        .format_source(source.clone())
+        .render()
+        .map_err(|error| BackendError::Process(error.to_string()))?;
+    let formatted = Source::detached(text.clone());
+    let mapped_cursor = if cursor == anchor && cursor == source.text().len() {
+        text.len()
+    } else {
+        formatted_offset(
+            &source,
+            &formatted,
+            cursor,
+            if cursor >= anchor {
+                Side::Before
+            } else {
+                Side::After
+            },
+        )
+    };
+    Ok(EditorResponse::Formatted {
+        cursor: mapped_cursor,
+        anchor: if cursor == anchor {
+            mapped_cursor
+        } else {
+            formatted_offset(
+                &source,
+                &formatted,
+                anchor,
+                if anchor <= cursor {
+                    Side::After
+                } else {
+                    Side::Before
+                },
+            )
+        },
+        text,
+    })
+}
+
+/// Keep the caret inside the same token occurrence when whitespace changes.
+/// For whitespace/deleted punctuation, retain the bounded line and character column.
+fn formatted_offset(source: &Source, formatted: &Source, offset: usize, side: Side) -> usize {
+    fn matches(node: &LinkedNode<'_>, target: &LinkedNode<'_>, positions: &mut Vec<usize>) {
+        if node.kind() == target.kind() && node.leaf_text() == target.leaf_text() {
+            positions.push(node.offset());
+        }
+        for child in node.children() {
+            matches(&child, target, positions);
+        }
+    }
+    if let Some(leaf) = LinkedNode::new(source.root()).leaf_at(offset, side) {
+        if !leaf.kind().is_trivia() {
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            matches(&LinkedNode::new(source.root()), &leaf, &mut old);
+            matches(&LinkedNode::new(formatted.root()), &leaf, &mut new);
+            if let Some(start) = old
+                .iter()
+                .position(|start| *start == leaf.offset())
+                .and_then(|index| new.get(index))
+            {
+                return start + offset.saturating_sub(leaf.offset()).min(leaf.len());
+            }
+        }
+    }
+    let prefix = source.text().get(..offset).unwrap_or_default();
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let column = prefix
+        .rsplit('\n')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .count();
+    let start = formatted
+        .lines()
+        .line_to_byte(line)
+        .unwrap_or(formatted.text().len());
+    let text = formatted.text()[start..]
+        .split('\n')
+        .next()
+        .unwrap_or_default();
+    start + char_to_byte(text, column.min(text.chars().count())).unwrap_or(text.len())
 }
 
 pub fn char_to_byte(text: &str, offset: usize) -> Option<usize> {
@@ -86,5 +188,53 @@ mod tests {
             ("image(\"\")".into(), Some(7..7))
         );
         assert_eq!(flatten_snippet("${x}_${2:2}"), ("x_2".into(), Some(0..1)));
+    }
+
+    #[test]
+    fn formatter_maps_repeated_unicode_tokens_and_rejects_syntax_errors() {
+        let source = "#let café=(1,2)\n#let pair=(café,café)\n#café\n";
+        let start = source.rfind("café").unwrap();
+        let end = start + "café".len();
+        let EditorResponse::Formatted {
+            text,
+            cursor,
+            anchor,
+        } = format_source(Source::detached(source), end, start).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(&text[anchor..cursor], "café");
+        assert_eq!(anchor, text.rfind("café").unwrap());
+        let EditorResponse::Formatted { text: again, .. } =
+            format_source(Source::detached(text.clone()), cursor, anchor).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(text, again);
+        assert!(format_source(Source::detached("#let café=("), 0, 0).is_err());
+        let source = "#set page(width:240pt,height:180pt,margin:20pt)\n#let café=(1,2)\n= A short draft\nHello café. $x^2+y^2=z^2$\n#text(weight:\"bold\")[Result: #café.at(0)]\n";
+        let start = source.rfind("café").unwrap();
+        let EditorResponse::Formatted {
+            text,
+            cursor,
+            anchor,
+        } = format_source(Source::detached(source), start + "café".len(), start).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(&text[anchor..cursor], "café");
+        let source = "#let café=(1,2)\n#café";
+        let start = source.rfind("café").unwrap();
+        for (cursor, anchor) in [(source.len(), start), (start, source.len())] {
+            let EditorResponse::Formatted {
+                text,
+                cursor,
+                anchor,
+            } = format_source(Source::detached(source), cursor, anchor).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(&text[cursor.min(anchor)..cursor.max(anchor)], "café");
+        }
     }
 }
