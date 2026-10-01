@@ -7,10 +7,11 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
 use typst::diag::{FileError, FileResult, SourceDiagnostic};
-use typst::foundations::{Bytes, Datetime, Duration};
-use typst::introspection::{Location, PagedPosition, Tag};
+use typst::foundations::{Bytes, Datetime, Duration, NativeElement, StyleChain};
+use typst::introspection::{Introspector, Location, PagedPosition, Tag};
 use typst::layout::{Abs, Frame, FrameItem, Point, Rect, Transform};
 use typst::math::EquationElem;
+use typst::model::HeadingElem;
 use typst::syntax::{FileId, RootedPath, Source, Span, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, TextItem};
 use typst::utils::{LazyHash, Numeric};
@@ -34,11 +35,26 @@ pub struct Preview {
     pub source_map: Arc<SourceMap>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     pub path: String,
     pub line: usize,
     pub column: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentHeading {
+    pub title: String,
+    pub level: usize,
+    pub position: PagedPosition,
+    pub source: Option<SourceLocation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderedStatistics {
+    pub pages: usize,
+    /// Unicode characters in laid-out text, excluding whitespace.
+    pub characters: usize,
 }
 
 /// Immutable document and source trees from exactly the same compilation.
@@ -49,6 +65,8 @@ pub struct SourceMap {
     /// Per-page ink extents, measured on the compiler thread at build time.
     content: Vec<PageContent>,
     column: Option<(f64, f64)>,
+    headings: Vec<DocumentHeading>,
+    statistics: RenderedStatistics,
 }
 
 /// Axis-aligned box in page points, origin at the page's top-left corner
@@ -65,12 +83,66 @@ pub struct ContentBounds {
 impl SourceMap {
     fn new(document: PagedDocument, world: Snapshot) -> Self {
         let (content, column) = measure_pages(&document);
+        let headings = document
+            .introspector()
+            .query(&HeadingElem::ELEM.select())
+            .iter()
+            .filter_map(|content| {
+                let heading = content.to_packed::<HeadingElem>()?;
+                if !heading.outlined.get(StyleChain::default()) {
+                    return None;
+                }
+                Some(DocumentHeading {
+                    title: heading.numbers.as_ref().map_or_else(
+                        || heading.body.plain_text().to_string(),
+                        |numbers| format!("{numbers} {}", heading.body.plain_text()),
+                    ),
+                    level: heading.resolve_level(StyleChain::default()).get(),
+                    position: document.introspector().position(content.location()?)?,
+                    source: content.span().id().and_then(|id| {
+                        let source = world.sources.get(&id)?;
+                        source_location(&world, id, source.find(content.span())?.offset())
+                    }),
+                })
+            })
+            .collect();
+        let statistics = rendered_statistics(&document);
         Self {
             document,
             world,
             content,
             column,
+            headings,
+            statistics,
         }
+    }
+
+    pub fn headings(&self) -> &[DocumentHeading] {
+        &self.headings
+    }
+
+    pub fn statistics(&self) -> RenderedStatistics {
+        self.statistics
+    }
+
+    /// The cursor uses GTK's Unicode character offset. Reject an edited or
+    /// uncompiled source rather than apply positions from a different snapshot.
+    pub fn jump_from_cursor(&self, path: &str, text: &str, cursor: usize) -> Option<PagedPosition> {
+        let source = self.world.sources.iter().find_map(|(id, source)| {
+            (*id.root() == VirtualRoot::Project && id.vpath().get_without_slash() == path)
+                .then_some(source)
+        })?;
+        if source.text() != text {
+            return None;
+        }
+        let byte = text
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain(std::iter::once(text.len()))
+            .nth(cursor)?;
+        typst_ide::jump_from_cursor(&self.document, source, byte)
+            .into_iter()
+            .next()
     }
 
     pub fn dimensions(&self, page: usize) -> Option<(f64, f64)> {
@@ -122,18 +194,52 @@ impl SourceMap {
                 (id, source.find(span)?.offset())
             }
         };
-        // Package sources cannot be opened by the project editor.
-        if *id.root() != VirtualRoot::Project {
-            return None;
-        }
-        let source = self.world.sources.get(&id)?;
-        let line = source.lines().byte_to_line(offset)?;
-        let start = source.lines().line_to_byte(line)?;
-        Some(SourceLocation {
-            path: id.vpath().get_without_slash().to_string(),
-            line: line + 1,
-            column: source.text().get(start..offset)?.chars().count() + 1,
-        })
+        source_location(&self.world, id, offset)
+    }
+}
+
+fn source_location(world: &Snapshot, id: FileId, offset: usize) -> Option<SourceLocation> {
+    if *id.root() != VirtualRoot::Project {
+        return None;
+    }
+    let source = world.sources.get(&id)?;
+    let line = source.lines().byte_to_line(offset)?;
+    let start = source.lines().line_to_byte(line)?;
+    Some(SourceLocation {
+        path: id.vpath().get_without_slash().to_string(),
+        line: line + 1,
+        column: source.text().get(start..offset)?.chars().count() + 1,
+    })
+}
+
+/// Unicode characters in final page text, including generated headers,
+/// footers, and footnotes. Whitespace and transparent text do not count; shaped
+/// ligatures keep their original characters rather than count as one glyph.
+fn rendered_statistics(document: &PagedDocument) -> RenderedStatistics {
+    fn characters(frame: &Frame) -> usize {
+        frame
+            .items()
+            .map(|(_, item)| match item {
+                FrameItem::Group(group) => characters(&group.frame),
+                FrameItem::Text(text)
+                    if is_visible(&text.fill) || visible_stroke(text.stroke.as_ref()).is_some() =>
+                {
+                    text.text
+                        .chars()
+                        .filter(|character| !character.is_whitespace())
+                        .count()
+                }
+                _ => 0,
+            })
+            .sum()
+    }
+    RenderedStatistics {
+        pages: document.pages().len(),
+        characters: document
+            .pages()
+            .iter()
+            .map(|page| characters(&page.frame))
+            .sum(),
     }
 }
 
@@ -1086,6 +1192,124 @@ mod tests {
             }
         }
         panic!("No jump to {path}:{line} on page {page}");
+    }
+
+    #[test]
+    fn compiled_headings_include_nested_imports_deep_levels_and_generated_content() {
+        let (_dir, project) = fixture("= Top\n#pagebreak()\n#include \"sections/part.typ\"\n#pagebreak()\n#for title in (\"Generated\",) { heading(level: 6, title) }\n#heading(outlined: false)[Not in outline]");
+        fs::create_dir_all(project.root().join("sections/nested")).unwrap();
+        fs::write(
+            project.root().join("sections/part.typ"),
+            "== Imported\n#include \"nested/deep.typ\"",
+        )
+        .unwrap();
+        fs::write(
+            project.root().join("sections/nested/deep.typ"),
+            "#set heading(offset: 2)\n=== Deep",
+        )
+        .unwrap();
+        let preview = compiled(&PreviewCompiler::default(), &project);
+        let headings = preview.source_map.headings();
+        assert_eq!(
+            headings
+                .iter()
+                .map(|heading| (
+                    heading.title.as_str(),
+                    heading.level,
+                    heading.position.page.get()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Top", 1, 1),
+                ("Imported", 2, 2),
+                ("Deep", 5, 2),
+                ("Generated", 6, 3)
+            ]
+        );
+        let source = headings[2].source.as_ref().unwrap();
+        assert_eq!(
+            (source.path.as_str(), source.line),
+            ("sections/nested/deep.typ", 2)
+        );
+        assert_eq!(headings[3].source.as_ref().unwrap().path, "main.typ");
+    }
+
+    #[test]
+    fn cursor_to_preview_uses_imported_snapshot_unicode_offsets_and_rejects_edits() {
+        let (_dir, project) = fixture("First#pagebreak()\n#include \"parts/part.typ\"");
+        fs::create_dir_all(project.root().join("parts/nested")).unwrap();
+        fs::write(
+            project.root().join("parts/part.typ"),
+            "#include \"nested/texte-Ω.typ\"",
+        )
+        .unwrap();
+        let text = "Préface Ω β café";
+        fs::write(project.root().join("parts/nested/texte-Ω.typ"), text).unwrap();
+        let options = CompileOptions {
+            page_preamble: Some("#set page(width: 400pt, height: 300pt)".into()),
+            ..options()
+        };
+        let output = PreviewCompiler::default()
+            .compile(&project, "main.typ", &options)
+            .unwrap();
+        assert!(output.success(), "{}", output.stderr);
+        let map = output.artifact.unwrap().source_map;
+        let cursor = text[..text.find("café").unwrap()].chars().count();
+        let position = map
+            .jump_from_cursor("parts/nested/texte-Ω.typ", text, cursor)
+            .unwrap();
+        assert_eq!(position.page.get(), 2);
+        assert!(position.point.x.to_pt() > 0.0 && position.point.y.to_pt() > 0.0);
+        assert!(map
+            .jump_from_cursor("parts/nested/texte-Ω.typ", text, text.chars().count())
+            .is_some());
+        assert!(map
+            .jump_from_cursor("parts/nested/texte-Ω.typ", text, text.chars().count() + 1)
+            .is_none());
+        assert!(map
+            .jump_from_cursor(
+                "parts/nested/texte-Ω.typ",
+                &format!("Edited {text}"),
+                cursor
+            )
+            .is_none());
+        assert!(map
+            .jump_from_cursor("uncompiled.typ", text, cursor)
+            .is_none());
+        fs::write(project.root().join("parts/nested/texte-Ω.typ"), "Changed").unwrap();
+        assert_eq!(
+            map.jump_from_cursor("parts/nested/texte-Ω.typ", text, cursor),
+            Some(position),
+            "the old snapshot is immutable"
+        );
+        assert!(map
+            .jump_from_cursor("parts/nested/texte-Ω.typ", "Changed", cursor)
+            .is_none());
+    }
+
+    #[test]
+    fn rendered_statistics_count_unicode_not_glyphs_and_include_generated_page_text() {
+        let map = source_map("#set page(header: [Hdr], footer: [Ftr])\ninter#strong[face] office éΩ\n#footnote[Note]\n#hide[Hidden]\n#text(fill: rgb(\"#00000000\"))[Invisible]\n#pagebreak()\n#for _ in range(2) {[Gen ]}");
+        assert_eq!(
+            map.statistics(),
+            RenderedStatistics {
+                pages: 2,
+                characters: 41
+            }
+        );
+        assert_eq!(
+            source_map("").statistics(),
+            RenderedStatistics {
+                pages: 1,
+                characters: 0
+            }
+        );
+        let wrapped = source_map("#set page(width: 100pt, height: 300pt, margin: 10pt)\n#set text(hyphenate: false)\ninter#strong[face] office éΩ");
+        assert_eq!(
+            wrapped.statistics().characters,
+            17,
+            "styling, ligatures, and wrapping must not change character counts"
+        );
     }
 
     #[test]

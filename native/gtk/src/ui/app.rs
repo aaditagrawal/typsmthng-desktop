@@ -722,6 +722,11 @@ impl AppController {
                 workspace.request_save();
             }
         });
+        self.add_action("jump-to-preview", &["<Primary><Shift>j"], |this| {
+            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                workspace.jump_to_preview();
+            }
+        });
         self.add_action("compile", &["<Primary>Return"], |this| {
             if let Some(workspace) = this.workspace.borrow().as_ref() {
                 workspace.request_compile();
@@ -1022,6 +1027,11 @@ impl AppController {
                 "compile" => {
                     if let Some(workspace) = self.workspace.borrow().as_ref() {
                         workspace.request_compile();
+                    }
+                }
+                "jump-to-preview" => {
+                    if let Some(workspace) = self.workspace.borrow().as_ref() {
+                        workspace.jump_to_preview();
                     }
                 }
                 "export" => self.export_pdf(),
@@ -1843,6 +1853,7 @@ impl AppController {
             let rows = [
                 ("Compile document", "Ctrl+Enter", "compile"),
                 ("Export PDF", "Ctrl+Shift+E", "export"),
+                ("Show cursor in preview", "Ctrl+Shift+J", "jump-to-preview"),
                 (
                     "Export document…",
                     "PDF profiles, SVG, PNG, HTML",
@@ -3501,7 +3512,7 @@ impl AppController {
         guide_section(
             &content,
             "PREVIEW AND DIAGNOSTICS",
-            "The right pane uses a persistent Typst compiler. Click rendered text or formulas to jump to their source. Resize the split, zoom or fit pages, follow safe external links, and activate diagnostics to jump to their file and line. External edits are watched; conflicting unsaved changes must be resolved before saving.",
+            "The right pane uses a persistent Typst compiler. Click rendered text or formulas to jump to their source. Ctrl+Shift+J shows the source cursor in the preview after compilation. The compiled headings menu includes imported and generated headings. Rendered statistics count pages and non-whitespace Unicode characters in the final document, including headers, footers, and footnotes. Resize the split, zoom or fit pages, follow safe external links, and activate diagnostics to jump to their file and line. External edits are watched; conflicting unsaved changes must be resolved before saving.",
         );
         guide_section(
             &content,

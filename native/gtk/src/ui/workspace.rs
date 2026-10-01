@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use typsmthng_gtk::backend::preview::SourceMap;
+use typst::introspection::PagedPosition;
 
 use adw::prelude::*;
 use regex::Regex;
@@ -151,6 +152,82 @@ fn restore_preview_anchor(
             adjustment.upper() - adjustment.page_size(),
         ));
     }
+}
+
+/// Wait for layout after a pane reveal or zoom, then use the same centered
+/// Contain/Cover mapping as preview clicks. Stale snapshots never move a page.
+fn reveal_document_position(
+    pages: &gtk::Box,
+    pictures: &Rc<RefCell<Vec<PreviewPicture>>>,
+    scroll: &gtk::ScrolledWindow,
+    current: &Rc<RefCell<Option<Arc<SourceMap>>>>,
+    expected: &Arc<SourceMap>,
+    position: PagedPosition,
+) -> bool {
+    if !current
+        .borrow()
+        .as_ref()
+        .is_some_and(|map| Arc::ptr_eq(map, expected))
+    {
+        return false;
+    }
+    let page = position.page.get() - 1;
+    let Some(picture) = pictures.borrow().get(page).cloned() else {
+        return false;
+    };
+    let Some((_, page_height)) = expected.dimensions(page) else {
+        return false;
+    };
+    if position.point.x.to_pt() > picture.aspect_ratio * page_height {
+        return false;
+    }
+    let current = current.clone();
+    let expected = expected.clone();
+    let widget = picture.widget.downgrade();
+    let aspect = picture.aspect_ratio;
+    let scroll = scroll.downgrade();
+    let allocated = Cell::new(false);
+    pages.add_tick_callback(move |_, _| {
+        if !allocated.replace(true) {
+            return glib::ControlFlow::Continue;
+        }
+        let (Some(widget), Some(scroll)) = (widget.upgrade(), scroll.upgrade()) else {
+            return glib::ControlFlow::Break;
+        };
+        if !current
+            .borrow()
+            .as_ref()
+            .is_some_and(|map| Arc::ptr_eq(map, &expected))
+        {
+            return glib::ControlFlow::Break;
+        }
+        let Some((x, y)) = document_widget_point(
+            f64::from(widget.width()),
+            f64::from(widget.height()),
+            aspect,
+            widget.content_fit() == gtk::ContentFit::Cover,
+            page_height,
+            position.point.x.to_pt(),
+            position.point.y.to_pt(),
+        ) else {
+            return glib::ControlFlow::Break;
+        };
+        if let Some(bounds) = widget.compute_bounds(&scroll) {
+            for (adjustment, point, fraction) in [
+                (scroll.hadjustment(), f64::from(bounds.x()) + x, 0.5),
+                (scroll.vadjustment(), f64::from(bounds.y()) + y, 0.25),
+            ] {
+                adjustment.set_value(
+                    (adjustment.value() + point - adjustment.page_size() * fraction).clamp(
+                        adjustment.lower(),
+                        (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),
+                    ),
+                );
+            }
+        }
+        glib::ControlFlow::Break
+    });
+    true
 }
 
 #[derive(Clone)]
@@ -318,6 +395,9 @@ pub struct WorkspaceView {
     expanded_directories: Rc<RefCell<HashSet<String>>>,
     known_directories: Rc<RefCell<HashSet<String>>>,
     preview_pages: gtk::Box,
+    preview_scroll: gtk::ScrolledWindow,
+    compiled_headings: gtk::MenuButton,
+    source_jump: gtk::Button,
     preview_identity: Rc<RefCell<Option<PreviewIdentity>>>,
     preview_pictures: Rc<RefCell<Vec<PreviewPicture>>>,
     resize_preview: Rc<dyn Fn()>,
@@ -671,6 +751,17 @@ impl WorkspaceView {
         preview_heading.set_hexpand(true);
         preview_heading.set_halign(gtk::Align::Start);
         preview_controls.append(&preview_heading);
+        let compiled_headings = gtk::MenuButton::new();
+        compiled_headings.set_icon_name("view-list-symbolic");
+        compiled_headings.set_tooltip_text(Some(
+            "Compiled headings, including imported and generated headings",
+        ));
+        compiled_headings.set_sensitive(false);
+        let source_jump = icon_button("go-jump-symbolic", "Show cursor in preview (Ctrl+Shift+J)");
+        source_jump.set_action_name(Some("app.jump-to-preview"));
+        source_jump.set_sensitive(false);
+        preview_controls.append(&compiled_headings);
+        preview_controls.append(&source_jump);
         let zoom_out = icon_button("zoom-out-symbolic", "Zoom out");
         let zoom_menu = gtk::MenuButton::new();
         zoom_menu.set_label("Fit");
@@ -1000,7 +1091,8 @@ impl WorkspaceView {
         compile_label.set_halign(gtk::Align::Start);
         compile_label.set_hexpand(true);
         compile_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        let page_label = gtk::Label::new(Some("0 pages"));
+        let page_label = gtk::Label::new(Some("Rendered: not compiled"));
+        page_label.set_tooltip_text(Some("Pages and non-whitespace Unicode characters in the compiled document. Includes generated and repeated text, headers, footers, and footnotes in the full compiled document. Counts laid-out text, excluding whitespace and transparent text."));
         let cursor_label = gtk::Label::new(Some("Ln 1, Col 1"));
         let vim_status = gtk::Label::new(None);
         vim_status.set_visible(false);
@@ -1233,6 +1325,9 @@ impl WorkspaceView {
             let revision = revision.clone();
             let last_edit = last_edit.clone();
             let source_map = source_map.clone();
+            let source_jump = source_jump.clone();
+            let compiled_headings = compiled_headings.clone();
+            let page_label = page_label.clone();
             let pending_diagnostics = pending_diagnostics.clone();
             let pending_error = pending_error.clone();
             let diagnostics_revealer = diagnostics_revealer.clone();
@@ -1246,6 +1341,9 @@ impl WorkspaceView {
                 }
                 diagnostics_revealer.set_reveal_child(false);
                 source_map.replace(None);
+                source_jump.set_sensitive(false);
+                compiled_headings.set_sensitive(false);
+                page_label.set_text("Rendered: compile to update");
                 if !suppress_changes.get() {
                     last_edit.set(Some(Instant::now()));
                     if compile_label.text().starts_with("Compile error:") {
@@ -1330,6 +1428,9 @@ impl WorkspaceView {
             expanded_directories,
             known_directories,
             preview_pages,
+            preview_scroll,
+            compiled_headings,
+            source_jump,
             preview_identity: Rc::new(RefCell::new(None)),
             preview_pictures,
             resize_preview,
@@ -1844,11 +1945,10 @@ impl WorkspaceView {
         }
         let previous_pictures = std::mem::take(&mut *self.preview_pictures.borrow_mut());
         self.preview_placeholder.set_visible(pages.is_empty());
-        self.page_label.set_text(&format!(
-            "{} {}",
-            pages.len(),
-            if pages.len() == 1 { "page" } else { "pages" }
-        ));
+        if source.is_none() {
+            self.page_label
+                .set_text(&format!("{} image pages", pages.len()));
+        }
         for (index, page) in pages.iter().enumerate() {
             if reusable.get(index) == Some(&true) {
                 if let Some(picture) = previous_pictures.get(index) {
@@ -2015,7 +2115,108 @@ impl WorkspaceView {
                 (self.resize_preview)();
             }
         }
+        self.source_jump.set_sensitive(source_map.is_some());
+        self.compiled_headings.set_sensitive(
+            source_map
+                .as_ref()
+                .is_some_and(|map| !map.headings().is_empty()),
+        );
+        if let Some(map) = &source_map {
+            let statistics = map.statistics();
+            self.page_label.set_text(&format!(
+                "Rendered: {} {} · {} characters",
+                statistics.pages,
+                if statistics.pages == 1 {
+                    "page"
+                } else {
+                    "pages"
+                },
+                statistics.characters
+            ));
+            let popover = gtk::Popover::new();
+            let headings = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            headings.set_margin_top(6);
+            headings.set_margin_bottom(6);
+            for heading in map.headings() {
+                let button = gtk::Button::new();
+                button.add_css_class("flat");
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                row.set_margin_start((heading.level.saturating_sub(1).min(6) * 12) as i32);
+                let title = gtk::Label::new(Some(&heading.title));
+                title.set_xalign(0.0);
+                title.set_hexpand(true);
+                title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                row.append(&title);
+                row.append(&gtk::Label::new(Some(&format!(
+                    "{}",
+                    heading.position.page
+                ))));
+                button.set_child(Some(&row));
+                button.set_tooltip_text(Some(&heading.source.as_ref().map_or_else(
+                    || heading.title.clone(),
+                    |source| format!("{}\n{}:{}", heading.title, source.path, source.line),
+                )));
+                button.connect_clicked({
+                    let expected = map.clone();
+                    let current = self.source_map.clone();
+                    let pictures = Rc::downgrade(&self.preview_pictures);
+                    let scroll = self.preview_scroll.downgrade();
+                    let pages = self.preview_pages.downgrade();
+                    let position = heading.position;
+                    let popover = popover.downgrade();
+                    move |_| {
+                        let (Some(pictures), Some(scroll), Some(pages), Some(popover)) = (
+                            pictures.upgrade(),
+                            scroll.upgrade(),
+                            pages.upgrade(),
+                            popover.upgrade(),
+                        ) else {
+                            return;
+                        };
+                        popover.popdown();
+                        reveal_document_position(
+                            &pages, &pictures, &scroll, &current, &expected, position,
+                        );
+                    }
+                });
+                headings.append(&button);
+            }
+            let scroll = gtk::ScrolledWindow::new();
+            scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+            scroll.set_min_content_width(320);
+            scroll.set_max_content_height(400);
+            scroll.set_propagate_natural_height(true);
+            scroll.set_child(Some(&headings));
+            popover.set_child(Some(&scroll));
+            self.compiled_headings.set_popover(Some(&popover));
+        } else {
+            self.page_label.set_text("Rendered: compile to update");
+        }
         self.source_map.replace(source_map);
+    }
+
+    pub fn jump_to_preview(&self) -> bool {
+        let Some(map) = self.source_map.borrow().clone() else {
+            return false;
+        };
+        let Some(position) = map.jump_from_cursor(
+            &self.file_label.text(),
+            &buffer_text(&self.buffer),
+            self.buffer.cursor_position() as usize,
+        ) else {
+            return false;
+        };
+        if self.settings.borrow().view_mode == ViewMode::Source {
+            self.view_buttons[1].set_active(true);
+        }
+        reveal_document_position(
+            &self.preview_pages,
+            &self.preview_pictures,
+            &self.preview_scroll,
+            &self.source_map,
+            &map,
+            position,
+        )
     }
 
     pub fn set_compile_error(&self, text: &str) {
@@ -2593,6 +2794,39 @@ fn preview_point(
     }
     let scale = page_height / drawn_height;
     Some((x * scale, y * scale))
+}
+
+fn document_widget_point(
+    width: f64,
+    height: f64,
+    aspect: f64,
+    cropped: bool,
+    page_height: f64,
+    x: f64,
+    y: f64,
+) -> Option<(f64, f64)> {
+    if width <= 0.0
+        || height <= 0.0
+        || aspect <= 0.0
+        || page_height <= 0.0
+        || !x.is_finite()
+        || !y.is_finite()
+        || x < 0.0
+        || y < 0.0
+        || y > page_height
+        || x > page_height * aspect
+    {
+        return None;
+    }
+    let drawn_height = if cropped {
+        height.max(width / aspect)
+    } else {
+        height.min(width / aspect)
+    };
+    let scale = drawn_height / page_height;
+    let x = x * scale + (width - drawn_height * aspect) / 2.0;
+    let y = y * scale + (height - drawn_height) / 2.0;
+    (x >= 0.0 && y >= 0.0 && x <= width && y <= height).then_some((x, y))
 }
 
 fn build_document_search_dialog(
@@ -3384,6 +3618,286 @@ mod tests {
         preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
         svg_aspect_ratio, PreviewZoom,
     };
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    fn native_compiled_headings_statistics_and_cursor_navigation() {
+        use super::*;
+        use typsmthng_gtk::backend::{preview::PreviewCompiler, CompileOptions, Project};
+        adw::init().unwrap();
+        super::super::install_css();
+        let application = gtk::Application::builder()
+            .application_id("dev.typsmthng.NavigationTest")
+            .build();
+        application.register(None::<&gio::Cancellable>).unwrap();
+        application.add_action(&gio::SimpleAction::new("jump-to-preview", None));
+        let window = gtk::ApplicationWindow::builder()
+            .application(&application)
+            .title("Document navigation")
+            .default_width(1280)
+            .default_height(800)
+            .build();
+        let noop: Rc<dyn Fn()> = Rc::new(|| {});
+        let path_noop: Rc<dyn Fn(String)> = Rc::new(|_| {});
+        let workspace = Rc::new(WorkspaceView::new(
+            &window,
+            WorkspaceCallbacks {
+                editor_query: Rc::new(|_| None),
+                go_home: noop.clone(),
+                open_project: noop.clone(),
+                save: Rc::new(|_| true),
+                force_save: Rc::new(|_| true),
+                select_file: path_noop.clone(),
+                create_file: noop.clone(),
+                create_folder: noop.clone(),
+                import_files: noop.clone(),
+                drop_files: Rc::new(|_| {}),
+                move_path: Rc::new(|_| {}),
+                toggle_hidden: noop.clone(),
+                rename_path: path_noop.clone(),
+                duplicate_path: path_noop.clone(),
+                trash_path: path_noop.clone(),
+                reveal_path: path_noop.clone(),
+                open_external: path_noop.clone(),
+                preview_asset: path_noop.clone(),
+                check_update: noop.clone(),
+                export_pdf: noop.clone(),
+                export_document: noop.clone(),
+                export_project: noop.clone(),
+                present_single: noop.clone(),
+                present_dual: noop,
+                refresh_compile: path_noop,
+                search: Rc::new(|_, _, reply| reply(Vec::new())),
+                settings_changed: Rc::new(|_| {}),
+                preferences_changed: Rc::new(|_| {}),
+            },
+        ));
+        application
+            .lookup_action("jump-to-preview")
+            .unwrap()
+            .downcast::<gio::SimpleAction>()
+            .unwrap()
+            .connect_activate({
+                let workspace = Rc::downgrade(&workspace);
+                move |_, _| {
+                    if let Some(workspace) = workspace.upgrade() {
+                        workspace.jump_to_preview();
+                    }
+                }
+            });
+        workspace.apply_settings(UiSettings {
+            auto_compile: false,
+            ..Default::default()
+        });
+        window.set_child(Some(&workspace.root));
+        window.present();
+        let drive = |duration| {
+            let until = Instant::now() + duration;
+            while Instant::now() < until {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let project = Project::create(directory.path(), "Navigation review").unwrap();
+        let source = "#set page(width: 200pt, height: 240pt, margin: 20pt)\n= Start\nFirst page\n#pagebreak()\n#include \"section.typ\"\n#pagebreak()\n#heading(level: 4)[Generated]\nLast page";
+        let imported = "=== Imported section\nPréface Ω café";
+        std::fs::write(project.root().join("main.typ"), source).unwrap();
+        std::fs::write(project.root().join("section.typ"), imported).unwrap();
+        let compiler = PreviewCompiler::default();
+        let preview = compiler
+            .compile(&project, "main.typ", &CompileOptions::default())
+            .unwrap()
+            .artifact
+            .unwrap();
+        let map = preview.source_map.clone();
+        let paths = preview
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| {
+                let path = directory.path().join(format!("page-{index}.svg"));
+                std::fs::write(&path, &page.svg).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        workspace.show_text_file("main.typ", source);
+        workspace.set_project(
+            "Navigation review",
+            &["main.typ", "section.typ"].map(|path| FileRow {
+                path: path.into(),
+                name: path.into(),
+                depth: 0,
+                is_directory: false,
+                is_binary: false,
+                is_main: path == "main.typ",
+            }),
+        );
+        workspace.set_compile_status("Compiled document");
+        workspace.set_source_map(Some(map.clone()));
+        workspace.set_compiled_preview(&paths, "main.typ");
+        drive(Duration::from_millis(200));
+        assert_eq!(map.headings().len(), 3);
+        assert!(workspace.compiled_headings.is_sensitive() && workspace.source_jump.is_sensitive());
+        assert!(workspace.page_label.text().starts_with("Rendered: 3 pages"));
+        let capture = |phase: &str| {
+            drive(Duration::from_millis(150));
+            if let Some(base) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") {
+                std::env::set_var("TYPSMTHNG_SNAPSHOT_DIR", PathBuf::from(&base).join(phase));
+                super::super::smoke::capture_windows(&application);
+                std::env::set_var("TYPSMTHNG_SNAPSHOT_DIR", base);
+            }
+        };
+        capture("before");
+        workspace.compiled_headings.popup();
+        let popover = workspace.compiled_headings.popover().unwrap();
+        let scroll = popover
+            .child()
+            .unwrap()
+            .downcast::<gtk::ScrolledWindow>()
+            .unwrap();
+        let list = scroll
+            .child()
+            .unwrap()
+            .downcast::<gtk::Viewport>()
+            .unwrap()
+            .child()
+            .unwrap()
+            .downcast::<gtk::Box>()
+            .unwrap();
+        let generated = list
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        generated.emit_clicked();
+        drive(Duration::from_millis(100));
+        assert!(
+            workspace.preview_scroll.vadjustment().value() > 500.0,
+            "compiled heading should reveal the third page"
+        );
+        capture("after");
+        workspace.show_text_file("section.typ", imported);
+        workspace.set_source_map(Some(map.clone()));
+        let cursor = imported[..imported.find("café").unwrap()].chars().count();
+        workspace
+            .buffer
+            .place_cursor(&workspace.buffer.iter_at_offset(cursor as i32));
+        for zoom in [
+            PreviewZoom::FitWidth,
+            PreviewZoom::Scale(1.5),
+            PreviewZoom::FitText,
+        ] {
+            workspace.preview_zoom.set(zoom);
+            (workspace.resize_preview)();
+            drive(Duration::from_millis(100));
+            workspace.preview_scroll.vadjustment().set_value(0.0);
+            if zoom == PreviewZoom::FitWidth {
+                workspace.source_jump.emit_clicked();
+            } else {
+                assert!(workspace.jump_to_preview());
+            }
+            drive(Duration::from_millis(100));
+            assert!(
+                workspace.preview_scroll.vadjustment().value() > 100.0,
+                "source cursor should reveal imported page at {zoom:?}"
+            );
+        }
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " edited");
+        let before = workspace.preview_scroll.vadjustment().value();
+        assert!(workspace.source_map.borrow().is_none());
+        assert!(
+            !workspace.source_jump.is_sensitive() && !workspace.compiled_headings.is_sensitive()
+        );
+        assert_eq!(workspace.page_label.text(), "Rendered: compile to update");
+        assert!(!workspace.jump_to_preview());
+        generated.emit_clicked();
+        drive(Duration::from_millis(100));
+        assert_eq!(
+            workspace.preview_scroll.vadjustment().value(),
+            before,
+            "stale heading closures must not move the preview"
+        );
+
+        // A slide with a right-hand speaker-note area is previewed as its left half.
+        let notes_source = "#set page(width: 400pt, height: 100pt, margin: 0pt)\n#place(dx: 20pt, dy: 30pt)[Slide words]\n#place(dx: 250pt, dy: 30pt)[Speaker notes]";
+        std::fs::write(project.root().join("main.typ"), notes_source).unwrap();
+        let notes = compiler
+            .compile(&project, "main.typ", &CompileOptions::default())
+            .unwrap()
+            .artifact
+            .unwrap();
+        let cropped = typsmthng_gtk::backend::rendered_preview::prepare_preview(
+            typsmthng_gtk::backend::CompileOutput {
+                artifact: Some(notes.pages),
+                diagnostics: Vec::new(),
+                stdout: String::new(),
+                stderr: String::new(),
+                elapsed: Duration::ZERO,
+            },
+            "right-half",
+        )
+        .unwrap()
+        .artifact
+        .unwrap();
+        workspace.show_text_file("main.typ", notes_source);
+        workspace.set_source_map(Some(notes.source_map));
+        workspace.preview_zoom.set(PreviewZoom::FitWidth);
+        workspace.set_compiled_preview(&cropped.paths, "main.typ");
+        drive(Duration::from_millis(100));
+        let cursor = notes_source[..notes_source.find("Slide words").unwrap()]
+            .chars()
+            .count();
+        workspace
+            .buffer
+            .place_cursor(&workspace.buffer.iter_at_offset(cursor as i32));
+        assert!(workspace.jump_to_preview());
+        let cursor = notes_source[..notes_source.find("Speaker notes").unwrap()]
+            .chars()
+            .count();
+        workspace
+            .buffer
+            .place_cursor(&workspace.buffer.iter_at_offset(cursor as i32));
+        assert!(
+            !workspace.jump_to_preview(),
+            "the right-hand note area is outside the preview"
+        );
+        window.close();
+    }
+
+    #[test]
+    fn document_points_round_trip_zoom_letterboxing_and_visible_crops() {
+        for (width, height, aspect, cover, page_height, x, y) in [
+            (600.0, 800.0, 0.75, false, 800.0, 200.0, 400.0),
+            (900.0, 800.0, 0.75, false, 800.0, 200.0, 400.0),
+            (1200.0, 1600.0, 0.75, false, 800.0, 200.0, 400.0),
+            (300.0, 800.0, 0.75, true, 800.0, 200.0, 400.0),
+            (300.0, 800.0, 0.375, false, 800.0, 200.0, 400.0),
+        ] {
+            let (wx, wy) =
+                super::document_widget_point(width, height, aspect, cover, page_height, x, y)
+                    .unwrap();
+            let (px, py) =
+                preview_point(width, height, aspect, cover, page_height, wx, wy).unwrap();
+            assert!((px - x).abs() < 1e-9 && (py - y).abs() < 1e-9);
+        }
+        assert!(
+            super::document_widget_point(300.0, 800.0, 0.375, false, 800.0, 500.0, 400.0).is_none(),
+            "speaker notes are outside the left-half preview"
+        );
+        assert!(
+            super::document_widget_point(300.0, 800.0, 0.75, true, 800.0, 20.0, 400.0).is_none(),
+            "a covered margin is outside the widget"
+        );
+        assert!(
+            super::document_widget_point(600.0, 800.0, 0.75, false, 800.0, f64::NAN, 400.0)
+                .is_none()
+        );
+    }
 
     #[test]
     fn preview_reuses_only_unchanged_pages_with_stable_source_mapping() {
