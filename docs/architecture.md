@@ -7,6 +7,7 @@ The GTK controller coordinates project selection, background work, and user feed
 | `backend::project` | Project files, atomic writes, and path safety | `Project` operations |
 | `backend::imports` | Copying imports, retaining original LaTeX, conversion, and collision-safe names | The existing import functions and shared path allocator |
 | `backend::notes` | Inline/comment fallback and Markdown sidecar loading and saving | `load` and `save` |
+| `backend::rendered_preview` | SVG cache ownership and presentation-note cropping | `prepare_preview` and its owned result |
 | `backend::compile_options` | Environment defaults and explicit-setting precedence | `CompileOptions::resolved` |
 | `backend::preview` | Persistent Typst world, fonts, source maps, and compilation | `PreviewCompiler` and immutable `SourceMap` |
 | `backend::typst` | Pinned CLI invocation and diagnostics | `TypstTool` |
