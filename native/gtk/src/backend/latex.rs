@@ -833,10 +833,9 @@ Ada & 10 \\
     }
 
     #[test]
-    fn structured_conversion_compiles_when_typst_is_available() {
-        let Ok(tool) = crate::backend::typst::TypstTool::detect() else {
-            return;
-        };
+    fn structured_conversion_compiles_with_typst() {
+        let tool = crate::backend::typst::TypstTool::detect()
+            .expect("install Typst 0.15.1 or set TYPSMTHNG_TYPST");
         let directory = tempfile::tempdir().unwrap();
         let project =
             crate::backend::project::Project::create(directory.path(), "Converted").unwrap();

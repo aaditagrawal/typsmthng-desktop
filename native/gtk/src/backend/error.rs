@@ -27,6 +27,11 @@ pub enum BackendError {
         found: String,
         required: &'static str,
     },
+    #[error("invalid Typst setting {setting}: {reason}")]
+    InvalidTypstConfiguration {
+        setting: &'static str,
+        reason: &'static str,
+    },
     #[error("Typst process timed out")]
     TypstTimeout,
     #[error("Typst process failed to start: {0}")]

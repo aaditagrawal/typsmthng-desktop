@@ -1193,9 +1193,15 @@ impl AppController {
             workspace.set_compile_status("Compilation queued…");
             return;
         }
+        let mut options = match self.compile_options() {
+            Ok(options) => options,
+            Err(error) => {
+                workspace.set_compile_status(&format!("Compile error: {error}"));
+                return;
+            }
+        };
         self.compile_in_flight.set(true);
         workspace.set_compiling();
-        let mut options = self.compile_options();
         let cancellation = Arc::new(AtomicBool::new(false));
         self.compile_cancellation
             .replace(Some(cancellation.clone()));
@@ -1277,7 +1283,7 @@ impl AppController {
         });
     }
 
-    fn compile_options(&self) -> CompileOptions {
+    fn compile_options(&self) -> Result<CompileOptions, BackendError> {
         let settings = self.settings.borrow();
         let owns_layout = self.project.borrow().as_ref().is_some_and(|project| {
             project_layout_locked(project)
@@ -1313,6 +1319,7 @@ impl AppController {
             page_preamble,
             ..CompileOptions::default()
         }
+        .resolved()
     }
 
     fn apply_compile_result(&self, finished: CompileFinished) {
@@ -1451,8 +1458,16 @@ impl AppController {
             return;
         };
         let generation = self.compile_generation.get();
+        let mut options = match self.compile_options() {
+            Ok(options) => options,
+            Err(error) => {
+                if let Some(workspace) = self.workspace.borrow().as_ref() {
+                    workspace.set_compile_status(&format!("Speaker notes unavailable: {error}"));
+                }
+                return;
+            }
+        };
         self.notes_in_flight.set(true);
-        let mut options = self.compile_options();
         options.cancellation = self.compile_cancellation.borrow().clone();
         if self.settings.borrow().google_fonts {
             if let Some(path) = GoogleFontCache::default().cached_directory() {
@@ -1620,10 +1635,16 @@ impl AppController {
                 return;
             }
         };
+        let options = match self.compile_options() {
+            Ok(options) => options,
+            Err(error) => {
+                self.show_error("Export PDF failed", &error.to_string());
+                return;
+            }
+        };
         if let Some(workspace) = self.workspace.borrow().as_ref() {
             workspace.set_compile_status("Rendering PDF…");
         }
-        let options = self.compile_options();
         let google_fonts = self.settings.borrow().google_fonts;
         let source = project
             .read_file(&main)

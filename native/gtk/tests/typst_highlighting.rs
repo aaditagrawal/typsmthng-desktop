@@ -8,6 +8,8 @@
 //!   cargo test --test typst_highlighting -- --ignored --test-threads=1
 //! ```
 
+#![cfg(feature = "desktop")]
+
 use std::path::{Path, PathBuf};
 
 use sourceview5::prelude::*;

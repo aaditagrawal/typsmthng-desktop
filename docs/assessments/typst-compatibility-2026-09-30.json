@@ -1,0 +1,632 @@
+{
+  "assessed_on": "2026-09-30",
+  "app_commit": "bc07145b6c57a37ce6747462f8b22ab84bfe3c6e",
+  "app_version": "0.1.4",
+  "typst_version": "0.15.1",
+  "typesetter_release": "0.15.2",
+  "typesetter_release_commit": "1271b451fa6d00d50708cf6d9aeaf570a2af79cd",
+  "typesetter_development_commit": "efc327877dc37a95b03c183fd4d6c3f8af1ab08c",
+  "test_environment": {
+    "method": "Actual backend source built through temporary Cargo manifest without GTK dependencies or binaries",
+    "cli": "Checksum-verified official compiler supplied via TYPSMTHNG_TYPST",
+    "existing_backend_tests": {
+      "passed": 60,
+      "failed": 0,
+      "ignored_benchmarks": 4
+    },
+    "gtk_ui_tests_run": false,
+    "reason": "GTK, GtkSourceView, and libadwaita development libraries unavailable",
+    "normal_probe_configuration": {
+      "ignore_system_fonts": true,
+      "creation_timestamp": 1704067200
+    },
+    "svg_comparison": "Exact SVG strings and page counts. Internal SvgPage dimension metadata excluded because CLI SVG headers round point values.",
+    "pdf_comparison": "Compilation success/failure only; no independent visual or PDF standard validation",
+    "temporary_harness": "/tmp/typsmthng-assessment-dbjk3J/backend"
+  },
+  "probes": [
+    {
+      "case": "markup-and-symbols",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 13.397611,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 4.561421
+    },
+    {
+      "case": "scripting-and-show-rules",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.159276,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.4501970000000002
+    },
+    {
+      "case": "complex-math",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.78633,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 2.8974640000000003
+    },
+    {
+      "case": "multi-page-and-layout",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.99156,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 2,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.8156780000000001
+    },
+    {
+      "case": "nested-imports-root-paths",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.301787999999998,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.675748
+    },
+    {
+      "case": "data-readers",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.416207,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.9844789999999999
+    },
+    {
+      "case": "svg-image-gradient",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 9.895015,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 0.839444
+    },
+    {
+      "case": "bibliography",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 109.829544,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 4.25307
+    },
+    {
+      "case": "introspection",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 12.149866000000001,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 4.295769
+    },
+    {
+      "case": "unicode-and-rtl",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.540528,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.669718
+    },
+    {
+      "case": "fixed-date",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 9.736814,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 0.975025
+    },
+    {
+      "case": "invalid-symbol",
+      "cli_diagnostics": [
+        "unknown variable: missing-symbol"
+      ],
+      "cli_svg_ms": 4.625482,
+      "cli_svg_success": false,
+      "identical_svg": null,
+      "pages": null,
+      "pdf_diagnostics": [
+        "unknown variable: missing-symbol"
+      ],
+      "pdf_success": false,
+      "preview_diagnostics": [
+        "unknown variable: missing-symbol"
+      ],
+      "preview_success": false,
+      "repeat_stable": true,
+      "warm_ms": 0.39878199999999997
+    },
+    {
+      "case": "missing-import",
+      "cli_diagnostics": [
+        "file not found (searched at /tmp/.tmpRGvBbX/missing.typ)"
+      ],
+      "cli_svg_ms": 4.484301,
+      "cli_svg_success": false,
+      "identical_svg": null,
+      "pages": null,
+      "pdf_diagnostics": [
+        "file not found (searched at /tmp/.tmpRGvBbX/missing.typ)"
+      ],
+      "pdf_success": false,
+      "preview_diagnostics": [
+        "file not found (searched at /tmp/.tmpRGvBbX/missing.typ)"
+      ],
+      "preview_success": false,
+      "repeat_stable": true,
+      "warm_ms": 0.5037419999999999
+    },
+    {
+      "case": "page-preamble",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.068016,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.2950760000000001
+    },
+    {
+      "case": "explicit-local-package",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.228257,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.556227
+    },
+    {
+      "case": "environment-package-path",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.236367,
+      "cli_svg_success": true,
+      "identical_svg": null,
+      "pages": null,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [
+        "package not found (searched for @local/demo:0.1.0)"
+      ],
+      "preview_success": false,
+      "repeat_stable": true,
+      "warm_ms": 0.453302
+    },
+    {
+      "case": "environment-date",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 9.740205,
+      "cli_svg_success": true,
+      "identical_svg": null,
+      "pages": null,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [
+        "equality assertion failed: value 2026 was not equal to 2000"
+      ],
+      "preview_success": false,
+      "repeat_stable": true,
+      "warm_ms": 0.369761
+    },
+    {
+      "case": "environment-font-path",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.620479,
+      "cli_svg_success": true,
+      "identical_svg": false,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [
+        "unknown font family: geist mono"
+      ],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.0396050000000001
+    },
+    {
+      "case": "font-precedence-collision",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.000276000000001,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 1.138905
+    },
+    {
+      "case": "explicit-font-path",
+      "cli_diagnostics": [],
+      "cli_svg_ms": 10.845459,
+      "cli_svg_success": true,
+      "identical_svg": true,
+      "pages": 1,
+      "pdf_diagnostics": [],
+      "pdf_success": true,
+      "preview_diagnostics": [],
+      "preview_success": true,
+      "repeat_stable": true,
+      "warm_ms": 0.7882539999999999
+    }
+  ],
+  "follow_up": {
+    "description": "Shared environment resolution fixes the three original preview/export mismatches. Baseline probes above are retained as historical evidence.",
+    "headless_tests": {
+      "passed": 76,
+      "failed": 0,
+      "ignored_benchmarks": 4,
+      "compatibility_tests": 9
+    },
+    "headless_clippy": "passed with warnings denied",
+    "local_test_command": "scripts/test-typst-compatibility.sh",
+    "probes_after_fix": [
+      {
+        "case": "markup-and-symbols",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 13.574639,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 4.415503
+      },
+      {
+        "case": "scripting-and-show-rules",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.367252,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.482478
+      },
+      {
+        "case": "complex-math",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 16.315572,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 3.169895
+      },
+      {
+        "case": "multi-page-and-layout",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 13.376568,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 2,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.87068
+      },
+      {
+        "case": "nested-imports-root-paths",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.853925,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.538628
+      },
+      {
+        "case": "data-readers",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 11.320537,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.890459
+      },
+      {
+        "case": "svg-image-gradient",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.278542,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 0.972675
+      },
+      {
+        "case": "bibliography",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 111.1748,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 4.468993
+      },
+      {
+        "case": "introspection",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 12.901045,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 4.488411999999999
+      },
+      {
+        "case": "unicode-and-rtl",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.440451999999999,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.762329
+      },
+      {
+        "case": "fixed-date",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.138701999999999,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 0.879874
+      },
+      {
+        "case": "invalid-symbol",
+        "cli_diagnostics": [
+          "unknown variable: missing-symbol"
+        ],
+        "cli_svg_ms": 4.304952,
+        "cli_svg_success": false,
+        "identical_svg": null,
+        "pages": null,
+        "pdf_diagnostics": [
+          "unknown variable: missing-symbol"
+        ],
+        "pdf_success": false,
+        "preview_diagnostics": [
+          "unknown variable: missing-symbol"
+        ],
+        "preview_success": false,
+        "repeat_stable": true,
+        "warm_ms": 0.400322
+      },
+      {
+        "case": "missing-import",
+        "cli_diagnostics": [
+          "file not found (searched at /tmp/.tmpdA8euF/missing.typ)"
+        ],
+        "cli_svg_ms": 4.096871,
+        "cli_svg_success": false,
+        "identical_svg": null,
+        "pages": null,
+        "pdf_diagnostics": [
+          "file not found (searched at /tmp/.tmpdA8euF/missing.typ)"
+        ],
+        "pdf_success": false,
+        "preview_diagnostics": [
+          "file not found (searched at /tmp/.tmpdA8euF/missing.typ)"
+        ],
+        "preview_success": false,
+        "repeat_stable": true,
+        "warm_ms": 0.512743
+      },
+      {
+        "case": "page-preamble",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.126560999999999,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.362957
+      },
+      {
+        "case": "explicit-local-package",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.105210999999999,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.395818
+      },
+      {
+        "case": "environment-package-path",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 9.90781,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 1.3982370000000002
+      },
+      {
+        "case": "environment-date",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.02075,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 0.690133
+      },
+      {
+        "case": "environment-font-path",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.712143000000001,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 0.810494
+      },
+      {
+        "case": "font-precedence-collision",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.080981,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 0.996505
+      },
+      {
+        "case": "explicit-font-path",
+        "cli_diagnostics": [],
+        "cli_svg_ms": 10.694713,
+        "cli_svg_success": true,
+        "identical_svg": true,
+        "pages": 1,
+        "pdf_diagnostics": [],
+        "pdf_success": true,
+        "preview_diagnostics": [],
+        "preview_success": true,
+        "repeat_stable": true,
+        "warm_ms": 0.786304
+      }
+    ]
+  }
+}

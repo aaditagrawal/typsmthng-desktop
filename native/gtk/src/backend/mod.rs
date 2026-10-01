@@ -1,7 +1,9 @@
 //! Cross-platform application backend.
 
+#[cfg(feature = "desktop")]
 pub mod app_fonts;
 pub mod archive;
+mod compile_options;
 pub mod error;
 pub mod font_catalog;
 pub mod fonts;
@@ -17,6 +19,7 @@ pub mod update;
 pub mod update_install;
 pub mod watcher;
 
+#[cfg(feature = "desktop")]
 pub use app_fonts::{
     ensure_registered, family_is_available, list_local_families, register_app_font_files,
 };

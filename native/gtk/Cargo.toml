@@ -8,7 +8,8 @@ description = "Native GTK 4 desktop client for typsmthng"
 publish = false
 
 [features]
-default = []
+default = ["desktop"]
+desktop = ["dep:gio", "dep:glib", "dep:gtk", "dep:adw", "dep:sourceview5"]
 console = []
 
 [lib]
@@ -18,13 +19,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "typsmthng"
 path = "src/main.rs"
+required-features = ["desktop"]
 
 [dependencies]
 directories = "6.0"
-gio = "0.22"
-glib = "0.22"
-gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+gio = { version = "0.22", optional = true }
+glib = { version = "0.22", optional = true }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"], optional = true }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"], optional = true }
 ignore = "0.4"
 notify = "8.2"
 regex = "1.11"
@@ -35,7 +37,7 @@ sha2 = "0.10"
 tempfile = "3.20"
 thiserror = "2.0"
 trash = "5.2"
-sourceview5 = { version = "0.11", features = ["v5_4"] }
+sourceview5 = { version = "0.11", features = ["v5_4"], optional = true }
 ureq = { version = "3.1", features = ["json"] }
 url = "2.5"
 wait-timeout = "0.2"
