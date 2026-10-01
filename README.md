@@ -142,7 +142,10 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Save, compile, or export PDF: `Ctrl+S`, `Ctrl+Enter`, `Ctrl+Shift+E`
 - Search, settings, or file tree: `Ctrl+K`, `Ctrl+,`, `Ctrl+\`
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
+- Format the current Typst document: `Ctrl+Shift+I`, or "Format document" in the command palette
 - Cycle system, light, and dark themes: `Ctrl+J`
+
+Formatting uses Typstyle 0.15.1 and takes one undo step. It preserves selected tokens and scroll position. Carets in whitespace stay near their previous line and character column. Files with syntax errors remain unchanged.
 
 On macOS, use Command in place of Control.
 
