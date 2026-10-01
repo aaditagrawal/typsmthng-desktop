@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Network access is used only to prepare the SRPM, never during the RPM build.
 set -euo pipefail
+for tool in git cargo uv curl tar gzip sha256sum rpmbuild; do
+  command -v "$tool" >/dev/null || { echo "Missing source RPM tool: $tool" >&2; exit 1; }
+done
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 output="${1:-$repo_root/build/copr}"
 mkdir -p "$output"

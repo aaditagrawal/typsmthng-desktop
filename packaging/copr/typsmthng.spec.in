@@ -52,7 +52,7 @@ typst-x86_64-unknown-linux-musl/typst --version | grep -E '^typst 0\.15\.1( |$)'
 
 %files
 %license LICENSE bundled-licenses
-%license typst-x86_64-unknown-linux-musl/LICENSE
+%license typst-x86_64-unknown-linux-musl/LICENSE typst-x86_64-unknown-linux-musl/NOTICE
 %doc README.md
 %{_bindir}/typsmthng
 %{_prefix}/lib/typsmthng/
