@@ -391,7 +391,7 @@ impl EditorTools {
                 .flatten()
                 .map(|adjustment| {
                     let value = adjustment.value();
-                    (adjustment, value)
+                    (adjustment.downgrade(), value)
                 })
                 .collect::<Vec<_>>();
             buffer.begin_user_action();
@@ -404,21 +404,33 @@ impl EditorTools {
             buffer.end_user_action();
             status.set_text("Formatted");
             let expected = revision.get();
+            let buffer = buffer.downgrade();
             super::workspace::schedule_after_allocation(
                 &root,
                 Rc::new(Cell::new(false)),
                 Rc::new(move || {
-                    if revision.get() == expected {
-                        // X11 can deliver an old PRIMARY selection detach after replacing
-                        // the buffer. Restore the range once allocation has settled.
+                    let buffer = buffer.clone();
+                    let adjustments = adjustments.clone();
+                    let revision = revision.clone();
+                    // GtkTextView validates changed line heights at priority 125.
+                    // Default-idle runs after that work and queued PRIMARY detaches.
+                    glib::idle_add_local_once(move || {
+                        if revision.get() != expected {
+                            return;
+                        }
+                        let Some(buffer) = buffer.upgrade() else {
+                            return;
+                        };
                         buffer.select_range(
                             &buffer.iter_at_offset(cursor as i32),
                             &buffer.iter_at_offset(anchor as i32),
                         );
                         for (adjustment, value) in &adjustments {
-                            adjustment.set_value(*value);
+                            if let Some(adjustment) = adjustment.upgrade() {
+                                adjustment.set_value(*value);
+                            }
                         }
-                    }
+                    });
                 }),
             );
         });
@@ -549,8 +561,12 @@ mod tests {
                 anchor,
             ));
         };
+        let tuple = (0..60)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         let source = format!(
-            "{}#let café=(1,2)\n#café\n",
+            "{}#let café=({tuple})\n#café\n",
             "// unchanged line\n".repeat(50)
         );
         editor.grab_focus();
@@ -561,8 +577,11 @@ mod tests {
             &buffer.iter_at_offset(start + 4),
             &buffer.iter_at_offset(start),
         );
-        drive();
+        for _ in 0..5 {
+            drive();
+        }
         scroll.vadjustment().set_value(300.0);
+        drive();
         let before_scroll = scroll.vadjustment().value();
         assert_eq!(before_scroll, 300.0);
         assert!(
@@ -571,11 +590,14 @@ mod tests {
         );
         tools.format_document(&editor, &root, &status);
         answer();
-        drive();
+        for _ in 0..3 {
+            drive();
+        }
         let formatted = buffer
             .text(&buffer.start_iter(), &buffer.end_iter(), true)
             .to_string();
         assert_ne!(formatted, source);
+        assert!(formatted.lines().count() > source.lines().count());
         let (start, end) = buffer.selection_bounds().unwrap();
         assert_eq!(buffer.text(&start, &end, true), "café");
         assert!((scroll.vadjustment().value() - before_scroll).abs() < 1.0);
