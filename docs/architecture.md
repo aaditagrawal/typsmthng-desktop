@@ -9,10 +9,13 @@ The GTK controller coordinates project selection, background work, and user feed
 | `backend::notes` | Inline/comment fallback and Markdown sidecar loading and saving | `load` and `save` |
 | `backend::rendered_preview` | SVG cache ownership and presentation-note cropping | `prepare_preview` and its owned result |
 | `backend::compile_options` | Environment defaults and explicit-setting precedence | `CompileOptions::resolved` |
-| `backend::preview` | Persistent Typst world, fonts, source maps, and compilation | `PreviewCompiler` and immutable `SourceMap` |
-| `backend::typst` | Pinned CLI invocation and diagnostics | `TypstTool` |
+| `backend::editor` | UTF-8 offsets, completion snippets, and explicit formatting | Editor requests/results and text helpers |
+| `backend::preview` | Persistent Typst world, semantic requests, compiled headings/statistics, and source maps | `PreviewCompiler` and immutable `SourceMap` |
+| `backend::typst` | Pinned CLI invocation, export profiles, page archives, and atomic saves | `TypstTool` and `ExportArtifact` |
 | `backend::app_fonts` | Process-private GTK/Pango font registration | Desktop feature only |
 | `ui::workspace` | Editor and preview widgets, edit revisions, and callbacks | `WorkspaceView` |
+| `ui::editor_tools` | Completion, hover, formatting, undo, and stale-result rejection | Editor actions using the shared worker |
+| `ui::controls` | Optional cursor centering and a cached-image preview lens | View controls with weak widget references |
 | `ui::app` | Selection, scheduling, dialogs, and results | Controller actions |
 
 Imports and notes share the `Project` seam for filesystem access. Their implementations keep path validation and atomic writes in that module. The UI chooses destinations and presents errors; it does not parse note sidecars or implement recursive import rules.

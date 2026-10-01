@@ -238,6 +238,7 @@ struct SettingsDialog {
     wrapping: gtk::Switch,
     vim: gtk::Switch,
     minimap: gtk::Switch,
+    centered_scrolling: gtk::Switch,
     ui_family: Rc<RefCell<String>>,
     refresh_ui_family: Rc<dyn Fn()>,
     ui_size: gtk::DropDown,
@@ -282,6 +283,8 @@ impl SettingsDialog {
         self.wrapping.set_active(settings.line_wrapping);
         self.vim.set_active(settings.vim_mode);
         self.minimap.set_active(settings.minimap);
+        self.centered_scrolling
+            .set_active(settings.centered_scrolling);
         self.ui_family.replace(settings.ui_font_family.clone());
         (self.refresh_ui_family)();
         self.ui_size
@@ -400,6 +403,8 @@ pub struct WorkspaceView {
     source_jump: gtk::Button,
     preview_identity: Rc<RefCell<Option<PreviewIdentity>>>,
     preview_pictures: Rc<RefCell<Vec<PreviewPicture>>>,
+    magnifier: super::controls::PreviewMagnifier,
+    centered_scroll: super::controls::CenteredScrolling,
     resize_preview: Rc<dyn Fn()>,
     preview_zoom: Rc<Cell<PreviewZoom>>,
     content_column: Rc<Cell<Option<(f64, f64)>>>,
@@ -762,6 +767,8 @@ impl WorkspaceView {
         source_jump.set_sensitive(false);
         preview_controls.append(&compiled_headings);
         preview_controls.append(&source_jump);
+        let magnifier = super::controls::PreviewMagnifier::new(&preview_overlay, &preview_scroll);
+        preview_controls.append(&magnifier.toggle);
         let zoom_out = icon_button("zoom-out-symbolic", "Zoom out");
         let zoom_menu = gtk::MenuButton::new();
         zoom_menu.set_label("Fit");
@@ -802,6 +809,8 @@ impl WorkspaceView {
             })
         };
         let resize_preview: Rc<dyn Fn()> = {
+            let lens = magnifier.lens.downgrade();
+            let previous_geometry = Cell::new(None);
             let pictures = preview_pictures.clone();
             let zoom = zoom.clone();
             let preview_scroll = preview_scroll.clone();
@@ -810,6 +819,13 @@ impl WorkspaceView {
             let content_column = content_column.clone();
             Rc::new(move || {
                 let viewport_width = preview_scroll.width();
+                if previous_geometry.replace(Some((zoom.get(), viewport_width)))
+                    != Some((zoom.get(), viewport_width))
+                {
+                    if let Some(lens) = lens.upgrade() {
+                        super::controls::clear_lens(&lens);
+                    }
+                }
                 for picture in pictures.borrow().iter() {
                     let size = preview_dimensions(
                         viewport_width,
@@ -818,12 +834,19 @@ impl WorkspaceView {
                         picture.aspect_ratio,
                         content_column.get(),
                     );
-                    picture.widget.set_size_request(size.width, size.height);
-                    picture.widget.set_content_fit(if size.cropped {
+                    if picture.widget.width_request() != size.width
+                        || picture.widget.height_request() != size.height
+                    {
+                        picture.widget.set_size_request(size.width, size.height);
+                    }
+                    let fit = if size.cropped {
                         gtk::ContentFit::Cover
                     } else {
                         gtk::ContentFit::Contain
-                    });
+                    };
+                    if picture.widget.content_fit() != fit {
+                        picture.widget.set_content_fit(fit);
+                    }
                 }
                 let scale = format_scale(displayed_scale());
                 let fitted = viewport_width > PREVIEW_HORIZONTAL_INSET;
@@ -840,6 +863,7 @@ impl WorkspaceView {
         // remember where the anchor sat on its page and restore it afterwards.
         let pending_anchor = Rc::new(RefCell::new(None::<PreviewAnchor>));
         let set_zoom: SetPreviewZoom = {
+            let lens = magnifier.lens.downgrade();
             let zoom = zoom.clone();
             let resize = resize_preview.clone();
             let pictures = preview_pictures.clone();
@@ -848,6 +872,9 @@ impl WorkspaceView {
             let badge = preview_badge.clone();
             let displayed_scale = displayed_scale.clone();
             Rc::new(move |next, pointer| {
+                if let Some(lens) = lens.upgrade() {
+                    super::controls::clear_lens(&lens);
+                }
                 let pointer = pointer.unwrap_or_else(|| {
                     (
                         f64::from(preview_scroll.width()) / 2.0,
@@ -999,7 +1026,18 @@ impl WorkspaceView {
         };
         let schedule_layout: Rc<dyn Fn()> = {
             let root = root.downgrade();
+            let window = window.downgrade();
+            let lens = magnifier.lens.downgrade();
+            let previous_surface_size = Cell::new(None);
             Rc::new(move || {
+                if let Some(surface) = window.upgrade().and_then(|window| window.surface()) {
+                    let size = (surface.width(), surface.height());
+                    if previous_surface_size.replace(Some(size)) != Some(size) {
+                        if let Some(lens) = lens.upgrade() {
+                            super::controls::clear_lens(&lens);
+                        }
+                    }
+                }
                 if let Some(root) = root.upgrade() {
                     schedule_after_allocation(
                         &root,
@@ -1107,6 +1145,7 @@ impl WorkspaceView {
         root.append(&status);
 
         let settings = Rc::new(RefCell::new(UiSettings::default()));
+        let centered_scroll = super::controls::CenteredScrolling::new(&editor, &settings);
         let dirty = Rc::new(Cell::new(false));
         let suppress_changes = Rc::new(Cell::new(false));
         let file_paths = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -1315,6 +1354,7 @@ impl WorkspaceView {
             });
         }
         {
+            let lens = magnifier.lens.downgrade();
             let dirty = dirty.clone();
             let suppress_changes = suppress_changes.clone();
             let save_label = save_label.clone();
@@ -1333,6 +1373,9 @@ impl WorkspaceView {
             let diagnostics_revealer = diagnostics_revealer.clone();
             let compile_label = compile_label.clone();
             buffer.connect_changed(move |_| {
+                if let Some(lens) = lens.upgrade() {
+                    super::controls::clear_lens(&lens);
+                }
                 revision.set(revision.get().wrapping_add(1));
                 for pending in [&pending_diagnostics, &pending_error] {
                     if let Some(timer) = pending.borrow_mut().take() {
@@ -1433,6 +1476,8 @@ impl WorkspaceView {
             source_jump,
             preview_identity: Rc::new(RefCell::new(None)),
             preview_pictures,
+            magnifier,
+            centered_scroll,
             resize_preview,
             preview_zoom: zoom,
             content_column,
@@ -1932,6 +1977,7 @@ impl WorkspaceView {
     }
 
     fn set_preview_content(&self, pages: &[PathBuf], source: Option<&str>) {
+        self.magnifier.hide();
         let contents = pages
             .iter()
             .map(|page| std::fs::read_to_string(page).ok())
@@ -1995,6 +2041,7 @@ impl WorkspaceView {
             }
             picture.set_can_shrink(true);
             picture.set_content_fit(gtk::ContentFit::Contain);
+            self.magnifier.attach(&picture, aspect_ratio);
             if source.is_some() {
                 let edit = gtk::GestureClick::new();
                 edit.set_button(1);
@@ -2372,7 +2419,13 @@ impl WorkspaceView {
         self.vim_status.set_visible(settings.vim_mode);
         self.minimap.set_visible(settings.minimap);
         let view_mode = settings.view_mode;
+        let centered = settings.centered_scrolling;
+        let center_changed = self.settings.borrow().centered_scrolling != centered;
         self.settings.replace(settings);
+        self.centered_scroll.update_padding();
+        if center_changed && centered {
+            self.centered_scroll.center();
+        }
         self.set_view_mode(view_mode);
     }
 
@@ -2790,11 +2843,7 @@ fn preview_point(
         return None;
     }
     // Contain letterboxes the page; Cover overflows and crops it centrally.
-    let drawn_height = if cropped {
-        height.max(width / aspect)
-    } else {
-        height.min(width / aspect)
-    };
+    let (_, drawn_height) = super::controls::drawn_page_size(width, height, aspect, cropped);
     let drawn_width = drawn_height * aspect;
     let x = x - (width - drawn_width) / 2.0;
     let y = y - (height - drawn_height) / 2.0;
@@ -2827,11 +2876,7 @@ fn document_widget_point(
     {
         return None;
     }
-    let drawn_height = if cropped {
-        height.max(width / aspect)
-    } else {
-        height.min(width / aspect)
-    };
+    let (_, drawn_height) = super::controls::drawn_page_size(width, height, aspect, cropped);
     let scale = drawn_height / page_height;
     let x = x * scale + (width - drawn_height * aspect) / 2.0;
     let y = y * scale + (height - drawn_height) / 2.0;
@@ -3078,6 +3123,13 @@ fn build_settings_dialog(
         "Overview with section titles beside the source (Ctrl+Shift+M)",
         &minimap,
     ));
+    let centered_scrolling = gtk::Switch::new();
+    centered_scrolling.set_active(settings.borrow().centered_scrolling);
+    group.add(&setting_row(
+        "Centered scrolling",
+        "Keep the cursor line centered while editing; manual scrolling stays free",
+        &centered_scrolling,
+    ));
     let vim = gtk::Switch::new();
     vim.set_active(settings.borrow().vim_mode);
     group.add(&setting_row(
@@ -3262,6 +3314,7 @@ fn build_settings_dialog(
         wrapping: wrapping.clone(),
         vim: vim.clone(),
         minimap: minimap.clone(),
+        centered_scrolling: centered_scrolling.clone(),
         ui_family: ui_family.clone(),
         refresh_ui_family: refresh_ui_family.clone(),
         ui_size: ui_size.clone(),
@@ -3293,6 +3346,7 @@ fn build_settings_dialog(
                 line_wrapping: wrapping.is_active(),
                 vim_mode: vim.is_active(),
                 minimap: minimap.is_active(),
+                centered_scrolling: centered_scrolling.is_active(),
                 ui_font_family: ui_family.borrow().clone(),
                 ui_font_size: (ui_size.selected() as usize)
                     .checked_sub(1)
@@ -3627,6 +3681,557 @@ mod tests {
         preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
         svg_aspect_ratio, PreviewZoom,
     };
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    fn native_centered_scrolling_and_cached_preview_magnifier() {
+        use super::*;
+        adw::init().unwrap();
+        super::super::install_css();
+        let application = gtk::Application::builder()
+            .application_id("dev.typsmthng.ControlsTest")
+            .build();
+        application.register(None::<&gio::Cancellable>).unwrap();
+        let window = gtk::ApplicationWindow::builder()
+            .application(&application)
+            .title("Editor and preview controls")
+            .default_width(1280)
+            .default_height(800)
+            .build();
+        let noop: Rc<dyn Fn()> = Rc::new(|| {});
+        let path_noop: Rc<dyn Fn(String)> = Rc::new(|_| {});
+        let workspace = WorkspaceView::new(
+            &window,
+            WorkspaceCallbacks {
+                editor_query: Rc::new(|request| {
+                    let typsmthng_gtk::backend::editor::EditorQuery::Format { anchor } =
+                        request.query
+                    else {
+                        return None;
+                    };
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    sender
+                        .send(typsmthng_gtk::backend::editor::format_source(
+                            typst::syntax::Source::detached(request.text),
+                            request.cursor,
+                            anchor,
+                        ))
+                        .unwrap();
+                    Some(receiver)
+                }),
+                go_home: noop.clone(),
+                open_project: noop.clone(),
+                save: Rc::new(|_| true),
+                force_save: Rc::new(|_| true),
+                select_file: path_noop.clone(),
+                create_file: noop.clone(),
+                create_folder: noop.clone(),
+                import_files: noop.clone(),
+                drop_files: Rc::new(|_| {}),
+                move_path: Rc::new(|_| {}),
+                toggle_hidden: noop.clone(),
+                rename_path: path_noop.clone(),
+                duplicate_path: path_noop.clone(),
+                trash_path: path_noop.clone(),
+                reveal_path: path_noop.clone(),
+                open_external: path_noop.clone(),
+                preview_asset: path_noop.clone(),
+                check_update: noop.clone(),
+                export_pdf: noop.clone(),
+                export_document: noop.clone(),
+                export_project: noop.clone(),
+                present_single: noop.clone(),
+                present_dual: noop,
+                refresh_compile: path_noop,
+                search: Rc::new(|_, _, reply| reply(Vec::new())),
+                settings_changed: Rc::new(|_| {}),
+                preferences_changed: Rc::new(|_| {}),
+            },
+        );
+
+        let drive = |milliseconds| {
+            let until = Instant::now() + Duration::from_millis(milliseconds);
+            while Instant::now() < until {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let mut settings = UiSettings {
+            auto_compile: false,
+            line_wrapping: false,
+            ..Default::default()
+        };
+        workspace.apply_settings(settings.clone());
+        let source = (0..150)
+            .map(|line| format!("Line {line:03} {}", "editor words ".repeat(30)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        workspace.show_text_file("main.typ", &source);
+        window.set_child(Some(&workspace.root));
+        window.present();
+        drive(200);
+        assert_eq!(
+            (
+                workspace.editor.top_margin(),
+                workspace.editor.bottom_margin()
+            ),
+            (14, 24)
+        );
+        assert!(!workspace.magnifier.toggle.is_active());
+        settings.centered_scrolling = true;
+        workspace.apply_settings(settings.clone());
+        let assert_centered = || {
+            let line = workspace.editor.iter_location(
+                &workspace
+                    .buffer
+                    .iter_at_offset(workspace.buffer.cursor_position()),
+            );
+            let visible = workspace.editor.visible_rect();
+            let delta = f64::from(line.y()) + f64::from(line.height()) / 2.0
+                - f64::from(visible.y())
+                - f64::from(visible.height()) / 2.0;
+            let (_, widget_y) = workspace.editor.buffer_to_window_coords(
+                gtk::TextWindowType::Widget,
+                line.x(),
+                line.y() + line.height() / 2,
+            );
+            assert!(
+                (widget_y - workspace.editor.height() / 2).abs() < 3,
+                "GTK widget cursor coordinate {widget_y} should match midpoint {}",
+                workspace.editor.height() / 2
+            );
+            assert!(
+                delta.abs() < 3.0,
+                "cursor line should be centered, delta {delta}; line={line:?} visible={visible:?} margin={} adjustment={}", workspace.editor.top_margin(), workspace.editor.vadjustment().unwrap().value()
+            );
+        };
+        for line in [0, 75, 149] {
+            workspace
+                .buffer
+                .place_cursor(&workspace.buffer.iter_at_line(line).unwrap());
+            drive(150);
+            assert_centered();
+        }
+        workspace
+            .buffer
+            .place_cursor(&workspace.buffer.iter_at_line(75).unwrap());
+        drive(150);
+        let adjustment = workspace.editor.vadjustment().unwrap();
+        adjustment.set_value(500.0);
+        drive(250);
+        assert_eq!(
+            adjustment.value(),
+            500.0,
+            "manual scrolling must remain free"
+        );
+        let horizontal = workspace.editor.hadjustment().unwrap();
+        horizontal.set_value(150.0);
+        let left = horizontal.value();
+        workspace.centered_scroll.center();
+        drive(150);
+        assert_centered();
+        assert_eq!(
+            horizontal.value(),
+            left,
+            "vertical centering must preserve horizontal scroll"
+        );
+        workspace.buffer.insert_at_cursor("typed");
+        drive(150);
+        assert_centered();
+        let mut begin = workspace
+            .buffer
+            .iter_at_offset(workspace.buffer.cursor_position() - 5);
+        let mut end = workspace
+            .buffer
+            .iter_at_offset(workspace.buffer.cursor_position());
+        workspace.buffer.delete(&mut begin, &mut end);
+        drive(150);
+        assert_centered();
+        settings.line_wrapping = true;
+        workspace.apply_settings(settings.clone());
+        workspace.buffer.place_cursor(
+            &workspace
+                .buffer
+                .iter_at_offset(workspace.buffer.iter_at_line(75).unwrap().offset() + 180),
+        );
+        drive(150);
+        assert_centered();
+        settings.centered_scrolling = false;
+        workspace.apply_settings(settings.clone());
+        drive(150);
+        assert_eq!(
+            (
+                workspace.editor.top_margin(),
+                workspace.editor.bottom_margin()
+            ),
+            (14, 24)
+        );
+        let stable = adjustment.value();
+        // Pending centering and padding restoration must observe the final toggle state.
+        settings.centered_scrolling = true;
+        workspace.apply_settings(settings.clone());
+        settings.centered_scrolling = false;
+        workspace.apply_settings(settings.clone());
+        drive(150);
+        assert_eq!(adjustment.value(), stable);
+        settings.centered_scrolling = true;
+        settings.line_wrapping = false;
+        workspace.apply_settings(settings.clone());
+        workspace
+            .buffer
+            .place_cursor(&workspace.buffer.iter_at_line(75).unwrap());
+        drive(150);
+        assert_centered();
+        workspace.set_project(
+            "Controls review",
+            &[FileRow {
+                path: "main.typ".into(),
+                name: "main.typ".into(),
+                depth: 0,
+                is_directory: false,
+                is_binary: false,
+                is_main: true,
+            }],
+        );
+        workspace.set_compile_status("Preview ready");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("page.svg");
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="white"/><rect x="40" y="40" width="120" height="70" fill="#f4d790"/><text x="50" y="80" font-size="22">Sample text</text></svg>"##;
+        std::fs::write(&path, svg).unwrap();
+        workspace.set_preview_files(std::slice::from_ref(&path));
+        drive(250);
+        let picture = workspace.preview_pictures.borrow()[0].widget.clone();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !super::super::page_paintable::is_current(&picture) && Instant::now() < deadline {
+            drive(10);
+        }
+        assert!(super::super::page_paintable::is_current(&picture));
+        let motion = picture
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|c| c.downcast::<gtk::EventControllerMotion>().ok())
+            .unwrap();
+        let point = |picture: &gtk::Picture| {
+            let (width, height) = (f64::from(picture.width()), f64::from(picture.height()));
+            let (drawn_width, drawn_height) = super::super::controls::drawn_page_size(
+                width,
+                height,
+                4.0 / 3.0,
+                picture.content_fit() == gtk::ContentFit::Cover,
+            );
+            (
+                (width - drawn_width) / 2.0 + drawn_width * 0.25,
+                (height - drawn_height) / 2.0 + drawn_height * 0.25,
+            )
+        };
+        let capture = |phase: &str| {
+            drive(100);
+            if let Some(base) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") {
+                std::env::set_var("TYPSMTHNG_SNAPSHOT_DIR", PathBuf::from(&base).join(phase));
+                super::super::smoke::capture_windows(&application);
+                std::env::set_var("TYPSMTHNG_SNAPSHOT_DIR", base);
+            }
+        };
+        capture("before");
+        workspace.magnifier.toggle.set_active(true);
+        let owner = picture.paintable().unwrap();
+        let cached_texture = owner.current_image();
+        let (x, y) = point(&picture);
+        motion.emit_by_name::<()>("motion", &[&x, &y]);
+        drive(100);
+        assert!(workspace.magnifier.lens.is_visible());
+        assert!(!workspace.magnifier.lens.can_target());
+        assert!(workspace.magnifier.lens.is_mapped());
+        let lens_bounds = workspace.magnifier.lens.compute_bounds(&window).unwrap();
+        assert!(
+            lens_bounds.x() >= 0.0
+                && lens_bounds.y() >= 0.0
+                && lens_bounds.x() + lens_bounds.width() <= window.width() as f32
+                && lens_bounds.y() + lens_bounds.height() <= window.height() as f32,
+            "lens must be visible inside the window: {lens_bounds:?}"
+        );
+        assert_eq!(
+            picture.paintable().unwrap(),
+            owner,
+            "lens must retain the live page owner"
+        );
+        assert!(super::super::page_paintable::is_current(&picture));
+        assert_eq!(
+            owner.current_image(),
+            cached_texture,
+            "lens must not replace the cached raster texture"
+        );
+        capture("after");
+        workspace.buffer.insert_at_cursor(" ");
+        assert!(
+            !workspace.magnifier.lens.is_visible(),
+            "source changes must clear the lens"
+        );
+        motion.emit_by_name::<()>("motion", &[&x, &y]);
+        motion.emit_by_name::<()>("leave", &[]);
+        assert!(!workspace.magnifier.lens.is_visible());
+        motion.emit_by_name::<()>("motion", &[&x, &y]);
+        workspace.magnifier.toggle.set_active(false);
+        assert!(!workspace.magnifier.lens.is_visible());
+        let image = workspace
+            .magnifier
+            .lens
+            .child()
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap();
+        assert!(image.paintable().is_none());
+        workspace.magnifier.toggle.set_active(true);
+        workspace.content_column.set(Some((40.0, 160.0)));
+        for zoom in [
+            PreviewZoom::Scale(1.5),
+            PreviewZoom::FitText,
+            PreviewZoom::FitWidth,
+        ] {
+            workspace.preview_zoom.set(zoom);
+            (workspace.resize_preview)();
+            assert!(!workspace.magnifier.lens.is_visible());
+            drive(150);
+            if zoom == PreviewZoom::FitText {
+                assert_eq!(picture.content_fit(), gtk::ContentFit::Cover);
+            }
+            let (x, y) = (
+                f64::from(picture.width()) / 2.0,
+                f64::from(picture.height()) / 2.0,
+            );
+            motion.emit_by_name::<()>("motion", &[&x, &y]);
+            assert!(workspace.magnifier.lens.is_visible());
+            assert!(super::super::page_paintable::is_current(&picture));
+            if zoom == PreviewZoom::Scale(1.5) {
+                let hidden = Rc::new(Cell::new(false));
+                let notification = workspace.magnifier.lens.connect_visible_notify({
+                    let hidden = hidden.clone();
+                    move |lens| {
+                        if !lens.is_visible() {
+                            hidden.set(true);
+                        }
+                    }
+                });
+                let previous_size = (window.width(), window.height());
+                window.set_default_size(previous_size.0, (previous_size.1 - 100).max(200));
+                drive(150);
+                assert_ne!(
+                    window.height(),
+                    previous_size.1,
+                    "resize fixture must change actual allocation"
+                );
+                assert!(
+                    hidden.get(),
+                    "fixed zoom resize must clear the lens before subsequent pointer motion"
+                );
+                workspace.magnifier.lens.disconnect(notification);
+                if workspace.magnifier.lens.is_visible() {
+                    let bounds = workspace.magnifier.lens.compute_bounds(&window).unwrap();
+                    assert!(
+                        bounds.x() >= 0.0
+                            && bounds.y() >= 0.0
+                            && bounds.x() + bounds.width() <= window.width() as f32
+                            && bounds.y() + bounds.height() <= window.height() as f32,
+                        "reopened lens must fit the resized window: {bounds:?}"
+                    );
+                    assert!(super::super::page_paintable::is_current(&picture));
+                }
+                window.set_default_size(previous_size.0, previous_size.1);
+                drive(150);
+            }
+        }
+        std::fs::write(&path, svg.replace("Sample text", "Changed page")).unwrap();
+        workspace.set_preview_files(&[path]);
+        assert!(!workspace.magnifier.lens.is_visible());
+        let replacement = workspace.preview_pictures.borrow()[0].widget.clone();
+        assert!(!super::super::page_paintable::is_current(&replacement));
+        let motion = replacement
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|c| c.downcast::<gtk::EventControllerMotion>().ok())
+            .unwrap();
+        motion.emit_by_name::<()>("motion", &[&100.0, &100.0]);
+        assert!(
+            !workspace.magnifier.lens.is_visible(),
+            "stale placeholder pixels cannot be magnified"
+        );
+        // The production crop removes the right half before the cached texture is magnified.
+        let notes_svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="400pt" height="100pt" viewBox="0 0 400 100"><rect width="200" height="100" fill="red"/><rect x="200" width="200" height="100" fill="blue"/></svg>"##;
+        let cropped = typsmthng_gtk::backend::rendered_preview::prepare_preview(
+            typsmthng_gtk::backend::CompileOutput {
+                artifact: Some(vec![typsmthng_gtk::backend::SvgPage {
+                    page: 1,
+                    svg: notes_svg.into(),
+                    width_points: Some(400.0),
+                    height_points: Some(100.0),
+                }]),
+                diagnostics: Vec::new(),
+                stdout: String::new(),
+                stderr: String::new(),
+                elapsed: Duration::ZERO,
+            },
+            "auto",
+        )
+        .unwrap()
+        .artifact
+        .unwrap();
+        workspace.set_preview_files(&cropped.paths);
+        drive(200);
+        let slide = workspace.preview_pictures.borrow()[0].widget.clone();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !super::super::page_paintable::is_current(&slide) && Instant::now() < deadline {
+            drive(10);
+        }
+        assert!(super::super::page_paintable::is_current(&slide));
+        assert!((workspace.preview_pictures.borrow()[0].aspect_ratio - 2.0).abs() < 0.01);
+        let motion = slide
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|c| c.downcast::<gtk::EventControllerMotion>().ok())
+            .unwrap();
+        motion.emit_by_name::<()>(
+            "motion",
+            &[
+                &(f64::from(slide.width()) / 2.0),
+                &(f64::from(slide.height()) / 2.0),
+            ],
+        );
+        assert!(workspace.magnifier.lens.is_visible());
+        // A small native pane gets a smaller lens whose frame remains within the overlay.
+        let narrow = gtk::ApplicationWindow::builder()
+            .application(&application)
+            .default_width(160)
+            .default_height(160)
+            .build();
+        let overlay = gtk::Overlay::new();
+        let scroll = gtk::ScrolledWindow::new();
+        let small_picture =
+            gtk::Picture::for_paintable(&slide.paintable().unwrap().current_image());
+        small_picture.set_content_fit(gtk::ContentFit::Contain);
+        scroll.set_child(Some(&small_picture));
+        overlay.set_child(Some(&scroll));
+        let magnifier = super::super::controls::PreviewMagnifier::new(&overlay, &scroll);
+        magnifier.attach(&small_picture, 2.0);
+        narrow.set_child(Some(&overlay));
+        narrow.present();
+        drive(150);
+        let motion = small_picture
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|c| c.downcast::<gtk::EventControllerMotion>().ok())
+            .unwrap();
+        magnifier.toggle.set_active(true);
+        motion.emit_by_name::<()>(
+            "motion",
+            &[
+                &(f64::from(small_picture.width()) / 2.0),
+                &(f64::from(small_picture.height()) / 2.0),
+            ],
+        );
+        drive(100);
+        assert!(magnifier.lens.is_visible());
+        let bounds = magnifier.lens.compute_bounds(&overlay).unwrap();
+        assert!(
+            bounds.x() >= 0.0
+                && bounds.y() >= 0.0
+                && bounds.x() + bounds.width() <= overlay.width() as f32
+                && bounds.y() + bounds.height() <= overlay.height() as f32,
+            "lens should fit narrow overlay: {bounds:?}"
+        );
+        assert!(!magnifier.lens.can_target());
+        motion.emit_by_name::<()>("motion", &[&1.0, &1.0]);
+        assert!(
+            !magnifier.lens.is_visible(),
+            "letterboxing cannot be magnified"
+        );
+        narrow.close();
+        // Exercise the integrated formatter through its actual workspace command.
+        let tuple = (0..60)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let unformatted = format!(
+            "{}#let café=({tuple})\n#café\n",
+            "// unchanged line\n".repeat(100)
+        );
+        for centered in [false, true] {
+            settings.centered_scrolling = centered;
+            workspace.apply_settings(settings.clone());
+            workspace.show_text_file("main.typ", &unformatted);
+            drive(500); // Let the old file's PRIMARY ownership and layout settle before selecting.
+            let start = unformatted[..unformatted.rfind("café").unwrap()]
+                .chars()
+                .count() as i32;
+            workspace.buffer.select_range(
+                &workspace.buffer.iter_at_offset(start + 4),
+                &workspace.buffer.iter_at_offset(start),
+            );
+            drive(500);
+            if centered {
+                assert_centered();
+            } else {
+                adjustment.set_value(300.0);
+                drive(100);
+                assert_eq!(
+                    adjustment.value(),
+                    300.0,
+                    "manual scroll must settle before formatting"
+                );
+            }
+            let before_scroll = adjustment.value();
+            let (selection_start, selection_end) =
+                workspace.buffer.selection_bounds().unwrap_or_else(|| {
+                    panic!("selection must be present before formatting: centered={centered}")
+                });
+            assert_eq!(
+                workspace
+                    .buffer
+                    .text(&selection_start, &selection_end, true),
+                "café"
+            );
+            workspace.format_document();
+            drive(250);
+            assert_eq!(workspace.compile_label.text(), "Formatted");
+            let formatted = buffer_text(&workspace.buffer);
+            assert_ne!(formatted, unformatted);
+            assert!(
+                formatted.lines().count() > unformatted.lines().count(),
+                "fixture must exercise formatting that changes line count"
+            );
+            let (start, end) = workspace.buffer.selection_bounds().unwrap_or_else(|| {
+                panic!(
+                    "formatting must preserve selection: centered={centered}, caret={}, anchor={}",
+                    workspace.buffer.cursor_position(),
+                    workspace
+                        .buffer
+                        .iter_at_mark(&workspace.buffer.selection_bound())
+                        .offset()
+                )
+            });
+            assert_eq!(workspace.buffer.text(&start, &end, true), "café");
+            if centered {
+                assert_centered();
+            } else {
+                assert!(
+                    (adjustment.value() - before_scroll).abs() < 1.0,
+                    "disabled centering must preserve formatter scroll: before={before_scroll}, after={}, margins=({}, {})", adjustment.value(), workspace.editor.top_margin(), workspace.editor.bottom_margin()
+                );
+            }
+            workspace.buffer.undo();
+            assert_eq!(
+                buffer_text(&workspace.buffer),
+                unformatted,
+                "formatting must remain one undo step"
+            );
+        }
+        window.close();
+    }
 
     #[test]
     #[ignore = "requires a display; run one exact filter under Xvfb"]

@@ -51,3 +51,5 @@
 .font-picker-footer { padding: 6px 14px; border-top: 1px solid @borders; min-height: 28px; }
 .font-picker-row { padding: 6px 4px; }
 .font-picker-title { font-size: 1.1em; }
+
+.preview-magnifier { background: @window_bg_color; border: 1px solid @borders; border-radius: 8px; box-shadow: 0 4px 12px alpha(black, .2); }

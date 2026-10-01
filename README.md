@@ -1,6 +1,6 @@
 # typsmthng desktop
 
-typsmthng is a native GTK 4 editor and presentation app for Typst. It opens ordinary folders, writes ordinary files, and uses Typst 0.15.1 for preview and PDF output. Live preview keeps the compiler, parsed sources, and fonts in memory between edits; PDF export uses the bundled CLI. The shipped application has no browser, WebView, JavaScript runtime, React renderer, or WASM compiler.
+typsmthng is a native GTK 4 editor and presentation app for Typst. It opens ordinary folders, writes ordinary files, and uses Typst 0.15.1 for preview and document exports. Live preview keeps the compiler, parsed sources, and fonts in memory between edits; exports use the bundled CLI. The shipped application has no browser, WebView, JavaScript runtime, React renderer, or WASM compiler.
 
 The project is in beta. Keep backups of important work.
 
@@ -22,9 +22,12 @@ See the [full screenshot gallery and migration notes](docs/gtk4-migration.md) fo
 
 - Folder-backed projects with safe file creation, rename, duplicate, move, Trash, binary assets, hidden-file control, and external-change detection
 - GtkSourceView editor with Typst syntax, diagnostics, line numbers, wrapping, search, undo, Vim-style modal input, and configurable font size
+- Ctrl+Space semantic completion, hover help, and explicit Typst formatting
 - Debounced writes and latest-wins background compilation
-- Multi-page SVG preview with zoom, page navigation, image preview, and PDF export
-- Click rendered text or formulas to jump to their source, including local imports
+- Multi-page SVG preview with zoom, compiled heading navigation, image preview, and optional magnifier
+- PDF standards, multipage SVG/PNG ZIP exports, and experimental HTML export
+- Click rendered text or formulas to jump to their source, including local imports; use Ctrl+Shift+J to show the source cursor in preview
+- Rendered page and non-whitespace character counts, including generated and repeated text
 - Diagnostics wait for a 900 ms typing pause while valid previews update independently
 - Path and full-text search across the open project
 - ZIP project import and export with traversal checks
@@ -144,6 +147,8 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Save, compile, or export PDF: `Ctrl+S`, `Ctrl+Enter`, `Ctrl+Shift+E`
 - Search, settings, or file tree: `Ctrl+K`, `Ctrl+,`, `Ctrl+\`
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
+- Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.
+- Toggle the preview magnifier in the preview toolbar to inspect rendered text at 2× without changing the page zoom.
 - Format the current Typst document: `Ctrl+Shift+I`, or "Format document" in the command palette
 - Cycle system, light, and dark themes: `Ctrl+J`
 
