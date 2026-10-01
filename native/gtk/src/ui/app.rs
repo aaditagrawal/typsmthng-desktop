@@ -11,15 +11,20 @@ use std::time::Duration;
 use adw::prelude::*;
 use typsmthng_gtk::backend::app_fonts;
 use typsmthng_gtk::backend::{
-    convert_latex_to_typst, export_project, export_projects, import_project, import_projects,
-    ArchiveLimits, BackendError, CompileOptions, CompileOutput, DiagnosticSeverity, EntryKind,
-    ExportArtifact, ExportFormat, ExternalEventKind, ExternalWatcher, FileContent, GoogleFontCache,
-    InlineNote, PdfStandard, Project, StateStore, SvgPage, Theme as BackendTheme, TypstTool,
-    UniverseClient, UniverseTemplate, UpdateClient, UpdateStatus, UserSettings,
-    WindowState as BackendWindowState,
+    export_project, export_projects, import_project, import_projects, ArchiveLimits, BackendError,
+    CompileOptions, CompileOutput, DiagnosticSeverity, EntryKind, ExportArtifact, ExportFormat,
+    ExternalEventKind, ExternalWatcher, FileContent, GoogleFontCache, InlineNote, PdfStandard,
+    Project, StateStore, Theme as BackendTheme, TypstTool, UniverseClient, UniverseTemplate,
+    UpdateClient, UpdateStatus, UserSettings, WindowState as BackendWindowState,
 };
 
+use typsmthng_gtk::backend::imports::{
+    convert_latex_project_if_needed, import_latex_file, import_latex_sources, import_path_tree,
+    unique_project_path,
+};
+use typsmthng_gtk::backend::notes;
 use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
+use typsmthng_gtk::backend::rendered_preview::{prepare_preview, PreparedPreview};
 
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
 use super::model::{
@@ -139,12 +144,6 @@ struct CompileFinished {
     source_map: Option<Arc<SourceMap>>,
     main: String,
     result: Result<(CompileOutput<PreparedPreview>, Vec<InlineNote>), String>,
-}
-
-struct PreparedPreview {
-    cache: tempfile::TempDir,
-    paths: Vec<PathBuf>,
-    rendered_notes: Vec<Option<PathBuf>>,
 }
 
 impl AppController {
@@ -1527,50 +1526,9 @@ impl AppController {
         page_count: usize,
         inline: &[InlineNote],
     ) -> (Vec<String>, Vec<String>) {
-        let mut inline_notes = vec![String::new(); page_count];
-        for note in inline {
-            if let Some(target) = note
-                .page
-                .checked_sub(1)
-                .and_then(|index| inline_notes.get_mut(index))
-            {
-                if !target.is_empty() {
-                    target.push_str("\n\n");
-                }
-                target.push_str(&note.text);
-            }
-        }
-        let (Some(project), Some(current)) = (
-            self.project.borrow().as_ref().cloned(),
-            self.compiled_main.borrow().clone(),
-        ) else {
-            return (inline_notes, vec![String::new(); page_count]);
-        };
-        let mut sidecar_notes = vec![String::new(); page_count];
-        let sidecar = format!("{}.notes.md", current.trim_end_matches(".typ"));
-        if let Ok(file) = project.read_file(&sidecar) {
-            if let FileContent::Text(text) = file.content {
-                for (number, note) in parse_note_sections(&text) {
-                    if let Some(index) = number.checked_sub(1).filter(|index| *index < page_count) {
-                        sidecar_notes[index] = note;
-                    }
-                }
-            }
-        }
-        if let Ok(file) = project.read_file(&current) {
-            if let FileContent::Text(text) = file.content {
-                for (index, line) in text
-                    .lines()
-                    .filter_map(|line| line.trim().strip_prefix("// note:").map(str::trim))
-                    .enumerate()
-                {
-                    if index < page_count && inline_notes[index].is_empty() {
-                        inline_notes[index] = line.to_string();
-                    }
-                }
-            }
-        }
-        (inline_notes, sidecar_notes)
+        let project = self.project.borrow();
+        let current = self.compiled_main.borrow();
+        notes::load(project.as_ref().zip(current.as_deref()), page_count, inline)
     }
 
     fn save_presentation_note(&self, slide: usize, text: &str) -> bool {
@@ -1584,26 +1542,7 @@ impl AppController {
             );
             return false;
         };
-        let sidecar = format!("{}.notes.md", current.trim_end_matches(".typ"));
-        let existing = project
-            .read_file(&sidecar)
-            .ok()
-            .and_then(|file| match file.content {
-                FileContent::Text(text) => Some(text),
-                FileContent::Binary(_) => None,
-            })
-            .unwrap_or_default();
-        let mut sections = parse_note_sections(&existing);
-        if text.trim().is_empty() {
-            sections.remove(&(slide + 1));
-        } else {
-            sections.insert(slide + 1, text.trim().to_string());
-        }
-        if sections.is_empty() && existing.is_empty() {
-            return true;
-        }
-        let markdown = serialize_note_sections(&sections, &project.name());
-        if let Err(error) = project.write_text_atomic(&sidecar, &markdown) {
+        if let Err(error) = notes::save(&project, &current, slide, text) {
             self.show_error("Could not save speaker notes", &error.to_string());
             return false;
         }
@@ -3687,76 +3626,6 @@ fn find_css_widget(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     None
 }
 
-fn prepare_preview(
-    output: CompileOutput<Vec<SvgPage>>,
-    notes_layout: &str,
-) -> typsmthng_gtk::backend::Result<CompileOutput<PreparedPreview>> {
-    let artifact = output
-        .artifact
-        .map(|pages| -> typsmthng_gtk::backend::Result<PreparedPreview> {
-            let cache = tempfile::tempdir().map_err(|error| BackendError::Io {
-                path: std::env::temp_dir(),
-                source: error,
-            })?;
-            let split_notes = match notes_layout {
-                "right-half" => true,
-                "whole" => false,
-                _ => {
-                    !pages.is_empty()
-                        && pages.iter().all(|page| {
-                            page.width_points.zip(page.height_points).is_some_and(
-                                |(width, height)| height > 0.0 && width / height >= 2.6,
-                            )
-                        })
-                }
-            };
-            let mut paths = Vec::with_capacity(pages.len());
-            let mut rendered_notes = Vec::with_capacity(pages.len());
-            for page in pages {
-                let path = cache.path().join(format!("page-{:04}.svg", page.page));
-                let valid_dimensions =
-                    page.width_points
-                        .zip(page.height_points)
-                        .is_some_and(|(width, height)| {
-                            width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0
-                        });
-                let (slide_svg, note_svg) = if split_notes && valid_dimensions {
-                    let width = page.width_points.unwrap_or_default();
-                    let height = page.height_points.unwrap_or_default();
-                    (
-                        crop_svg(&page.svg, 0.0, width / 2.0, height),
-                        Some(crop_svg(&page.svg, width / 2.0, width / 2.0, height)),
-                    )
-                } else {
-                    (page.svg, None)
-                };
-                std::fs::write(&path, slide_svg).map_err(|error| BackendError::Io {
-                    path: path.clone(),
-                    source: error,
-                })?;
-                paths.push(path);
-                let note_path = note_svg.and_then(|svg| {
-                    let path = cache.path().join(format!("notes-{:04}.svg", page.page));
-                    std::fs::write(&path, svg).ok().map(|()| path)
-                });
-                rendered_notes.push(note_path);
-            }
-            Ok(PreparedPreview {
-                cache,
-                paths,
-                rendered_notes,
-            })
-        })
-        .transpose()?;
-    Ok(CompileOutput {
-        artifact,
-        diagnostics: output.diagnostics,
-        stdout: output.stdout,
-        stderr: output.stderr,
-        elapsed: output.elapsed,
-    })
-}
-
 fn search_project(
     project: &Project,
     mode: SearchMode,
@@ -3904,59 +3773,6 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
     }
 }
 
-fn parse_note_sections(markdown: &str) -> std::collections::BTreeMap<usize, String> {
-    let mut sections = std::collections::BTreeMap::new();
-    let mut slide = None;
-    let mut lines = Vec::new();
-    let flush = |slide: Option<usize>,
-                 lines: &mut Vec<&str>,
-                 sections: &mut std::collections::BTreeMap<usize, String>| {
-        if let Some(slide) = slide {
-            let note = lines.join("\n").trim().to_string();
-            if !note.is_empty() {
-                sections.insert(slide, note);
-            }
-        }
-        lines.clear();
-    };
-    for line in markdown.lines() {
-        if let Some(number) = sidecar_slide_heading(line) {
-            flush(slide, &mut lines, &mut sections);
-            slide = Some(number);
-        } else if slide.is_some() {
-            lines.push(line);
-        }
-    }
-    flush(slide, &mut lines, &mut sections);
-    sections
-}
-
-fn serialize_note_sections(
-    sections: &std::collections::BTreeMap<usize, String>,
-    title: &str,
-) -> String {
-    let mut markdown = format!("# Speaker notes — {title}\n\n");
-    for (number, note) in sections {
-        markdown.push_str(&format!("## Slide {number}\n\n{}\n\n", note.trim()));
-    }
-    markdown.truncate(markdown.trim_end().len());
-    markdown.push('\n');
-    markdown
-}
-
-fn sidecar_slide_heading(line: &str) -> Option<usize> {
-    let heading = line.trim().strip_prefix("##")?.trim();
-    let number = if heading
-        .get(..5)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("slide"))
-    {
-        heading.get(5..)?.trim()
-    } else {
-        heading
-    };
-    number.parse::<usize>().ok().filter(|number| *number > 0)
-}
-
 fn populate_universe_results(list: &gtk::ListBox, templates: &[UniverseTemplate]) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
@@ -3978,79 +3794,6 @@ fn populate_universe_results(list: &gtk::ListBox, templates: &[UniverseTemplate]
         row.append(&detail);
         list.append(&row);
     }
-}
-
-fn crop_svg(svg: &str, x: f64, width: f64, height: f64) -> String {
-    let view_box = regex::Regex::new(r#"\bviewBox="[^"]*""#).unwrap();
-    let root_width = regex::Regex::new(r#"\bwidth="[0-9.]+(?:pt)?""#).unwrap();
-    let svg = view_box
-        .replacen(
-            svg,
-            1,
-            format!("viewBox=\"{x:.3} 0 {width:.3} {height:.3}\""),
-        )
-        .into_owned();
-    root_width
-        .replacen(&svg, 1, format!("width=\"{width:.3}pt\""))
-        .into_owned()
-}
-
-fn import_latex_file(
-    source_path: &Path,
-    parent: &Path,
-    project_name: &str,
-) -> typsmthng_gtk::backend::Result<Project> {
-    let project = Project::create(parent, project_name)?;
-    let source = std::fs::read_to_string(source_path).map_err(|error| {
-        typsmthng_gtk::backend::BackendError::Process(format!(
-            "could not read {}: {error}",
-            source_path.display()
-        ))
-    })?;
-    let converted = convert_latex_to_typst(&source);
-    project.write_text_atomic("main.typ", &converted.typst)?;
-    project.write_text_atomic("source.tex", &source)?;
-    Ok(project)
-}
-
-fn import_latex_sources(
-    sources: &[PathBuf],
-    parent: &Path,
-    project_name: &str,
-) -> typsmthng_gtk::backend::Result<(Project, Vec<String>)> {
-    let project = Project::create(parent, project_name)?;
-    project.delete_permanently("main.typ")?;
-    let mut warnings = Vec::new();
-    for source in sources {
-        if source.is_dir() {
-            let mut children = std::fs::read_dir(source)
-                .map_err(|error| {
-                    BackendError::Process(format!("could not read {}: {error}", source.display()))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|error| BackendError::Process(error.to_string()))?;
-            children.sort_by_key(std::fs::DirEntry::file_name);
-            for child in children {
-                import_path_tree(
-                    &project,
-                    &child.path(),
-                    Path::new(&child.file_name()),
-                    &mut warnings,
-                )?;
-            }
-        } else if let Some(name) = source.file_name() {
-            let target = unique_project_path(&project, Path::new(name));
-            import_path_tree(&project, source, &target, &mut warnings)?;
-        }
-    }
-    if project.resolve_main_file(None).is_err() {
-        project.write_text_atomic(
-            "main.typ",
-            "= Imported LaTeX project\n\nNo convertible .tex source was selected. Add or import a LaTeX source to continue.\n",
-        )?;
-        warnings.push("No convertible .tex source was found; a new main.typ was created.".into());
-    }
-    Ok((project, warnings))
 }
 
 fn reveal_in_file_manager(target: &Path) -> bool {
@@ -4106,86 +3849,6 @@ fn guide_section(container: &gtk::Box, heading: &str, body: &str) {
     container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 }
 
-fn convert_latex_project_if_needed(project: &Project) -> typsmthng_gtk::backend::Result<()> {
-    let entries = project.entries(true)?;
-    for source_path in entries.iter().filter_map(|entry| {
-        let lower = entry.path.to_ascii_lowercase();
-        (entry.kind == EntryKind::File && (lower.ends_with(".tex") || lower.ends_with(".ltx")))
-            .then_some(entry.path.clone())
-    }) {
-        let source = match project.read_file(&source_path)?.content {
-            FileContent::Text(source) => source,
-            FileContent::Binary(_) => continue,
-        };
-        let converted = convert_latex_to_typst(&source);
-        let target = Path::new(&source_path).with_extension("typ");
-        project.write_text_atomic(&target, &converted.typst)?;
-    }
-    Ok(())
-}
-
-fn import_path_tree(
-    project: &Project,
-    source: &Path,
-    target: &Path,
-    warnings: &mut Vec<String>,
-) -> typsmthng_gtk::backend::Result<()> {
-    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
-        BackendError::Process(format!("could not inspect {}: {error}", source.display()))
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(BackendError::Process(
-            "symbolic links are not imported for safety".into(),
-        ));
-    }
-    if metadata.is_dir() {
-        project.create_folder(target)?;
-        let mut children = std::fs::read_dir(source)
-            .map_err(|error| {
-                BackendError::Process(format!("could not read {}: {error}", source.display()))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|error| BackendError::Process(error.to_string()))?;
-        children.sort_by_key(std::fs::DirEntry::file_name);
-        for child in children {
-            import_path_tree(
-                project,
-                &child.path(),
-                &target.join(child.file_name()),
-                warnings,
-            )?;
-        }
-        return Ok(());
-    }
-    if !metadata.is_file() {
-        return Err(BackendError::Process("unsupported filesystem entry".into()));
-    }
-
-    let bytes = std::fs::read(source).map_err(|error| {
-        BackendError::Process(format!("could not read {}: {error}", source.display()))
-    })?;
-    project.create_binary_file(target, &bytes)?;
-    let extension = source
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if extension.eq_ignore_ascii_case("tex") || extension.eq_ignore_ascii_case("ltx") {
-        let latex = std::str::from_utf8(&bytes).map_err(|error| {
-            BackendError::Process(format!("{} is not UTF-8 LaTeX: {error}", source.display()))
-        })?;
-        let converted = convert_latex_to_typst(latex);
-        warnings.extend(
-            converted
-                .warnings
-                .iter()
-                .map(|warning| format!("{}: {}", target.display(), warning.message)),
-        );
-        let typst_target = unique_project_path(project, &target.with_extension("typ"));
-        project.write_text_atomic(typst_target, &converted.typst)?;
-    }
-    Ok(())
-}
-
 fn write_template_metadata(
     project: &Project,
     source: &str,
@@ -4234,30 +3897,6 @@ fn project_layout_locked(project: &Project) -> bool {
         .unwrap_or(false)
 }
 
-fn unique_project_path(project: &Project, desired: &Path) -> PathBuf {
-    if !project.root().join(desired).exists() {
-        return desired.to_path_buf();
-    }
-    let parent = desired.parent().unwrap_or_else(|| Path::new(""));
-    let stem = desired
-        .file_stem()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "imported".into());
-    let extension = desired.extension().map(|value| value.to_string_lossy());
-    for index in 2..10_000 {
-        let mut name = format!("{stem}-{index}");
-        if let Some(extension) = &extension {
-            name.push('.');
-            name.push_str(extension);
-        }
-        let candidate = parent.join(name);
-        if !project.root().join(&candidate).exists() {
-            return candidate;
-        }
-    }
-    parent.join(format!("{stem}-imported"))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -4265,10 +3904,7 @@ mod tests {
     use tempfile::tempdir;
     use typsmthng_gtk::backend::Project;
 
-    use super::{
-        import_latex_sources, parse_note_sections, project_layout_locked, serialize_note_sections,
-        sidecar_slide_heading, write_template_metadata,
-    };
+    use super::{project_layout_locked, write_template_metadata};
 
     #[test]
     #[ignore = "requires a display; run under Xvfb"]
@@ -4473,86 +4109,6 @@ mod tests {
         std::env::remove_var("TYPSMTHNG_UPDATE_API_URL");
     }
 
-    fn preview_output(dimensions: &[(f64, f64)]) -> super::CompileOutput<Vec<super::SvgPage>> {
-        super::CompileOutput {
-            artifact: Some(dimensions.iter().enumerate().map(|(index, &(width, height))| {
-                super::SvgPage {
-                    page: index + 1,
-                    svg: format!(r#"<svg width="{width}pt" height="{height}pt" viewBox="0 0 {width} {height}"><text>slide</text></svg>"#),
-                    width_points: Some(width),
-                    height_points: Some(height),
-                }
-            }).collect()),
-            diagnostics: Vec::new(),
-            stdout: "compiler output".into(),
-            stderr: String::new(),
-            elapsed: std::time::Duration::from_millis(12),
-        }
-    }
-
-    #[test]
-    fn prepared_preview_splits_ultrawide_notes_and_owns_cache_lifetime() {
-        let result = super::prepare_preview(preview_output(&[(1200.0, 400.0)]), "auto").unwrap();
-        assert_eq!(result.stdout, "compiler output");
-        assert_eq!(result.elapsed.as_millis(), 12);
-        let preview = result.artifact.unwrap();
-        let slide = fs::read_to_string(&preview.paths[0]).unwrap();
-        assert!(slide.contains(r#"viewBox="0.000 0 600.000 400.000""#));
-        let notes = fs::read_to_string(preview.rendered_notes[0].as_ref().unwrap()).unwrap();
-        assert!(notes.contains(r#"viewBox="600.000 0 600.000 400.000""#));
-        let cache_path = preview.cache.path().to_path_buf();
-        assert!(cache_path.is_dir());
-        drop(preview);
-        assert!(!cache_path.exists());
-    }
-
-    #[test]
-    fn prepared_preview_respects_mixed_pages_and_layout_overrides() {
-        for (layout, dimensions, split) in [
-            ("auto", vec![(1200.0, 400.0), (600.0, 800.0)], false),
-            ("whole", vec![(1200.0, 400.0)], false),
-            ("right-half", vec![(1200.0, 800.0)], true),
-        ] {
-            let preview = super::prepare_preview(preview_output(&dimensions), layout)
-                .unwrap()
-                .artifact
-                .unwrap();
-            assert_eq!(preview.paths.len(), dimensions.len());
-            assert!(preview
-                .rendered_notes
-                .iter()
-                .all(|path| path.is_some() == split));
-        }
-        let mut failed = preview_output(&[]);
-        failed.artifact = None;
-        failed.stderr = "compile failure".into();
-        let result = super::prepare_preview(failed, "auto").unwrap();
-        assert!(result.artifact.is_none());
-        assert_eq!(result.stderr, "compile failure");
-    }
-
-    #[test]
-    fn forced_notes_split_preserves_pages_without_valid_dimensions() {
-        for dimensions in [
-            (None, Some(400.0)),
-            (Some(1200.0), None),
-            (Some(0.0), Some(400.0)),
-            (Some(f64::NAN), Some(400.0)),
-        ] {
-            let mut output = preview_output(&[(1200.0, 400.0)]);
-            let page = &mut output.artifact.as_mut().unwrap()[0];
-            page.width_points = dimensions.0;
-            page.height_points = dimensions.1;
-            let original = page.svg.clone();
-            let preview = super::prepare_preview(output, "right-half")
-                .unwrap()
-                .artifact
-                .unwrap();
-            assert_eq!(fs::read_to_string(&preview.paths[0]).unwrap(), original);
-            assert!(preview.rendered_notes[0].is_none());
-        }
-    }
-
     #[test]
     fn background_search_keeps_file_and_content_modes_distinct() {
         let directory = tempdir().unwrap();
@@ -4578,31 +4134,6 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_headings_accept_legacy_and_current_forms() {
-        assert_eq!(sidecar_slide_heading("## Slide 2"), Some(2));
-        assert_eq!(sidecar_slide_heading("## slide 3"), Some(3));
-        assert_eq!(sidecar_slide_heading(" ## 4 "), Some(4));
-        assert_eq!(sidecar_slide_heading("# Slide 5"), None);
-        assert_eq!(sidecar_slide_heading("## Slide 0"), None);
-    }
-
-    #[test]
-    fn legacy_sidecar_sections_survive_parsing() {
-        let sections = parse_note_sections(
-            "# Speaker notes\n\n## 1\n\nFirst note\n\n## slide 2\n\nSecond note\n\n## Slide 3\n\nThird note\n",
-        );
-        assert_eq!(sections.get(&1).map(String::as_str), Some("First note"));
-        assert_eq!(sections.get(&2).map(String::as_str), Some("Second note"));
-        assert_eq!(sections.get(&3).map(String::as_str), Some("Third note"));
-        let serialized = serialize_note_sections(&sections, "Demo");
-        assert_eq!(
-            serialized,
-            "# Speaker notes — Demo\n\n## Slide 1\n\nFirst note\n\n## Slide 2\n\nSecond note\n\n## Slide 3\n\nThird note\n"
-        );
-        assert_eq!(parse_note_sections(&serialized), sections);
-    }
-
-    #[test]
     fn template_metadata_is_native_and_controls_layout() {
         let directory = tempdir().unwrap();
         let project = Project::create(directory.path(), "template").unwrap();
@@ -4618,27 +4149,5 @@ mod tests {
         let metadata = fs::read_to_string(project.root().join(".typsmthng/template.json")).unwrap();
         assert!(metadata.contains("\"layoutLocked\": true"));
         assert!(!metadata.contains("electrobun"));
-    }
-
-    #[test]
-    fn latex_folder_import_preserves_assets_and_converts_nested_sources() {
-        let source = tempdir().unwrap();
-        fs::create_dir(source.path().join("images")).unwrap();
-        fs::write(source.path().join("images/chart.png"), b"png").unwrap();
-        fs::write(
-            source.path().join("paper.tex"),
-            "\\documentclass{article}\\begin{document}Hello\\includegraphics{images/chart.png}\\end{document}",
-        )
-        .unwrap();
-        let destination = tempdir().unwrap();
-        let (project, _) = import_latex_sources(
-            &[source.path().to_path_buf()],
-            destination.path(),
-            "Imported",
-        )
-        .unwrap();
-        assert!(project.root().join("paper.tex").is_file());
-        assert!(project.root().join("paper.typ").is_file());
-        assert!(project.root().join("images/chart.png").is_file());
     }
 }
