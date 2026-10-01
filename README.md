@@ -24,7 +24,7 @@ See the [full screenshot gallery and migration notes](docs/gtk4-migration.md) fo
 - GtkSourceView editor with Typst syntax, diagnostics, line numbers, wrapping, search, undo, Vim-style modal input, and configurable font size
 - Ctrl+Space semantic completion, hover help, and explicit Typst formatting
 - Debounced writes and latest-wins background compilation
-- Multi-page SVG preview with zoom, compiled heading navigation, image preview, and optional magnifier
+- Multi-page preview with native Typst glyph rendering, display-resolution zoom, compiled heading navigation, image preview, and optional magnifier
 - PDF standards, multipage SVG/PNG ZIP exports, and experimental HTML export
 - Click rendered text or formulas to jump to their source, including local imports; use Ctrl+Shift+J to show the source cursor in preview
 - Rendered page and non-whitespace character counts, including generated and repeated text

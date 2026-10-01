@@ -2035,7 +2035,16 @@ impl WorkspaceView {
                     picture.set_paintable(Some(&previous.current_image()));
                 }
             }
-            super::page_paintable::load(&picture, page);
+            let compiled_page = source.and_then(|_| {
+                let compiled = self.source_map.borrow().as_ref()?.page(index)?;
+                // Cropped presentation-note SVGs retain the original page's
+                // coordinate system, including gradient backgrounds. Keep the
+                // SVG renderer for them rather than resizing the Typst frame.
+                ((compiled.frame.width().to_pt() - page_width).abs() < 0.01
+                    && (compiled.frame.height().to_pt() - page_width / aspect_ratio).abs() < 0.01)
+                    .then_some(compiled)
+            });
+            super::page_paintable::load_page(&picture, page, compiled_page);
             if picture.paintable().is_none() {
                 self.preview_identity.replace(None);
             }
