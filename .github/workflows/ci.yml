@@ -85,6 +85,8 @@ jobs:
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --manifest-path native/gtk/Cargo.toml --test typst_highlighting -- --ignored --test-threads=1
       - name: Click-triggered native updates
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
+      - name: Semantic completion keyboard and stale response checks
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_completion_inserts_snippet_once_and_discards_stale_reply -- --exact --ignored --test-threads=1
       - name: Clippy
         run: cargo clippy --locked --manifest-path native/gtk/Cargo.toml --all-targets -- -D warnings
       - name: Dead dependency and migration-artifact audit
@@ -102,10 +104,13 @@ jobs:
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 30s target/debug/typsmthng --interaction-smoke-test
 
+      - name: Native document export options
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::app::tests::native_export_dialog_keeps_default_pdf_and_scopes_profiles -- --exact --ignored --test-threads=1
+
       - name: Native dialog smoke tests
         run: |
-          for view in templates import name settings; do
-            dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings TYPSMTHNG_SMOKE_VIEW="$view" timeout 20s target/debug/typsmthng --smoke-test
+          for view in templates import name settings export; do
+            dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings TYPSMTHNG_SMOKE_VIEW="$view" timeout 20s target/debug/typsmthng --smoke-test native/gtk/tests/fixtures/demo
           done
 
       - name: Native keyboard and pointer regression checks

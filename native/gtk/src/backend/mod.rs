@@ -4,15 +4,19 @@
 pub mod app_fonts;
 pub mod archive;
 mod compile_options;
+pub mod editor;
 pub mod error;
 pub mod font_catalog;
 pub mod fonts;
+pub mod imports;
 pub mod latex;
 pub mod model;
+pub mod notes;
 pub mod paths;
 pub mod persistence;
 pub mod preview;
 pub mod project;
+pub mod rendered_preview;
 pub mod typst;
 pub mod universe;
 pub mod update;
@@ -36,7 +40,8 @@ pub use model::*;
 pub use persistence::StateStore;
 pub use project::Project;
 pub use typst::{
-    CompileOptions, CompileOutput, InlineNote, SvgPage, TypstTool, REQUIRED_TYPST_VERSION,
+    CompileOptions, CompileOutput, ExportArtifact, ExportFormat, InlineNote, PdfStandard, SvgPage,
+    TypstTool, REQUIRED_TYPST_VERSION,
 };
 pub use universe::{UniverseClient, UniverseTemplate};
 pub use update::{ReleaseAsset, UpdateClient, UpdateStatus};

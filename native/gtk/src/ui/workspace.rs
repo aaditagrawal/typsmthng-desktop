@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use sourceview5::prelude::*;
 use url::Url;
 
+use super::editor_tools::{EditorCallback, EditorTools};
 use super::font_picker::{FontPicker, FontPickerKind};
 use super::home::icon_button;
 use super::minimap::HeadingMinimap;
@@ -340,6 +341,7 @@ pub enum DiagnosticKind {
 
 #[derive(Clone)]
 pub struct WorkspaceCallbacks {
+    pub editor_query: EditorCallback,
     pub go_home: Rc<dyn Fn()>,
     pub open_project: Rc<dyn Fn()>,
     pub save: Rc<dyn Fn(String) -> bool>,
@@ -359,6 +361,7 @@ pub struct WorkspaceCallbacks {
     pub preview_asset: Rc<dyn Fn(String)>,
     pub check_update: Rc<dyn Fn()>,
     pub export_pdf: Rc<dyn Fn()>,
+    pub export_document: Rc<dyn Fn()>,
     pub export_project: Rc<dyn Fn()>,
     pub present_single: Rc<dyn Fn()>,
     pub present_dual: Rc<dyn Fn()>,
@@ -380,6 +383,7 @@ pub struct SearchResultRow {
 
 #[derive(Clone)]
 pub struct WorkspaceView {
+    editor_tools: EditorTools,
     pub root: gtk::Box,
     pub editor: sourceview5::View,
     pub buffer: sourceview5::Buffer,
@@ -463,6 +467,10 @@ impl WorkspaceView {
         let document_search = icon_button("edit-find-symbolic", "Find and replace (Ctrl+F)");
         let compile = icon_button("view-refresh-symbolic", "Compile now (Ctrl+Enter)");
         let export = icon_button("document-save-symbolic", "Export PDF (Ctrl+Shift+E)");
+        let export_document = icon_button(
+            "document-send-symbolic",
+            "Export document (PDF profiles, SVG, PNG, HTML)",
+        );
         let export_project = icon_button("package-x-generic-symbolic", "Export project ZIP");
         let present = gtk::MenuButton::new();
         present.set_icon_name("media-playback-start-symbolic");
@@ -510,6 +518,7 @@ impl WorkspaceView {
         let more_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         more_actions.append(&document_search);
         more_actions.append(&compile);
+        more_actions.append(&export_document);
         more_actions.append(&export_project);
         more_actions.append(&update_button);
         more_popover.set_child(Some(&more_actions));
@@ -688,7 +697,6 @@ impl WorkspaceView {
             }
         });
         editor.add_controller(vim_keys);
-        install_pair_completion(&editor, &buffer, vim_context.clone());
         let editor_scroll = gtk::ScrolledWindow::new();
         editor_scroll.set_child(Some(&editor));
         editor_scroll.set_hexpand(true);
@@ -696,6 +704,9 @@ impl WorkspaceView {
         let editor_overlay = gtk::Overlay::new();
         editor_overlay.set_child(Some(&editor_scroll));
         editor_overlay.set_hexpand(true);
+        let editor_tools =
+            EditorTools::new(&editor, &editor_overlay, callbacks.editor_query.clone());
+        install_pair_completion(&editor, &buffer, vim_context.clone());
         let editor_badge = ZoomBadge::new();
         editor_overlay.add_overlay(editor_badge.widget());
         let minimap = HeadingMinimap::new(&editor);
@@ -1157,6 +1168,10 @@ impl WorkspaceView {
             export.connect_clicked(move |_| callback());
         }
         {
+            let callback = callbacks.export_document.clone();
+            export_document.connect_clicked(move |_| callback());
+        }
+        {
             let callback = callbacks.export_project.clone();
             export_project.connect_clicked(move |_| callback());
         }
@@ -1401,6 +1416,7 @@ impl WorkspaceView {
         }
 
         let view = Self {
+            editor_tools,
             root,
             editor,
             buffer,
@@ -1687,6 +1703,7 @@ impl WorkspaceView {
     }
 
     pub fn show_text_file(&self, path: &str, contents: &str) {
+        self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.suppress_changes.set(true);
         self.buffer.begin_irreversible_action();
@@ -1702,6 +1719,7 @@ impl WorkspaceView {
     }
 
     pub fn show_binary_file(&self, path: &Path) {
+        self.editor_tools.set_file(path.to_string_lossy().as_ref());
         self.cancel_pending_compile();
         self.file_label.set_text(path.to_string_lossy().as_ref());
         self.editor.set_editable(false);
@@ -1715,6 +1733,7 @@ impl WorkspaceView {
     }
 
     pub fn show_missing_file(&self, path: &str) {
+        self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.file_label.set_text(path);
         self.editor.set_editable(false);
@@ -3810,16 +3829,23 @@ mod tests {
             .unwrap()
             .artifact
             .unwrap();
-        let cropped = directory.path().join("slide.svg");
-        std::fs::write(
-            &cropped,
-            super::super::app::crop_svg(&notes.pages[0].svg, 0.0, 200.0, 100.0),
+        let cropped = typsmthng_gtk::backend::rendered_preview::prepare_preview(
+            typsmthng_gtk::backend::CompileOutput {
+                artifact: Some(notes.pages),
+                diagnostics: Vec::new(),
+                stdout: String::new(),
+                stderr: String::new(),
+                elapsed: Duration::ZERO,
+            },
+            "right-half",
         )
+        .unwrap()
+        .artifact
         .unwrap();
         workspace.show_text_file("main.typ", notes_source);
         workspace.set_source_map(Some(notes.source_map));
         workspace.preview_zoom.set(PreviewZoom::FitWidth);
-        workspace.set_compiled_preview(&[cropped], "main.typ");
+        workspace.set_compiled_preview(&cropped.paths, "main.typ");
         drive(Duration::from_millis(100));
         let cursor = notes_source[..notes_source.find("Slide words").unwrap()]
             .chars()
@@ -4040,6 +4066,7 @@ mod tests {
         let workspace = WorkspaceView::new(
             &window,
             WorkspaceCallbacks {
+                editor_query: Rc::new(|_| None),
                 go_home: noop.clone(),
                 open_project: noop.clone(),
                 save: Rc::new(|_| true),
@@ -4059,6 +4086,7 @@ mod tests {
                 preview_asset: path_noop.clone(),
                 check_update: noop.clone(),
                 export_pdf: noop.clone(),
+                export_document: noop.clone(),
                 export_project: noop.clone(),
                 present_single: noop.clone(),
                 present_dual: noop,
