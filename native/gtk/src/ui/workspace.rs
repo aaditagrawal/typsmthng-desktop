@@ -3703,7 +3703,22 @@ mod tests {
         let workspace = WorkspaceView::new(
             &window,
             WorkspaceCallbacks {
-                editor_query: Rc::new(|_| None),
+                editor_query: Rc::new(|request| {
+                    let typsmthng_gtk::backend::editor::EditorQuery::Format { anchor } =
+                        request.query
+                    else {
+                        return None;
+                    };
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    sender
+                        .send(typsmthng_gtk::backend::editor::format_source(
+                            typst::syntax::Source::detached(request.text),
+                            request.cursor,
+                            anchor,
+                        ))
+                        .unwrap();
+                    Some(receiver)
+                }),
                 go_home: noop.clone(),
                 open_project: noop.clone(),
                 save: Rc::new(|_| true),
@@ -4136,6 +4151,68 @@ mod tests {
             "letterboxing cannot be magnified"
         );
         narrow.close();
+        // Exercise the integrated formatter through its actual workspace command.
+        let tuple = (0..60)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let unformatted = format!(
+            "{}#let café=({tuple})\n#café\n",
+            "// unchanged line\n".repeat(100)
+        );
+        for centered in [false, true] {
+            settings.centered_scrolling = centered;
+            workspace.apply_settings(settings.clone());
+            workspace.show_text_file("main.typ", &unformatted);
+            let start = unformatted[..unformatted.rfind("café").unwrap()]
+                .chars()
+                .count() as i32;
+            workspace.buffer.select_range(
+                &workspace.buffer.iter_at_offset(start + 4),
+                &workspace.buffer.iter_at_offset(start),
+            );
+            drive(500);
+            if centered {
+                assert_centered();
+            } else {
+                adjustment.set_value(300.0);
+                drive(100);
+                assert_eq!(
+                    adjustment.value(),
+                    300.0,
+                    "manual scroll must settle before formatting"
+                );
+            }
+            let before_scroll = adjustment.value();
+            workspace.format_document();
+            drive(250);
+            assert_eq!(workspace.compile_label.text(), "Formatted");
+            let formatted = buffer_text(&workspace.buffer);
+            assert_ne!(formatted, unformatted);
+            assert!(
+                formatted.lines().count() > unformatted.lines().count(),
+                "fixture must exercise formatting that changes line count"
+            );
+            let (start, end) = workspace
+                .buffer
+                .selection_bounds()
+                .expect("formatting must preserve selection in both scroll modes");
+            assert_eq!(workspace.buffer.text(&start, &end, true), "café");
+            if centered {
+                assert_centered();
+            } else {
+                assert!(
+                    (adjustment.value() - before_scroll).abs() < 1.0,
+                    "disabled centering must preserve formatter scroll: before={before_scroll}, after={}, margins=({}, {})", adjustment.value(), workspace.editor.top_margin(), workspace.editor.bottom_margin()
+                );
+            }
+            workspace.buffer.undo();
+            assert_eq!(
+                buffer_text(&workspace.buffer),
+                unformatted,
+                "formatting must remain one undo step"
+            );
+        }
         window.close();
     }
 
