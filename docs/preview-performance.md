@@ -88,7 +88,7 @@ settings controls, search, and presentation navigation/drawing.
 
 ## Display resolution and memory
 
-SVG pages render at their allocated size multiplied by the display scale. Two
+Pages render at their allocated size multiplied by the display scale. Two
 background workers rasterize visible pages and pages within 64 logical pixels
 of the viewport. Requests replace queued work for the same page; obsolete
 results are discarded. Leaving that region releases the page texture. The
@@ -122,3 +122,65 @@ for scale in 1 2; do
     -- --ignored --test-threads=1
 done
 ```
+
+## Direct Typst rendering
+
+Compiled editor pages now render directly from the immutable Typst page, using
+`typst-render` 0.15.1. Its glyph rasterizer retains subpixel placement and caches
+glyph coverage between edits. The preview still produces SVG for page identity,
+hyperlinks, exports, and presentation. Imported SVGs and cropped presentation
+pages continue to use the platform SVG loader.
+
+The renderer uses the surface's actual fractional display scale, rather than
+the widget's rounded integer scale factor. At 125%, for example, a 480-pixel
+page requests 600 device pixels instead of 960. Current textures draw at their
+exact device dimensions, clipped to the fitted page bounds. Previous textures
+still stretch smoothly during an asynchronous resize. Regular GTK texture nodes
+preserve HiDPI detail in both GPU and Cairo rendering; the explicit scaling-filter
+node was rejected after physical screenshots exposed a Cairo resolution loss.
+
+The two workers, coalescing queue, stale-result checks, nearby-page prefetch,
+offscreen texture eviction, and image size limits remain in place. Page clones
+share the existing compiled frames, fonts, and assets. Pixel buffers transfer
+into GTK without a second pixel copy, with premultiplied alpha preserved.
+
+Measured October 1, 2026, in the Ubuntu 24.04 development container with Rust
+1.93.1 and an optimized release test binary. The fixture is an A4 page with
+30 repeated text-and-math paragraphs. Eleven edits change a visible heading
+number. These timings measure rasterization only, excluding compilation,
+debounce, texture upload, and GTK painting. The redraw column measures eleven
+additional rasterizations of identical content; actual unchanged pages reuse
+their texture without rasterizing at all.
+
+| Scale | Renderer | Cold raster | Redraw median | Edit median | Edit max | Pixel buffer |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1× | Platform SVG | 27.15 ms | 22.60 ms | 22.88 ms | 34.10 ms | 3.40 MiB |
+| 1× | Direct Typst | 2.78 ms | 0.42 ms | 0.47 ms | 0.51 ms | 3.40 MiB |
+| 2× | Platform SVG | 51.19 ms | 34.28 ms | 34.87 ms | 42.18 ms | 13.61 MiB |
+| 2× | Direct Typst | 10.92 ms | 1.71 ms | 1.83 ms | 2.10 ms | 13.61 MiB |
+
+For a separate twenty-page text-and-math fixture, median peak process RSS over
+three runs was 323.0 MiB before and 319.6 MiB after. Both were debug application
+builds, using a 1920-pixel logical window, `GDK_SCALE=2`, Cairo, and a three-second
+initial viewport. This does not measure memory after scrolling the whole document.
+
+Physical 2× screenshots show [the previous preview](screenshots/gtk4/preview-native-before.png)
+and [the direct preview](screenshots/gtk4/preview-native-after.png) at the same
+zoom. They are crops of actual window pixels, with no rescaling.
+
+Reproduce the raster benchmark:
+
+```sh
+TYPSMTHNG_RASTER_ARTIFACT_DIR=build/renderer-raster \
+  cargo test --locked --release --bin typsmthng \
+  benchmark_preview_rasterization -- --ignored --nocapture
+```
+
+Validation passed with 145 ordinary tests, Clippy, and formatting. The GTK page
+regression passed at 1× and 2× and covers native rendering after compiler/cache
+disposal, texture reuse, resize fallbacks, cancellation, and eviction. Other
+display tests passed source clicks, cursor navigation, headings, cropped pages,
+delayed diagnostics, and the cached magnifier. The interaction and keyboard
+smokes passed rapid edits, save/undo/redo, file switching, binary preservation,
+resize, and presentation controls. Fractional sizes have numerical regression
+coverage; a physical fractional-scale Wayland session was not available here.
