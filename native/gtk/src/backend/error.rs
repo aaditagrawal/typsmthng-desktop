@@ -38,6 +38,8 @@ pub enum BackendError {
     Process(String),
     #[error("network request failed: {0}")]
     Network(String),
+    #[error("font registration failed: {0}")]
+    FontRegistration(String),
     #[error("Typst compilation failed")]
     CompileFailed,
     #[error("JSON error in {path}: {source}")]

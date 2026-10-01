@@ -1,7 +1,7 @@
 [package]
 name = "typsmthng-gtk"
 default-run = "typsmthng"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "MIT"
 description = "Native GTK 4 desktop client for typsmthng"
@@ -47,6 +47,8 @@ typst = "=0.15.1"
 typst-layout = "=0.15.1"
 typst-svg = "=0.15.1"
 typst-ide = "=0.15.1"
+# Glyph ids for the font faces Typst exposes; same version Typst links.
+ttf-parser = "0.25"
 typst-kit = { version = "=0.15.1", features = ["datetime", "embedded-fonts", "scan-fonts", "system-files", "emit-diagnostics"] }
 
 [target.'cfg(unix)'.dependencies]

@@ -3,6 +3,18 @@ set -euo pipefail
 # Run in an isolated X11 display: dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1000x24' timeout 40s scripts/check-gtk4-interactions.sh
 # Requires openbox, xdotool and ImageMagick. Uses a disposable project and settings.
 ulimit -c 0
+# set -e hides which check failed; name the line so CI failures are actionable.
+trap 'echo "check-gtk4-interactions.sh: check failed at line $LINENO" >&2' ERR
+# Poll a check for up to $1 tenths of a second instead of sleeping a fixed time.
+wait_until() {
+  local tries=$1
+  shift
+  for _ in $(seq 1 "$tries"); do
+    "$@" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  "$@"
+}
 # Xvfb has no desktop portal. Test GTK's local picker backend in this display.
 export GDK_DEBUG=no-portals
 export GSK_RENDERER="${GSK_RENDERER:-cairo}"
@@ -36,21 +48,20 @@ for attempt in $(seq 1 50); do
   fi
   sleep 0.1
 done
-sleep 1
+# Mapping precedes the first idle frame; type only once the editor is live.
+wait_until 100 grep -q TYPESMTHNG_SMOKE_READY "$output/application.log"
+sleep 0.5
 xdotool mousemove --window "$main" 400 190 click 1
 xdotool key ctrl+End Return
 xdotool type --clearmodifiers '// keyboard test '
 xdotool key parenleft
 xdotool key ctrl+s
-sleep 0.5
-grep -q '// keyboard test ()' "$fixture/main.typ"
+wait_until 30 grep -q '// keyboard test ()' "$fixture/main.typ"
 xdotool key ctrl+z ctrl+s
-sleep 0.3
-if grep -q '// keyboard test ()' "$fixture/main.typ"; then echo 'UNDO FAILED'; exit 1; fi
+if ! wait_until 30 bash -c "! grep -q '// keyboard test ()' '$fixture/main.typ'"; then echo 'UNDO FAILED'; exit 1; fi
 grep -q 'Presenter tools' "$fixture/main.typ"
 xdotool key ctrl+shift+z ctrl+s
-sleep 0.3
-grep -q '// keyboard test ()' "$fixture/main.typ"
+wait_until 30 grep -q '// keyboard test ()' "$fixture/main.typ"
 for iteration in 1 2; do
   xdotool key ctrl+comma
   sleep 0.3
@@ -110,7 +121,7 @@ xdotool windowactivate --sync "$main" key ctrl+q
 wait "$app_pid"
 env GTK_A11Y=none TYPSMTHNG_SMOKE_VIM=1 TYPSMTHNG_SMOKE_HOLD_MS=60000 "${TYPSMTHNG_BINARY:-target/debug/typsmthng}" --smoke-test "$fixture" >"$output/vim.log" 2>&1 &
 app_pid=$!
-sleep 1
+wait_until 100 grep -q TYPESMTHNG_SMOKE_READY "$output/vim.log"
 main=$(xdotool search --onlyvisible --class 'typsmthng' | head -1)
 xdotool windowactivate --sync "$main"
 xdotool mousemove --window "$main" 400 190 click 1
@@ -119,8 +130,7 @@ xdotool type --clearmodifiers '// native vim test'
 xdotool key Escape
 xdotool type --clearmodifiers ':w'
 xdotool key Return
-sleep 0.3
-grep -q '// native vim test' "$fixture/main.typ"
+wait_until 30 grep -q '// native vim test' "$fixture/main.typ"
 xdotool type --clearmodifiers ':wq'
 xdotool key Return
 wait "$app_pid"

@@ -9,6 +9,7 @@ use std::sync::{
 use std::time::Duration;
 
 use adw::prelude::*;
+use typsmthng_gtk::backend::app_fonts;
 use typsmthng_gtk::backend::{
     convert_latex_to_typst, export_project, export_projects, import_project, import_projects,
     ArchiveLimits, BackendError, CompileOptions, CompileOutput, DiagnosticSeverity, EntryKind,
@@ -20,7 +21,10 @@ use typsmthng_gtk::backend::{
 use typsmthng_gtk::backend::preview::{PreviewCompiler, SourceMap};
 
 use super::home::{HomeCallbacks, HomeView, RecentProjectRow};
-use super::model::{resolve_startup_path, SearchMode, Theme, UiSettings};
+use super::model::{
+    effective_page_size, resolve_startup_path, ui_font_name, SearchMode, Theme, UiSettings,
+    ViewMode,
+};
 use super::presentation::PresentationController;
 use super::workspace::{
     DiagnosticKind, DiagnosticRow, FileRow, SearchResultRow, WorkspaceCallbacks, WorkspaceView,
@@ -117,6 +121,8 @@ struct AppController {
     pending_compile_source: RefCell<Option<String>>,
     search_in_flight: Cell<bool>,
     pending_search: RefCell<Option<PendingSearch>>,
+    /// The desktop's `gtk-font-name`, captured before any override.
+    system_font: String,
 }
 
 type SearchReply = Rc<dyn Fn(Vec<SearchResultRow>)>;
@@ -253,6 +259,9 @@ impl AppController {
             pending_compile_source: RefCell::new(None),
             search_in_flight: Cell::new(false),
             pending_search: RefCell::new(None),
+            system_font: gtk::Settings::default()
+                .and_then(|settings| settings.gtk_font_name())
+                .map_or_else(|| "Sans 11".to_string(), |name| name.to_string()),
         });
         controller.self_weak.replace(Rc::downgrade(&controller));
 
@@ -299,6 +308,10 @@ impl AppController {
             .unwrap()
             .apply_settings(settings.clone());
         controller.apply_theme(settings.theme);
+        controller.apply_ui_font(&settings);
+        if !smoke {
+            controller.restore_downloaded_fonts(&settings);
+        }
         adw::StyleManager::default().connect_dark_notify({
             let weak = Rc::downgrade(&controller);
             move |_| {
@@ -444,6 +457,7 @@ impl AppController {
         } else if options.smoke_test {
             match std::env::var("TYPSMTHNG_SMOKE_VIEW").as_deref() {
                 Ok("settings") => controller.show_settings(),
+                Ok("font-picker") => controller.show_font_picker_smoke(),
                 Ok("templates") => controller.create_from_template(),
                 Ok("import") => controller.show_import_options(),
                 Ok("name") => controller.prompt_name("New project", "Project name", |_, _| {}),
@@ -653,6 +667,7 @@ impl AppController {
                     })
                 },
                 settings_changed: callback1(&weak, Self::settings_changed),
+                preferences_changed: callback1(&weak, Self::preferences_changed),
             },
         );
         self.stack.add_named(&workspace.root, Some("workspace"));
@@ -731,6 +746,20 @@ impl AppController {
             }
         });
         self.add_action("cycle-theme", &["<Primary>j"], Self::cycle_theme);
+        self.add_action("view-source", &["<Primary>1"], |this| {
+            this.set_view_mode(ViewMode::Source)
+        });
+        self.add_action("view-split", &["<Primary>2"], |this| {
+            this.set_view_mode(ViewMode::Split)
+        });
+        self.add_action("view-preview", &["<Primary>3"], |this| {
+            this.set_view_mode(ViewMode::Preview)
+        });
+        self.add_action("minimap", &["<Primary><Shift>m"], |this| {
+            if let Some(workspace) = this.workspace.borrow().as_ref() {
+                workspace.toggle_minimap();
+            }
+        });
         self.add_action("quit", &["<Primary>q"], |this| {
             this.window.close();
         });
@@ -1275,14 +1304,14 @@ impl AppController {
         let page_preamble = if owns_layout {
             None
         } else {
-            match settings.page_size.as_str() {
-                "a3" | "a4" | "a5" | "a6" | "us-letter" | "us-legal" | "iso-b5" => {
-                    Some(format!("#set page(paper: \"{}\")", settings.page_size))
-                }
+            let locale = super::locale_page_size();
+            match effective_page_size(&settings.page_size, locale) {
+                // Typst already defaults to A4; an implicit A4 needs no preamble.
+                "a4" if settings.page_size == "auto" => None,
                 "presentation-16-9" => {
                     Some("#set page(width: 13.333in, height: 7.5in)".to_string())
                 }
-                _ => None,
+                paper => Some(format!("#set page(paper: \"{paper}\")")),
             }
         };
         CompileOptions {
@@ -2422,6 +2451,7 @@ impl AppController {
     fn settings_changed(&self, settings: UiSettings) {
         self.settings.replace(settings.clone());
         self.apply_theme(settings.theme);
+        self.apply_ui_font(&settings);
         if settings.translucent {
             self.window.add_css_class("translucent");
         } else {
@@ -2444,6 +2474,59 @@ impl AppController {
         }
     }
 
+    fn set_view_mode(&self, mode: ViewMode) {
+        if let Some(workspace) = self.workspace.borrow().as_ref() {
+            workspace.set_view_mode(mode);
+        }
+    }
+
+    fn preferences_changed(&self, settings: UiSettings) {
+        self.settings.replace(settings.clone());
+        if let Some(store) = &self.state_store {
+            if let Err(error) = store.save_settings(&settings_to_backend(&settings)) {
+                self.show_error("Could not save settings", &error.to_string());
+            }
+        }
+    }
+
+    fn apply_ui_font(&self, settings: &UiSettings) {
+        let Some(gtk_settings) = gtk::Settings::default() else {
+            return;
+        };
+        match ui_font_name(settings, &self.system_font) {
+            Some(name) => gtk_settings.set_gtk_font_name(Some(&name)),
+            None => gtk_settings.set_gtk_font_name(Some(&self.system_font)),
+        }
+    }
+
+    /// Google families chosen earlier live in the app's font cache, not the
+    /// system; register them again, then re-apply so widgets pick them up.
+    fn restore_downloaded_fonts(&self, settings: &UiSettings) {
+        let missing = [&settings.ui_font_family, &settings.editor_font_family]
+            .into_iter()
+            .filter(|family| !family.is_empty() && !app_fonts::family_is_available(family))
+            .cloned()
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return;
+        }
+        let weak = self.weak();
+        super::font_picker::ensure_registered_async(missing, move |results| {
+            for (family, result) in &results {
+                if let Err(error) = result {
+                    eprintln!("Could not restore font {family:?}: {error}");
+                }
+            }
+            if let Some(this) = weak.upgrade() {
+                let settings = this.settings.borrow().clone();
+                this.apply_ui_font(&settings);
+                if let Some(workspace) = this.workspace.borrow().as_ref() {
+                    workspace.apply_settings(settings);
+                }
+            }
+        });
+    }
+
     fn cycle_theme(&self) {
         let mut settings = self.settings.borrow().clone();
         settings.theme = match settings.theme {
@@ -2460,6 +2543,52 @@ impl AppController {
             Theme::Light => adw::ColorScheme::ForceLight,
             Theme::Dark => adw::ColorScheme::ForceDark,
         });
+    }
+
+    /// Present a standalone font picker for screenshots. Configure with
+    /// `TYPSMTHNG_SMOKE_FONT_KIND=ui|editor`, `TYPSMTHNG_SMOKE_FONT_QUERY`
+    /// (opens the Google Fonts page), `TYPSMTHNG_SMOKE_FONT_CURRENT` and
+    /// `TYPSMTHNG_SMOKE_UI_FONT` (downloads a Google family for the UI).
+    fn show_font_picker_smoke(&self) {
+        use super::font_picker::{FontPicker, FontPickerKind};
+        let kind = match std::env::var("TYPSMTHNG_SMOKE_FONT_KIND").as_deref() {
+            Ok("ui") => FontPickerKind::Ui,
+            _ => FontPickerKind::Editor,
+        };
+        let picker = FontPicker::new(kind);
+        picker.set_current(
+            std::env::var("TYPSMTHNG_SMOKE_FONT_CURRENT")
+                .ok()
+                .as_deref(),
+        );
+        picker.connect_selected(|choice| {
+            println!(
+                "TYPESMTHNG_FONT_SELECTED {:?} {:?}",
+                choice.family, choice.source
+            );
+        });
+        if let Ok(query) = std::env::var("TYPSMTHNG_SMOKE_FONT_QUERY") {
+            picker.show_google(&query);
+        }
+        // Download and register a Google family, then use it for the whole UI.
+        if let Ok(family) = std::env::var("TYPSMTHNG_SMOKE_UI_FONT") {
+            super::font_picker::ensure_registered_async(vec![family], |results| {
+                for (family, result) in results {
+                    match result {
+                        Ok(files) => {
+                            println!("TYPESMTHNG_FONT_REGISTERED {family:?} {}", files.len());
+                            if let Some(settings) = gtk::Settings::default() {
+                                settings.set_gtk_font_name(Some(&format!("{family} 11")));
+                            }
+                        }
+                        Err(error) => eprintln!("TYPESMTHNG_FONT_FAILED {family:?} {error}"),
+                    }
+                }
+            });
+        }
+        picker.present(Some(&self.window));
+        // The smoke run exits with the process; keep the picker's state alive.
+        std::mem::forget(picker);
     }
 
     fn show_settings(&self) {
@@ -3611,6 +3740,16 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         system_fonts: settings.system_fonts_enabled,
         google_fonts: settings.google_fonts_enabled,
         translucent: settings.translucent,
+        view_mode: ViewMode::from_id(&settings.view_mode),
+        minimap: settings.minimap,
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_line_height: settings.editor_line_height.clamp(100, 200),
+        editor_ligatures: settings.editor_ligatures,
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: match settings.ui_font_size {
+            0 => 0,
+            size => size.clamp(6, 32),
+        },
     }
 }
 
@@ -3633,6 +3772,13 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         system_fonts_enabled: settings.system_fonts,
         google_fonts_enabled: settings.google_fonts,
         translucent: settings.translucent,
+        view_mode: settings.view_mode.id().into(),
+        minimap: settings.minimap,
+        editor_font_family: settings.editor_font_family.clone(),
+        editor_line_height: settings.editor_line_height,
+        editor_ligatures: settings.editor_ligatures,
+        ui_font_family: settings.ui_font_family.clone(),
+        ui_font_size: settings.ui_font_size,
         ..UserSettings::default()
     }
 }

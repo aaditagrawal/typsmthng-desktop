@@ -79,6 +79,8 @@ jobs:
           for scale in 1 2; do
             dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo GDK_SCALE="$scale" cargo test --locked --bin typsmthng native_svg_pages_follow_zoom_and_display_scale -- --ignored --test-threads=1
           done
+      - name: Typst syntax highlighting grammar and schemes
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --manifest-path native/gtk/Cargo.toml --test typst_highlighting -- --ignored --test-threads=1
       - name: Click-triggered native updates
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
       - name: Clippy

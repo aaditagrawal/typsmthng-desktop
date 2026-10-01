@@ -12,16 +12,31 @@ use sha2::{Digest, Sha256};
 use sourceview5::prelude::*;
 use url::Url;
 
+use super::font_picker::{FontPicker, FontPickerKind};
 use super::home::icon_button;
-use super::model::{SearchMode, Theme, UiSettings};
+use super::minimap::HeadingMinimap;
+use super::model::{
+    editor_css, editor_line_padding, page_size_label, zoom_editor_font, SearchMode, Theme,
+    UiSettings, ViewMode, DEFAULT_EDITOR_FONT_SIZE, EDITOR_FONT_SIZES, EDITOR_LINE_HEIGHTS,
+    PAGE_SIZES, UI_FONT_SIZES_OFFERED,
+};
+use super::zoom::{
+    connect_ctrl_scroll, fit_text_crop, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
+    PIXELS_PER_POINT, PREVIEW_SCROLL_FACTOR,
+};
 
 type SearchCallback = Rc<dyn Fn(SearchMode, String, Rc<dyn Fn(Vec<SearchResultRow>)>)>;
+
+/// Apply a preview zoom, optionally anchored at a viewport point.
+type SetPreviewZoom = Rc<dyn Fn(PreviewZoom, Option<(f64, f64)>)>;
 
 type DiagnosticLocation = (String, Option<usize>, Option<usize>);
 
 const DEFAULT_PREVIEW_WIDTH: f64 = 560.0;
 const DEFAULT_PREVIEW_ASPECT: f64 = 16.0 / 9.0;
 const PREVIEW_HORIZONTAL_INSET: i32 = 64;
+/// Page width assumed for SVGs without a usable viewBox (560 px at 100%).
+const FALLBACK_PAGE_WIDTH: f64 = DEFAULT_PREVIEW_WIDTH / PIXELS_PER_POINT;
 
 #[derive(Debug, PartialEq, Eq)]
 struct PreviewIdentity {
@@ -67,6 +82,74 @@ struct PreviewPicture {
     sheet: gtk::Box,
     widget: gtk::Picture,
     aspect_ratio: f64,
+    /// Page width in SVG user units (points for Typst output).
+    page_width: f64,
+}
+
+/// A document point, as a fraction of one page, held under a viewport point.
+struct PreviewAnchor {
+    page: usize,
+    fraction: (f64, f64),
+    pointer: (f64, f64),
+}
+
+fn preview_anchor(
+    pictures: &[PreviewPicture],
+    scroll: &gtk::ScrolledWindow,
+    pointer: (f64, f64),
+) -> Option<PreviewAnchor> {
+    let bounds = pictures
+        .iter()
+        .map(|picture| picture.widget.compute_bounds(scroll))
+        .collect::<Option<Vec<_>>>()?;
+    // Prefer the page under the pointer, else the vertically nearest page.
+    let distance = |rect: &gtk::graphene::Rect| {
+        let (top, bottom) = (f64::from(rect.y()), f64::from(rect.y() + rect.height()));
+        if pointer.1 < top {
+            top - pointer.1
+        } else if pointer.1 > bottom {
+            pointer.1 - bottom
+        } else {
+            0.0
+        }
+    };
+    let (page, rect) = bounds
+        .iter()
+        .enumerate()
+        .filter(|(_, rect)| rect.width() > 0.0 && rect.height() > 0.0)
+        .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))?;
+    Some(PreviewAnchor {
+        page,
+        fraction: (
+            (pointer.0 - f64::from(rect.x())) / f64::from(rect.width()),
+            (pointer.1 - f64::from(rect.y())) / f64::from(rect.height()),
+        ),
+        pointer,
+    })
+}
+
+fn restore_preview_anchor(
+    pictures: &[PreviewPicture],
+    scroll: &gtk::ScrolledWindow,
+    anchor: &PreviewAnchor,
+) {
+    let Some(rect) = pictures
+        .get(anchor.page)
+        .and_then(|picture| picture.widget.compute_bounds(scroll))
+    else {
+        return;
+    };
+    let x = f64::from(rect.x()) + anchor.fraction.0 * f64::from(rect.width());
+    let y = f64::from(rect.y()) + anchor.fraction.1 * f64::from(rect.height());
+    for (adjustment, drift) in [
+        (scroll.hadjustment(), x - anchor.pointer.0),
+        (scroll.vadjustment(), y - anchor.pointer.1),
+    ] {
+        adjustment.set_value((adjustment.value() + drift).clamp(
+            adjustment.lower(),
+            adjustment.upper() - adjustment.page_size(),
+        ));
+    }
 }
 
 #[derive(Clone)]
@@ -76,6 +159,14 @@ struct SettingsDialog {
     line_numbers: gtk::Switch,
     wrapping: gtk::Switch,
     vim: gtk::Switch,
+    minimap: gtk::Switch,
+    ui_family: Rc<RefCell<String>>,
+    refresh_ui_family: Rc<dyn Fn()>,
+    ui_size: gtk::DropDown,
+    editor_family: Rc<RefCell<String>>,
+    refresh_editor_family: Rc<dyn Fn()>,
+    line_height: gtk::SpinButton,
+    ligatures: gtk::Switch,
     auto_compile: gtk::Switch,
     delay: gtk::SpinButton,
     theme: gtk::DropDown,
@@ -112,6 +203,17 @@ impl SettingsDialog {
         self.line_numbers.set_active(settings.line_numbers);
         self.wrapping.set_active(settings.line_wrapping);
         self.vim.set_active(settings.vim_mode);
+        self.minimap.set_active(settings.minimap);
+        self.ui_family.replace(settings.ui_font_family.clone());
+        (self.refresh_ui_family)();
+        self.ui_size
+            .set_selected(ui_font_size_index(settings.ui_font_size));
+        self.editor_family
+            .replace(settings.editor_font_family.clone());
+        (self.refresh_editor_family)();
+        self.line_height
+            .set_value(f64::from(settings.editor_line_height) / 100.0);
+        self.ligatures.set_active(settings.editor_ligatures);
         self.auto_compile.set_active(settings.auto_compile);
         self.delay.set_value(settings.compile_delay_ms as f64);
         self.theme.set_selected(match settings.theme {
@@ -120,17 +222,7 @@ impl SettingsDialog {
             Theme::Dark => 2,
         });
         self.page_size
-            .set_selected(match settings.page_size.as_str() {
-                "a3" => 1,
-                "a4" => 2,
-                "a5" => 3,
-                "a6" => 4,
-                "us-letter" => 5,
-                "us-legal" => 6,
-                "iso-b5" => 7,
-                "presentation-16-9" => 8,
-                _ => 0,
-            });
+            .set_selected(page_size_index(&settings.page_size));
         self.notes_layout
             .set_selected(match settings.presentation_notes_layout.as_str() {
                 "right-half" => 1,
@@ -196,6 +288,8 @@ pub struct WorkspaceCallbacks {
     pub refresh_compile: Rc<dyn Fn(String)>,
     pub search: SearchCallback,
     pub settings_changed: Rc<dyn Fn(UiSettings)>,
+    /// Persist layout preferences (zoom, panes) without recompiling.
+    pub preferences_changed: Rc<dyn Fn(UiSettings)>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +317,8 @@ pub struct WorkspaceView {
     preview_identity: Rc<RefCell<Option<PreviewIdentity>>>,
     preview_pictures: Rc<RefCell<Vec<PreviewPicture>>>,
     resize_preview: Rc<dyn Fn()>,
+    preview_zoom: Rc<Cell<PreviewZoom>>,
+    content_column: Rc<Cell<Option<(f64, f64)>>>,
     preview_placeholder: gtk::Box,
     diagnostics_list: gtk::ListBox,
     diagnostic_locations: Rc<RefCell<Vec<DiagnosticLocation>>>,
@@ -248,6 +344,10 @@ pub struct WorkspaceView {
     callbacks: WorkspaceCallbacks,
     vim_context: Rc<RefCell<Option<sourceview5::VimIMContext>>>,
     vim_status: gtk::Label,
+    editor_pane: gtk::Widget,
+    view_buttons: [gtk::ToggleButton; 3],
+    editor_badge: ZoomBadge,
+    minimap: gtk::Overlay,
 }
 
 impl WorkspaceView {
@@ -300,6 +400,27 @@ impl WorkspaceView {
         toolbar.append(&theme_button);
         toolbar.append(&search);
         toolbar.append(&file_label);
+        let view_switcher = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        view_switcher.add_css_class("linked");
+        view_switcher.add_css_class("view-switcher");
+        let view_buttons = ViewMode::ALL.map(|mode| {
+            let (icon, tooltip) = match mode {
+                ViewMode::Source => ("document-edit-symbolic", "Source only (Ctrl+1)"),
+                ViewMode::Split => ("view-dual-symbolic", "Source and preview (Ctrl+2)"),
+                ViewMode::Preview => ("document-print-preview-symbolic", "Preview only (Ctrl+3)"),
+            };
+            let button = gtk::ToggleButton::new();
+            button.set_icon_name(icon);
+            button.set_tooltip_text(Some(tooltip));
+            button.add_css_class("flat");
+            view_switcher.append(&button);
+            button
+        });
+        for button in &view_buttons[1..] {
+            button.set_group(Some(&view_buttons[0]));
+        }
+        view_buttons[1].set_active(true);
+        toolbar.append(&view_switcher);
         toolbar.append(&export);
         toolbar.append(&present);
         let more = gtk::MenuButton::new();
@@ -435,8 +556,12 @@ impl WorkspaceView {
 
         let buffer = sourceview5::Buffer::new(None::<&gtk::TextTagTable>);
         let language_manager = sourceview5::LanguageManager::default();
-        for path in language_search_paths() {
+        for path in data_search_paths("language-specs") {
             language_manager.append_search_path(path.to_string_lossy().as_ref());
+        }
+        let scheme_manager = sourceview5::StyleSchemeManager::default();
+        for path in data_search_paths("styles") {
+            scheme_manager.append_search_path(path.to_string_lossy().as_ref());
         }
         if let Some(language) = language_manager.language("typst") {
             buffer.set_language(Some(&language));
@@ -488,7 +613,17 @@ impl WorkspaceView {
         editor_scroll.set_child(Some(&editor));
         editor_scroll.set_hexpand(true);
         editor_scroll.set_vexpand(true);
-        work_paned.set_start_child(Some(&editor_scroll));
+        let editor_overlay = gtk::Overlay::new();
+        editor_overlay.set_child(Some(&editor_scroll));
+        editor_overlay.set_hexpand(true);
+        let editor_badge = ZoomBadge::new();
+        editor_overlay.add_overlay(editor_badge.widget());
+        let minimap = HeadingMinimap::new(&editor);
+        let editor_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        editor_row.add_css_class("editor-row");
+        editor_row.append(&editor_overlay);
+        editor_row.append(minimap.widget());
+        work_paned.set_start_child(Some(&editor_row));
 
         let preview_overlay = gtk::Overlay::new();
         preview_overlay.add_css_class("preview-pane");
@@ -526,39 +661,223 @@ impl WorkspaceView {
         preview_heading.set_halign(gtk::Align::Start);
         preview_controls.append(&preview_heading);
         let zoom_out = icon_button("zoom-out-symbolic", "Zoom out");
-        let zoom_fit = gtk::Button::with_label("Fit");
-        zoom_fit.add_css_class("flat");
+        let zoom_menu = gtk::MenuButton::new();
+        zoom_menu.set_label("Fit");
+        zoom_menu.add_css_class("flat");
+        zoom_menu.add_css_class("zoom-level");
         let zoom_in = icon_button("zoom-in-symbolic", "Zoom in");
         let prev_page = icon_button("go-up-symbolic", "Previous page");
         let next_page = icon_button("go-down-symbolic", "Next page");
         preview_controls.append(&zoom_out);
-        preview_controls.append(&zoom_fit);
+        preview_controls.append(&zoom_menu);
         preview_controls.append(&zoom_in);
         preview_controls.append(&prev_page);
         preview_controls.append(&next_page);
         let preview_panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
         preview_panel.append(&preview_controls);
         preview_panel.append(&preview_overlay);
-        let zoom = Rc::new(Cell::new(1.0_f64));
-        let fit_to_viewport = Rc::new(Cell::new(true));
+        let preview_badge = ZoomBadge::new();
+        preview_overlay.add_overlay(preview_badge.widget());
+        let zoom = Rc::new(Cell::new(PreviewZoom::FitWidth));
+        // Kept across edits: the source map is dropped on every keystroke, but
+        // the text column should not jump while the next compile is pending.
+        let content_column = Rc::new(Cell::new(None::<(f64, f64)>));
+        let displayed_scale: Rc<dyn Fn() -> f64> = {
+            let pictures = preview_pictures.clone();
+            let zoom = zoom.clone();
+            let preview_scroll = preview_scroll.clone();
+            let content_column = content_column.clone();
+            Rc::new(move || {
+                let page_width = pictures
+                    .borrow()
+                    .first()
+                    .map_or(FALLBACK_PAGE_WIDTH, |picture| picture.page_width);
+                zoom.get().scale(
+                    f64::from(preview_scroll.width() - PREVIEW_HORIZONTAL_INSET),
+                    page_width,
+                    content_column.get(),
+                )
+            })
+        };
         let resize_preview: Rc<dyn Fn()> = {
             let pictures = preview_pictures.clone();
             let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
             let preview_scroll = preview_scroll.clone();
+            let zoom_menu = zoom_menu.clone();
+            let displayed_scale = displayed_scale.clone();
+            let content_column = content_column.clone();
             Rc::new(move || {
                 let viewport_width = preview_scroll.width();
                 for picture in pictures.borrow().iter() {
-                    let (width, height) = preview_dimensions(
+                    let size = preview_dimensions(
                         viewport_width,
                         zoom.get(),
-                        fit_to_viewport.get(),
+                        picture.page_width,
                         picture.aspect_ratio,
+                        content_column.get(),
                     );
-                    picture.widget.set_size_request(width, height);
+                    picture.widget.set_size_request(size.width, size.height);
+                    picture.widget.set_content_fit(if size.cropped {
+                        gtk::ContentFit::Cover
+                    } else {
+                        gtk::ContentFit::Contain
+                    });
+                }
+                let scale = format_scale(displayed_scale());
+                let fitted = viewport_width > PREVIEW_HORIZONTAL_INSET;
+                zoom_menu.set_label(&match zoom.get() {
+                    PreviewZoom::FitWidth if fitted => format!("Fit · {scale}"),
+                    PreviewZoom::FitText if fitted => format!("Text · {scale}"),
+                    PreviewZoom::FitWidth | PreviewZoom::FitText => "Fit".into(),
+                    PreviewZoom::Scale(_) => scale,
+                });
+            })
+        };
+        // Zooming keeps the document point under the pointer (or the viewport
+        // centre) fixed. Page sizes change only after the next allocation, so
+        // remember where the anchor sat on its page and restore it afterwards.
+        let pending_anchor = Rc::new(RefCell::new(None::<PreviewAnchor>));
+        let set_zoom: SetPreviewZoom = {
+            let zoom = zoom.clone();
+            let resize = resize_preview.clone();
+            let pictures = preview_pictures.clone();
+            let preview_scroll = preview_scroll.clone();
+            let preview_pages = preview_pages.clone();
+            let badge = preview_badge.clone();
+            let displayed_scale = displayed_scale.clone();
+            Rc::new(move |next, pointer| {
+                let pointer = pointer.unwrap_or_else(|| {
+                    (
+                        f64::from(preview_scroll.width()) / 2.0,
+                        f64::from(preview_scroll.height()) / 2.0,
+                    )
+                });
+                let schedule = {
+                    let mut pending = pending_anchor.borrow_mut();
+                    match pending.as_mut() {
+                        // Rapid wheel events: the layout is still stale, keep
+                        // the original page fraction and follow the pointer.
+                        Some(anchor) => {
+                            anchor.pointer = pointer;
+                            false
+                        }
+                        None => {
+                            *pending = preview_anchor(&pictures.borrow(), &preview_scroll, pointer);
+                            pending.is_some()
+                        }
+                    }
+                };
+                zoom.set(next);
+                resize();
+                badge.show(&format_scale(displayed_scale()));
+                if schedule {
+                    let pending_anchor = pending_anchor.clone();
+                    let pictures = pictures.clone();
+                    let preview_scroll = preview_scroll.clone();
+                    let allocated_once = Cell::new(false);
+                    preview_pages.add_tick_callback(move |_, _| {
+                        if !allocated_once.replace(true) {
+                            return glib::ControlFlow::Continue;
+                        }
+                        if let Some(anchor) = pending_anchor.borrow_mut().take() {
+                            restore_preview_anchor(&pictures.borrow(), &preview_scroll, &anchor);
+                        }
+                        glib::ControlFlow::Break
+                    });
                 }
             })
         };
+        let zoom_popover = gtk::Popover::new();
+        let zoom_choices = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        zoom_choices.set_margin_top(6);
+        zoom_choices.set_margin_bottom(6);
+        zoom_choices.set_margin_start(6);
+        zoom_choices.set_margin_end(6);
+        let fit_text = gtk::Button::with_label("Fit text width");
+        fit_text.add_css_class("flat");
+        fit_text.set_tooltip_text(Some("Crop the side margins"));
+        fit_text.connect_clicked({
+            let set_zoom = set_zoom.clone();
+            let popover = zoom_popover.clone();
+            move |_| {
+                popover.popdown();
+                set_zoom(PreviewZoom::FitText, None);
+            }
+        });
+        let fit_width = gtk::Button::with_label("Fit page width");
+        fit_width.add_css_class("flat");
+        fit_width.connect_clicked({
+            let set_zoom = set_zoom.clone();
+            let popover = zoom_popover.clone();
+            move |_| {
+                popover.popdown();
+                set_zoom(PreviewZoom::FitWidth, None);
+            }
+        });
+        zoom_choices.append(&fit_width);
+        zoom_choices.append(&fit_text);
+        zoom_choices.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        for scale in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] {
+            let label = if scale == 1.0 {
+                "100% · actual size".to_string()
+            } else {
+                format_scale(scale)
+            };
+            let choice = gtk::Button::with_label(&label);
+            choice.add_css_class("flat");
+            if let Some(label) = choice.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
+            }
+            choice.connect_clicked({
+                let set_zoom = set_zoom.clone();
+                let popover = zoom_popover.clone();
+                move |_| {
+                    popover.popdown();
+                    set_zoom(PreviewZoom::Scale(scale), None);
+                }
+            });
+            zoom_choices.append(&choice);
+        }
+        for button in [&fit_width, &fit_text] {
+            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
+            }
+        }
+        zoom_popover.set_child(Some(&zoom_choices));
+        zoom_menu.set_popover(Some(&zoom_popover));
+        for (button, direction) in [(&zoom_out, -1), (&zoom_in, 1)] {
+            let set_zoom = set_zoom.clone();
+            let displayed_scale = displayed_scale.clone();
+            button.connect_clicked(move |_| {
+                set_zoom(
+                    PreviewZoom::clamped(step_preview_scale(displayed_scale(), direction)),
+                    None,
+                );
+            });
+        }
+        connect_ctrl_scroll(&preview_scroll, {
+            let set_zoom = set_zoom.clone();
+            let displayed_scale = displayed_scale.clone();
+            move |steps, x, y| {
+                let scale = displayed_scale() * PREVIEW_SCROLL_FACTOR.powi(steps);
+                set_zoom(PreviewZoom::clamped(scale), Some((x, y)));
+            }
+        });
+        let pinch = gtk::GestureZoom::new();
+        let pinch_start = Rc::new(Cell::new(1.0));
+        pinch.connect_begin({
+            let pinch_start = pinch_start.clone();
+            let displayed_scale = displayed_scale.clone();
+            move |_, _| pinch_start.set(displayed_scale())
+        });
+        pinch.connect_scale_changed({
+            let set_zoom = set_zoom.clone();
+            move |gesture, delta| {
+                let centre = gesture.bounding_box_center();
+                set_zoom(PreviewZoom::clamped(pinch_start.get() * delta), centre);
+            }
+        });
+        preview_scroll.add_controller(pinch);
         // GdkSurface::layout reports actual native resize events. GTK's
         // default-width is only a requested size, and Widget has no width
         // property notification. Wait for allocation without an idle frame loop.
@@ -566,11 +885,11 @@ impl WorkspaceView {
         let refresh_layout: Rc<dyn Fn()> = {
             let root = root.downgrade();
             let resize = resize_preview.clone();
-            let fit = fit_to_viewport.clone();
+            let zoom = zoom.clone();
             Rc::new(move || {
                 if let Some(root) = root.upgrade() {
                     adapt_layout(root.width());
-                    if fit.get() {
+                    if matches!(zoom.get(), PreviewZoom::FitWidth | PreviewZoom::FitText) {
                         resize();
                     }
                 }
@@ -610,36 +929,6 @@ impl WorkspaceView {
             paned.connect_position_notify(move |_| schedule());
         }
         sidebar.connect_visible_notify(move |_| schedule_layout());
-        zoom_out.connect_clicked({
-            let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
-            let resize = resize_preview.clone();
-            move |_| {
-                zoom.set((zoom.get() - 0.1).max(0.3));
-                fit_to_viewport.set(false);
-                resize();
-            }
-        });
-        zoom_in.connect_clicked({
-            let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
-            let resize = resize_preview.clone();
-            move |_| {
-                zoom.set((zoom.get() + 0.1).min(3.0));
-                fit_to_viewport.set(false);
-                resize();
-            }
-        });
-        zoom_fit.connect_clicked({
-            let zoom = zoom.clone();
-            let fit_to_viewport = fit_to_viewport.clone();
-            let resize = resize_preview.clone();
-            move |_| {
-                zoom.set(1.0);
-                fit_to_viewport.set(true);
-                resize();
-            }
-        });
         prev_page.connect_clicked({
             let scroll = preview_scroll.clone();
             let pictures = preview_pictures.clone();
@@ -850,7 +1139,12 @@ impl WorkspaceView {
             let select = callbacks.select_file.clone();
             let buffer = buffer.clone();
             let editor = editor.clone();
+            let reveal_source = view_buttons[1].clone();
+            let editor_pane = editor_row.clone();
             move |_, row| {
+                if !editor_pane.is_visible() {
+                    reveal_source.set_active(true);
+                }
                 let Some((path, line, column)) =
                     locations.borrow().get(row.index() as usize).cloned()
                 else {
@@ -981,7 +1275,34 @@ impl WorkspaceView {
             });
         }
 
-        Self {
+        for (mode, button) in ViewMode::ALL.into_iter().zip(&view_buttons) {
+            let settings = settings.clone();
+            let persist = callbacks.preferences_changed.clone();
+            let editor_pane = editor_row.clone();
+            let preview_panel = preview_panel.clone();
+            let editor = editor.clone();
+            button.connect_toggled(move |button| {
+                if !button.is_active() {
+                    return;
+                }
+                editor_pane.set_visible(mode.shows_source());
+                preview_panel.set_visible(mode.shows_preview());
+                if mode.shows_source() {
+                    editor.grab_focus();
+                }
+                let changed = {
+                    let mut settings = settings.borrow_mut();
+                    let changed = settings.view_mode != mode;
+                    settings.view_mode = mode;
+                    changed.then(|| settings.clone())
+                };
+                if let Some(settings) = changed {
+                    persist(settings);
+                }
+            });
+        }
+
+        let view = Self {
             root,
             editor,
             buffer,
@@ -996,6 +1317,8 @@ impl WorkspaceView {
             preview_identity: Rc::new(RefCell::new(None)),
             preview_pictures,
             resize_preview,
+            preview_zoom: zoom,
+            content_column,
             preview_placeholder,
             diagnostics_list,
             diagnostic_locations,
@@ -1021,6 +1344,63 @@ impl WorkspaceView {
             callbacks,
             vim_context,
             vim_status,
+            editor_pane: editor_row.upcast(),
+            minimap: minimap.widget().clone(),
+            editor_badge,
+            view_buttons,
+        };
+        view.install_editor_zoom(&editor_scroll);
+        view
+    }
+
+    fn install_editor_zoom(&self, editor_scroll: &gtk::ScrolledWindow) {
+        let this = self.downgrade_zoom();
+        connect_ctrl_scroll(editor_scroll, {
+            let this = this.clone();
+            move |steps, _, _| {
+                if let Some(this) = this.upgrade() {
+                    let size = this.settings.borrow().font_size;
+                    this.set_editor_font_size(zoom_editor_font(size, steps));
+                }
+            }
+        });
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(move |_, key, _, modifiers| {
+            use gtk::gdk::Key;
+            let modifiers = modifiers & gtk::accelerator_get_default_mod_mask();
+            // Shift is tolerated so Ctrl++ works on layouts where + is shifted.
+            if !modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                || modifiers.intersects(
+                    gtk::gdk::ModifierType::ALT_MASK | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+            {
+                return glib::Propagation::Proceed;
+            }
+            let Some(this) = this.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let size = this.settings.borrow().font_size;
+            let target = match key {
+                Key::plus | Key::equal | Key::KP_Add => zoom_editor_font(size, 1),
+                Key::minus | Key::underscore | Key::KP_Subtract => zoom_editor_font(size, -1),
+                Key::_0 | Key::KP_0 => DEFAULT_EDITOR_FONT_SIZE,
+                _ => return glib::Propagation::Proceed,
+            };
+            this.set_editor_font_size(target);
+            glib::Propagation::Stop
+        });
+        self.editor.add_controller(keys);
+    }
+
+    /// Controllers owned by child widgets must not keep the whole view alive.
+    fn downgrade_zoom(&self) -> WeakEditorZoom {
+        WeakEditorZoom {
+            editor: self.editor.downgrade(),
+            editor_style: self.editor_style.clone(),
+            settings: Rc::downgrade(&self.settings),
+            persist: self.callbacks.preferences_changed.clone(),
+            badge: self.editor_badge.clone(),
         }
     }
 
@@ -1459,10 +1839,10 @@ impl WorkspaceView {
                 }
             }
             let svg = &contents[index];
-            let aspect_ratio = svg
-                .as_deref()
-                .and_then(svg_aspect_ratio)
-                .unwrap_or(DEFAULT_PREVIEW_ASPECT);
+            let (page_width, aspect_ratio) = svg.as_deref().and_then(svg_page_size).map_or(
+                (FALLBACK_PAGE_WIDTH, DEFAULT_PREVIEW_ASPECT),
+                |(width, height)| (width, width / height),
+            );
             let links = svg
                 .as_deref()
                 .map(extract_external_links)
@@ -1502,6 +1882,8 @@ impl WorkspaceView {
                     let picture = picture.downgrade();
                     let status = self.compile_label.clone();
                     let file_label = self.file_label.clone();
+                    let reveal_source = self.view_buttons[1].clone();
+                    let editor_pane = self.editor_pane.clone();
                     move |_, press_count, x, y| {
                         if press_count != 1 {
                             return;
@@ -1526,6 +1908,7 @@ impl WorkspaceView {
                             f64::from(picture.width()),
                             f64::from(picture.height()),
                             aspect_ratio,
+                            picture.content_fit() == gtk::ContentFit::Cover,
                             page_height,
                             x,
                             y,
@@ -1533,6 +1916,10 @@ impl WorkspaceView {
                             return;
                         };
                         if let Some(location) = map.jump(index, x, y) {
+                            // Jumping to source from a preview-only layout needs the editor.
+                            if !editor_pane.is_visible() {
+                                reveal_source.set_active(true);
+                            }
                             if file_label.text().as_str() != location.path {
                                 select(location.path.clone());
                             }
@@ -1581,6 +1968,7 @@ impl WorkspaceView {
                 sheet: sheet.clone(),
                 widget: picture,
                 aspect_ratio,
+                page_width,
             });
             self.preview_pages.append(&sheet);
         }
@@ -1600,6 +1988,14 @@ impl WorkspaceView {
     }
 
     pub fn set_source_map(&self, source_map: Option<Arc<SourceMap>>) {
+        if let Some(map) = &source_map {
+            let column = map.content_column();
+            if self.content_column.replace(column) != column
+                && self.preview_zoom.get() == PreviewZoom::FitText
+            {
+                (self.resize_preview)();
+            }
+        }
         self.source_map.replace(source_map);
     }
 
@@ -1704,20 +2100,14 @@ impl WorkspaceView {
         // GtkSourceView's buffer scheme controls text-node background, syntax,
         // selection and gutter separately from the surrounding GTK theme.
         let schemes = sourceview5::StyleSchemeManager::default();
-        let scheme = if dark {
-            schemes
-                .scheme("Adwaita-dark")
-                .or_else(|| schemes.scheme("classic-dark"))
+        let preferred: &[&str] = if dark {
+            &["typsmthng-dark", "Adwaita-dark", "classic-dark"]
         } else {
-            schemes
-                .scheme("Adwaita")
-                .or_else(|| schemes.scheme("classic"))
+            &["typsmthng-light", "Adwaita", "classic"]
         };
+        let scheme = preferred.iter().find_map(|id| schemes.scheme(id));
         self.buffer.set_style_scheme(scheme.as_ref());
-        self.editor_style.load_from_string(&format!(
-            ".typst-editor {{ font-size: {}pt; }}",
-            settings.font_size
-        ));
+        apply_editor_typography(&self.editor, &self.editor_style, &settings);
         if settings.vim_mode && self.vim_context.borrow().is_none() {
             let vim = sourceview5::VimIMContext::new();
             vim.set_client_widget(Some(&self.editor));
@@ -1755,8 +2145,101 @@ impl WorkspaceView {
             self.vim_context.replace(None);
         }
         self.vim_status.set_visible(settings.vim_mode);
+        self.minimap.set_visible(settings.minimap);
+        let view_mode = settings.view_mode;
         self.settings.replace(settings);
+        self.set_view_mode(view_mode);
     }
+
+    pub fn toggle_minimap(&self) {
+        let settings = {
+            let mut settings = self.settings.borrow_mut();
+            settings.minimap = !settings.minimap;
+            settings.clone()
+        };
+        self.minimap.set_visible(settings.minimap);
+        (self.callbacks.preferences_changed)(settings);
+    }
+
+    pub fn set_view_mode(&self, mode: ViewMode) {
+        if let Some(index) = ViewMode::ALL
+            .iter()
+            .position(|candidate| *candidate == mode)
+        {
+            self.view_buttons[index].set_active(true);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WeakEditorZoom {
+    editor: glib::WeakRef<sourceview5::View>,
+    editor_style: gtk::CssProvider,
+    settings: std::rc::Weak<RefCell<UiSettings>>,
+    persist: Rc<dyn Fn(UiSettings)>,
+    badge: ZoomBadge,
+}
+
+struct EditorZoom {
+    editor: sourceview5::View,
+    editor_style: gtk::CssProvider,
+    settings: Rc<RefCell<UiSettings>>,
+    persist: Rc<dyn Fn(UiSettings)>,
+    badge: ZoomBadge,
+}
+
+impl WeakEditorZoom {
+    fn upgrade(&self) -> Option<EditorZoom> {
+        Some(EditorZoom {
+            editor: self.editor.upgrade()?,
+            editor_style: self.editor_style.clone(),
+            settings: self.settings.upgrade()?,
+            persist: self.persist.clone(),
+            badge: self.badge.clone(),
+        })
+    }
+}
+
+impl EditorZoom {
+    fn set_editor_font_size(&self, size: u32) {
+        self.badge.show(&format!("{size} pt"));
+        let settings = {
+            let mut settings = self.settings.borrow_mut();
+            if settings.font_size == size {
+                return;
+            }
+            settings.font_size = size;
+            settings.clone()
+        };
+        // Keep the first visible line in place while the text reflows.
+        let visible = self.editor.visible_rect();
+        let anchor = self
+            .editor
+            .iter_at_location(visible.x(), visible.y())
+            .map(|iter| self.editor.buffer().create_mark(None, &iter, true));
+        apply_editor_typography(&self.editor, &self.editor_style, &settings);
+        if let Some(anchor) = anchor {
+            let editor = self.editor.clone();
+            glib::idle_add_local_once(move || {
+                editor.scroll_to_mark(&anchor, 0.0, true, 0.0, 0.0);
+                editor.buffer().delete_mark(&anchor);
+            });
+        }
+        (self.persist)(settings);
+    }
+}
+
+/// Apply font family, size, features and line spacing to the editor.
+fn apply_editor_typography(
+    editor: &sourceview5::View,
+    style: &gtk::CssProvider,
+    settings: &UiSettings,
+) {
+    style.load_from_string(&editor_css(settings));
+    let (above, below) = editor_line_padding(settings.font_size, settings.editor_line_height);
+    editor.set_pixels_above_lines(above);
+    editor.set_pixels_below_lines(below);
+    editor.set_pixels_inside_wrap(above + below);
 }
 
 // Tick callbacks run before allocation. The second frame sees the first
@@ -1888,16 +2371,23 @@ fn ancestor_directories(path: &str) -> impl Iterator<Item = &str> {
     path.match_indices('/').map(|(index, _)| &path[..index])
 }
 
-fn language_search_paths() -> Vec<PathBuf> {
+/// Candidate directories for bundled GtkSourceView data (`language-specs`,
+/// `styles`): macOS bundle resources, installed Linux/Windows prefixes, then
+/// the source tree for development builds.
+fn data_search_paths(name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(executable) = std::env::current_exe() {
         if let Some(directory) = executable.parent() {
-            paths.push(directory.join("../Resources/language-specs"));
-            paths.push(directory.join("../share/typsmthng/language-specs"));
-            paths.push(directory.join("share/typsmthng/language-specs"));
+            paths.push(directory.join("../Resources").join(name));
+            paths.push(directory.join("../share/typsmthng").join(name));
+            paths.push(directory.join("share/typsmthng").join(name));
         }
     }
-    paths.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/language-specs"));
+    paths.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join(name),
+    );
     paths
 }
 
@@ -1913,27 +2403,59 @@ fn should_uncomment_lines(lines: &[String]) -> bool {
         })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewSize {
+    width: i32,
+    height: i32,
+    /// The widget shows a centred strip of the page (`ContentFit::Cover`).
+    cropped: bool,
+}
+
 fn preview_dimensions(
     viewport_width: i32,
-    zoom: f64,
-    fit_to_viewport: bool,
+    zoom: PreviewZoom,
+    page_width: f64,
     aspect_ratio: f64,
-) -> (i32, i32) {
+    content_column: Option<(f64, f64)>,
+) -> PreviewSize {
     let aspect_ratio = if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
         aspect_ratio
     } else {
         DEFAULT_PREVIEW_ASPECT
     };
-    let width = if fit_to_viewport && viewport_width > PREVIEW_HORIZONTAL_INSET {
-        f64::from(viewport_width - PREVIEW_HORIZONTAL_INSET)
+    let page_width = if page_width.is_finite() && page_width > 0.0 {
+        page_width
     } else {
-        DEFAULT_PREVIEW_WIDTH * zoom.clamp(0.3, 3.0)
+        FALLBACK_PAGE_WIDTH
+    };
+    let available = viewport_width - PREVIEW_HORIZONTAL_INSET;
+    let (width, visible_width) = match (zoom, content_column) {
+        (PreviewZoom::FitWidth | PreviewZoom::FitText, _) if available <= 0 => {
+            (DEFAULT_PREVIEW_WIDTH, page_width)
+        }
+        (PreviewZoom::FitText, Some(column)) => {
+            (f64::from(available), fit_text_crop(page_width, column))
+        }
+        (PreviewZoom::FitWidth | PreviewZoom::FitText, _) => (f64::from(available), page_width),
+        (PreviewZoom::Scale(scale), _) => (page_width * PIXELS_PER_POINT * scale, page_width),
+    };
+    let width = width.max(48.0);
+    // The full page height at the scale that makes the visible strip `width`.
+    let height = width * page_width / visible_width / aspect_ratio;
+    PreviewSize {
+        width: width.round() as i32,
+        height: height.round() as i32,
+        cropped: visible_width < page_width,
     }
-    .max(180.0);
-    (width.round() as i32, (width / aspect_ratio).round() as i32)
 }
 
+#[cfg(test)]
 fn svg_aspect_ratio(svg: &str) -> Option<f64> {
+    svg_page_size(svg).map(|(width, height)| width / height)
+}
+
+/// The root viewBox (or width/height) size; Typst emits points.
+fn svg_page_size(svg: &str) -> Option<(f64, f64)> {
     let root_start = svg.find("<svg")?;
     let root_end = svg[root_start..].find('>')? + root_start;
     let svg = &svg[root_start..=root_end];
@@ -1950,7 +2472,7 @@ fn svg_aspect_ratio(svg: &str) -> Option<f64> {
         let width = captures.get(1)?.as_str().parse::<f64>().ok()?;
         let height = captures.get(2)?.as_str().parse::<f64>().ok()?;
         if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
-            return Some(width / height);
+            return Some((width, height));
         }
     }
     let width_regex = WIDTH.get_or_init(|| {
@@ -1972,7 +2494,7 @@ fn svg_aspect_ratio(svg: &str) -> Option<f64> {
         .parse::<f64>()
         .ok()?;
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
-        .then_some(width / height)
+        .then_some((width, height))
 }
 
 fn extract_external_links(svg: &str) -> Vec<String> {
@@ -2030,6 +2552,7 @@ fn preview_point(
     width: f64,
     height: f64,
     aspect: f64,
+    cropped: bool,
     page_height: f64,
     x: f64,
     y: f64,
@@ -2037,7 +2560,12 @@ fn preview_point(
     if width <= 0.0 || height <= 0.0 || aspect <= 0.0 {
         return None;
     }
-    let drawn_height = height.min(width / aspect);
+    // Contain letterboxes the page; Cover overflows and crops it centrally.
+    let drawn_height = if cropped {
+        height.max(width / aspect)
+    } else {
+        height.min(width / aspect)
+    };
     let drawn_width = drawn_height * aspect;
     let x = x - (width - drawn_width) / 2.0;
     let y = y - (height - drawn_height) / 2.0;
@@ -2267,13 +2795,6 @@ fn build_settings_dialog(
     rows.set_margin_end(22);
     let group = adw::PreferencesGroup::builder().title("Editor").build();
     rows.append(&group);
-    let font = gtk::SpinButton::with_range(10.0, 28.0, 1.0);
-    font.set_value(settings.borrow().font_size as f64);
-    group.add(&setting_row(
-        "Editor font size",
-        "Points used by GtkSourceView",
-        &font,
-    ));
     let line_numbers = gtk::Switch::new();
     line_numbers.set_active(settings.borrow().line_numbers);
     group.add(&setting_row(
@@ -2288,12 +2809,100 @@ fn build_settings_dialog(
         "Wrap long source lines",
         &wrapping,
     ));
+    let minimap = gtk::Switch::new();
+    minimap.set_active(settings.borrow().minimap);
+    group.add(&setting_row(
+        "Heading minimap",
+        "Overview with section titles beside the source (Ctrl+Shift+M)",
+        &minimap,
+    ));
     let vim = gtk::Switch::new();
     vim.set_active(settings.borrow().vim_mode);
     group.add(&setting_row(
         "Vim input",
         "Use GtkSourceView's native Vim mode",
         &vim,
+    ));
+    let group = adw::PreferencesGroup::builder()
+        .title("Fonts")
+        .description("Installed families, or any Google Fonts family downloaded on demand")
+        .build();
+    rows.append(&group);
+    let FontFamilyRow {
+        row: ui_family_row,
+        family: ui_family,
+        refresh: refresh_ui_family,
+    } = font_family_row(
+        &dialog,
+        FontPickerKind::Ui,
+        "Interface font",
+        "Menus, panels and dialogs",
+        "System",
+        &settings.borrow().ui_font_family,
+    );
+    group.add(&ui_family_row);
+    let ui_size_labels = std::iter::once("Auto".to_string())
+        .chain(
+            UI_FONT_SIZES_OFFERED
+                .iter()
+                .map(|size| format!("{size} pt")),
+        )
+        .collect::<Vec<_>>();
+    let ui_size = gtk::DropDown::from_strings(
+        &ui_size_labels
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    );
+    ui_size.set_selected(ui_font_size_index(settings.borrow().ui_font_size));
+    group.add(&setting_row(
+        "Interface text size",
+        "Auto follows the desktop",
+        &ui_size,
+    ));
+    let FontFamilyRow {
+        row: editor_family_row,
+        family: editor_family,
+        refresh: refresh_editor_family,
+    } = font_family_row(
+        &dialog,
+        FontPickerKind::Editor,
+        "Editor font",
+        "Source text; monospace families are listed first",
+        "System monospace",
+        &settings.borrow().editor_font_family,
+    );
+    group.add(&editor_family_row);
+    let font = gtk::SpinButton::with_range(
+        f64::from(*EDITOR_FONT_SIZES.start()),
+        f64::from(*EDITOR_FONT_SIZES.end()),
+        1.0,
+    );
+    font.set_value(settings.borrow().font_size as f64);
+    group.add(&setting_row(
+        "Editor font size",
+        "Ctrl+scroll or Ctrl+= / Ctrl+- in the editor",
+        &font,
+    ));
+    // Shown as a multiplier (1.30) and stored as a percentage (130).
+    let line_height = gtk::SpinButton::with_range(
+        f64::from(*EDITOR_LINE_HEIGHTS.start()) / 100.0,
+        f64::from(*EDITOR_LINE_HEIGHTS.end()) / 100.0,
+        0.05,
+    );
+    line_height.set_digits(2);
+    line_height.set_value(f64::from(settings.borrow().editor_line_height) / 100.0);
+    group.add(&setting_row(
+        "Line spacing",
+        "Multiple of the font's line height",
+        &line_height,
+    ));
+    let ligatures = gtk::Switch::new();
+    ligatures.set_active(settings.borrow().editor_ligatures);
+    group.add(&setting_row(
+        "Ligatures",
+        "Join sequences like -> and != when the font supports it",
+        &ligatures,
     ));
     let group = adw::PreferencesGroup::builder()
         .title("Compilation")
@@ -2324,32 +2933,15 @@ fn build_settings_dialog(
         "Native light or dark palette",
         &theme,
     ));
-    let page_size = gtk::DropDown::from_strings(&[
-        "Auto (A4)",
-        "A3",
-        "A4",
-        "A5",
-        "A6",
-        "US Letter",
-        "US Legal",
-        "ISO B5",
-        "Presentation 16:9",
-    ]);
-    let selected_page_size = match settings.borrow().page_size.as_str() {
-        "a3" => 1,
-        "a4" => 2,
-        "a5" => 3,
-        "a6" => 4,
-        "us-letter" => 5,
-        "us-legal" => 6,
-        "iso-b5" => 7,
-        "presentation-16-9" => 8,
-        _ => 0,
-    };
-    page_size.set_selected(selected_page_size);
+    let auto_label = format!("Auto ({})", page_size_label(super::locale_page_size()));
+    let page_size_labels = std::iter::once(auto_label.as_str())
+        .chain(PAGE_SIZES.iter().map(|(_, label)| *label))
+        .collect::<Vec<_>>();
+    let page_size = gtk::DropDown::from_strings(&page_size_labels);
+    page_size.set_selected(page_size_index(&settings.borrow().page_size));
     group.add(&setting_row(
         "Page size",
-        "Optional page preamble",
+        "Auto follows your region's paper; #set page overrides",
         &page_size,
     ));
     let notes_layout =
@@ -2407,6 +2999,14 @@ fn build_settings_dialog(
         line_numbers: line_numbers.clone(),
         wrapping: wrapping.clone(),
         vim: vim.clone(),
+        minimap: minimap.clone(),
+        ui_family: ui_family.clone(),
+        refresh_ui_family: refresh_ui_family.clone(),
+        ui_size: ui_size.clone(),
+        editor_family: editor_family.clone(),
+        refresh_editor_family: refresh_editor_family.clone(),
+        line_height: line_height.clone(),
+        ligatures: ligatures.clone(),
         auto_compile: auto_compile.clone(),
         delay: delay.clone(),
         theme: theme.clone(),
@@ -2430,30 +3030,33 @@ fn build_settings_dialog(
                 line_numbers: line_numbers.is_active(),
                 line_wrapping: wrapping.is_active(),
                 vim_mode: vim.is_active(),
+                minimap: minimap.is_active(),
+                ui_font_family: ui_family.borrow().clone(),
+                ui_font_size: (ui_size.selected() as usize)
+                    .checked_sub(1)
+                    .and_then(|index| UI_FONT_SIZES_OFFERED.get(index))
+                    .copied()
+                    .unwrap_or(0),
+                editor_font_family: editor_family.borrow().clone(),
+                editor_line_height: (line_height.value() * 100.0).round() as u32,
+                editor_ligatures: ligatures.is_active(),
                 auto_compile: auto_compile.is_active(),
                 compile_delay_ms: delay.value() as u32,
-                page_size: match page_size.selected() {
-                    1 => "a3",
-                    2 => "a4",
-                    3 => "a5",
-                    4 => "a6",
-                    5 => "us-letter",
-                    6 => "us-legal",
-                    7 => "iso-b5",
-                    8 => "presentation-16-9",
-                    _ => "auto",
-                }
-                .into(),
+                page_size: (page_size.selected() as usize)
+                    .checked_sub(1)
+                    .and_then(|index| PAGE_SIZES.get(index))
+                    .map_or("auto", |(id, _)| id)
+                    .into(),
                 presentation_notes_layout: match notes_layout.selected() {
                     1 => "right-half",
                     2 => "whole",
                     _ => "auto",
                 }
                 .into(),
-                presentation_notes_font_size: settings.borrow().presentation_notes_font_size,
                 system_fonts: system_fonts.is_active(),
                 google_fonts: google_fonts.is_active(),
                 translucent: translucent.is_active(),
+                ..settings.borrow().clone()
             };
             settings.replace(value.clone());
             on_changed(value);
@@ -2461,6 +3064,122 @@ fn build_settings_dialog(
         }
     });
     settings_dialog
+}
+
+struct FontFamilyRow {
+    row: adw::ActionRow,
+    /// The pending family; empty means the default.
+    family: Rc<RefCell<String>>,
+    refresh: Rc<dyn Fn()>,
+}
+
+/// A settings row that shows a font family in its own face and opens a
+/// picker.
+fn font_family_row(
+    dialog: &gtk::Window,
+    kind: FontPickerKind,
+    title: &str,
+    subtitle: &str,
+    default_label: &'static str,
+    initial: &str,
+) -> FontFamilyRow {
+    let family = Rc::new(RefCell::new(initial.to_string()));
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .activatable(true)
+        .build();
+    let choose = gtk::Button::new();
+    choose.add_css_class("flat");
+    choose.set_valign(gtk::Align::Center);
+    let label = gtk::Label::new(None);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_max_width_chars(18);
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.append(&label);
+    content.append(&gtk::Image::from_icon_name("go-next-symbolic"));
+    choose.set_child(Some(&content));
+    let reset = gtk::Button::from_icon_name("edit-clear-symbolic");
+    reset.add_css_class("flat");
+    reset.set_valign(gtk::Align::Center);
+    reset.set_tooltip_text(Some("Use the default font"));
+    row.add_suffix(&reset);
+    row.add_suffix(&choose);
+    row.set_activatable_widget(Some(&choose));
+    let refresh: Rc<dyn Fn()> = Rc::new({
+        let family = family.clone();
+        let label = label.clone();
+        let reset = reset.clone();
+        move || {
+            let family = family.borrow();
+            // Preview the family in its own face, like a type specimen.
+            let attributes = gtk::pango::AttrList::new();
+            if !family.is_empty() {
+                attributes.insert(gtk::pango::AttrFontDesc::new(
+                    &gtk::pango::FontDescription::from_string(&family),
+                ));
+            }
+            label.set_attributes(Some(&attributes));
+            label.set_text(if family.is_empty() {
+                default_label
+            } else {
+                &family
+            });
+            reset.set_visible(!family.is_empty());
+        }
+    });
+    refresh();
+    let picker = Rc::new(RefCell::new(None::<Rc<FontPicker>>));
+    choose.connect_clicked({
+        let dialog = dialog.clone();
+        let family = family.clone();
+        let refresh = refresh.clone();
+        move |_| {
+            let picker = picker
+                .borrow_mut()
+                .get_or_insert_with(|| {
+                    let picker = Rc::new(FontPicker::new(kind));
+                    let family = family.clone();
+                    let refresh = refresh.clone();
+                    picker.connect_selected(move |choice| {
+                        family.replace(choice.family.clone());
+                        refresh();
+                    });
+                    picker
+                })
+                .clone();
+            let current = family.borrow().clone();
+            picker.set_current((!current.is_empty()).then_some(current.as_str()));
+            picker.present(Some(&dialog));
+        }
+    });
+    reset.connect_clicked({
+        let family = family.clone();
+        let refresh = refresh.clone();
+        move |_| {
+            family.borrow_mut().clear();
+            refresh();
+        }
+    });
+    FontFamilyRow {
+        row,
+        family,
+        refresh,
+    }
+}
+
+fn ui_font_size_index(size: u32) -> u32 {
+    UI_FONT_SIZES_OFFERED
+        .iter()
+        .position(|candidate| *candidate == size)
+        .map_or(0, |index| index as u32 + 1)
+}
+
+fn page_size_index(id: &str) -> u32 {
+    PAGE_SIZES
+        .iter()
+        .position(|(candidate, _)| *candidate == id)
+        .map_or(0, |index| index as u32 + 1)
 }
 
 fn setting_row(label: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> adw::ActionRow {
@@ -2644,7 +3363,7 @@ mod tests {
     use super::{
         document_match_offsets, document_regex, extract_external_links, preview_dimensions,
         preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
-        svg_aspect_ratio,
+        svg_aspect_ratio, PreviewZoom,
     };
 
     #[test]
@@ -2714,9 +3433,20 @@ mod tests {
 
     #[test]
     fn preview_fit_uses_viewport_and_svg_aspect() {
-        assert_eq!(preview_dimensions(900, 1.0, true, 2.0), (836, 418));
-        assert_eq!(preview_dimensions(900, 1.5, false, 2.0), (840, 420));
-        assert_eq!(preview_dimensions(0, 1.0, true, 2.0), (560, 280));
+        let size = |viewport, zoom, page_width, aspect| {
+            let size = preview_dimensions(viewport, zoom, page_width, aspect, None);
+            (size.width, size.height)
+        };
+        let fit = PreviewZoom::FitWidth;
+        assert_eq!(size(900, fit, 595.0, 2.0), (836, 418));
+        assert_eq!(size(900, PreviewZoom::Scale(1.5), 420.0, 2.0), (840, 420));
+        // 100% is the page's physical size at 96 DPI: A4 is 794 px wide.
+        assert_eq!(
+            size(900, PreviewZoom::Scale(1.0), 595.28, 595.28 / 841.89).0,
+            794
+        );
+        assert_eq!(size(0, fit, 595.0, 2.0), (560, 280));
+        assert_eq!(size(900, PreviewZoom::FitText, 595.0, 2.0), (836, 418));
         assert_eq!(
             svg_aspect_ratio(r#"<svg viewBox="0 0 800 400"></svg>"#),
             Some(2.0)
@@ -2746,17 +3476,44 @@ mod tests {
     }
 
     #[test]
+    fn fit_text_crops_margins_and_keeps_full_page_height() {
+        let a4 = (595.28, 841.89);
+        let column = (70.87, 524.41);
+        let size = preview_dimensions(436, PreviewZoom::FitText, a4.0, a4.0 / a4.1, Some(column));
+        assert!(size.cropped);
+        assert_eq!(size.width, 372);
+        let crop = super::fit_text_crop(a4.0, column);
+        let expected = 372.0 * a4.0 / crop * a4.1 / a4.0;
+        assert_eq!(size.height, expected.round() as i32);
+        // A click on the strip's left edge lands on the column's left side.
+        let (x, _) = preview_point(
+            f64::from(size.width),
+            f64::from(size.height),
+            a4.0 / a4.1,
+            true,
+            a4.1,
+            0.0,
+            10.0,
+        )
+        .unwrap();
+        assert!((x - (a4.0 - crop) / 2.0).abs() < 0.5);
+    }
+
+    #[test]
     fn clicks_account_for_letterboxing_zoom_and_cropped_pages() {
         assert_eq!(
-            preview_point(800.0, 600.0, 2.0, 400.0, 200.0, 200.0),
+            preview_point(800.0, 600.0, 2.0, false, 400.0, 200.0, 200.0),
             Some((200.0, 100.0))
         );
-        assert_eq!(preview_point(800.0, 600.0, 2.0, 400.0, 200.0, 50.0), None);
         assert_eq!(
-            preview_point(400.0, 200.0, 2.0, 400.0, 100.0, 50.0),
+            preview_point(800.0, 600.0, 2.0, false, 400.0, 200.0, 50.0),
+            None
+        );
+        assert_eq!(
+            preview_point(400.0, 200.0, 2.0, false, 400.0, 100.0, 50.0),
             Some((200.0, 100.0))
         );
-        assert_eq!(preview_point(0.0, 0.0, 2.0, 400.0, 0.0, 0.0), None);
+        assert_eq!(preview_point(0.0, 0.0, 2.0, false, 400.0, 0.0, 0.0), None);
     }
     #[test]
     #[ignore = "requires a display; run under xvfb-run with --test-threads=1"]
@@ -2803,6 +3560,7 @@ mod tests {
                 refresh_compile: path_noop,
                 search: Rc::new(|_, _, reply| reply(Vec::new())),
                 settings_changed: Rc::new(|_| {}),
+                preferences_changed: Rc::new(|_| {}),
             },
         );
         window.set_child(Some(&workspace.root));
