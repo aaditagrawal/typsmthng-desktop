@@ -93,6 +93,8 @@ The binary is written to `target/release/typsmthng`.
 
 ## Test
 
+See [native app modules](docs/architecture.md) for responsibilities and the headless/desktop test split.
+
 Run backend and Typst compatibility tests without GTK development libraries:
 
 ```bash
