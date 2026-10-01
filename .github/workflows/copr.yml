@@ -1,0 +1,75 @@
+name: Fedora COPR
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Source tag or commit to build
+        required: true
+        type: string
+      submit:
+        description: Submit to the configured COPR project
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      submit:
+        type: boolean
+        default: false
+    secrets:
+      COPR_CONFIG:
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: copr-${{ inputs.source_ref }}
+  cancel-in-progress: false
+jobs:
+  srpm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - name: Read pinned Rust toolchain
+        id: toolchain
+        run: |
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml | head -1)"
+          [[ "$toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          echo "version=$toolchain" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          enable-cache: false
+      - name: Source RPM tools
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: Build self-contained source RPM
+        run: bash packaging/copr/build-srpm.sh "$PWD/build/copr"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: fedora-source-rpm
+          path: build/copr/*.src.rpm
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Submit and wait for COPR builds
+        if: inputs.submit
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+          COPR_PROJECT: ${{ vars.COPR_PROJECT }}
+        run: |
+          test -n "$COPR_CONFIG" || { echo 'Set the COPR_CONFIG repository secret.' >&2; exit 1; }
+          [[ "$COPR_PROJECT" =~ ^[A-Za-z0-9_@.-]+/[A-Za-z0-9_.-]+$ ]] || { echo 'Set COPR_PROJECT to owner/project.' >&2; exit 1; }
+          config="$(mktemp)"
+          trap 'rm -f "$config"' EXIT
+          chmod 600 "$config"
+          printf '%s\n' "$COPR_CONFIG" > "$config"
+          srpms=(build/copr/*.src.rpm)
+          test "${#srpms[@]}" -eq 1
+          uv tool run --from copr-cli==2.6 copr-cli --config "$config" build "$COPR_PROJECT" "${srpms[0]}"

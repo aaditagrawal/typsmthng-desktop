@@ -1,0 +1,49 @@
+name: Fedora source RPM
+on:
+  pull_request:
+    paths:
+      - '.copr/**'
+      - 'packaging/copr/**'
+      - '.github/workflows/copr*.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.copr/**'
+      - 'packaging/copr/**'
+      - '.github/workflows/copr*.yml'
+permissions:
+  contents: read
+jobs:
+  offline-rpm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      image: fedora:44
+      options: --cap-add=SYS_ADMIN --security-opt=seccomp=unconfined
+    steps:
+      - name: Fedora build tools
+        run: dnf install -y git rust cargo gcc rpm-build uv curl tar gzip xz gtk4-devel gtksourceview5-devel libadwaita-devel desktop-file-utils dbus-x11 xorg-x11-server-Xvfb librsvg2 adwaita-icon-theme
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Prepare SRPM
+        run: |
+          git config --global --add safe.directory "$PWD"
+          uv run --no-project packaging/copr/test_prepare.py
+          bash packaging/copr/build-srpm.sh "$PWD/build/copr"
+      - name: Build with networking disabled
+        run: |
+          unshare --net rpmbuild --rebuild build/copr/*.src.rpm --define "_topdir $PWD/build/rpmbuild"
+      - name: Install and smoke-test Fedora package
+        run: |
+          dnf install -y build/rpmbuild/RPMS/x86_64/typsmthng-*.rpm
+          dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo GDK_DEBUG=no-portals timeout 30s typsmthng --smoke-test
+          dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo GDK_DEBUG=no-portals timeout 45s typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
+      - uses: actions/upload-artifact@v5
+        with:
+          name: fedora-rpm
+          path: |
+            build/copr/*.src.rpm
+            build/rpmbuild/RPMS/x86_64/*.rpm
+          if-no-files-found: error
+          compression-level: 0

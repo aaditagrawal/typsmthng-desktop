@@ -164,3 +164,14 @@ jobs:
           # Build provenance stays in Actions; publish only installers and their checksums.
           rm artifacts/release-metadata.json
           gh release create "v$VERSION" artifacts/* --repo "$REPOSITORY" "${flags[@]}"
+  copr:
+    needs:
+      - preflight
+      - publish
+    if: vars.COPR_PROJECT != '' && (github.event_name != 'workflow_dispatch' || inputs.publish)
+    uses: ./.github/workflows/copr.yml
+    with:
+      source_ref: ${{ needs.preflight.outputs.source_sha }}
+      submit: true
+    secrets:
+      COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
