@@ -1,4 +1,5 @@
 mod app;
+mod appearance;
 mod controls;
 mod editor_tools;
 mod font_picker;

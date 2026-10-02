@@ -316,8 +316,12 @@ impl AppController {
             let weak = Rc::downgrade(&controller);
             move |_| {
                 if let Some(controller) = weak.upgrade() {
+                    let settings = controller.settings.borrow().clone();
+                    if let Some(home) = controller.home.borrow().as_ref() {
+                        home.apply_theme(settings.theme);
+                    }
                     if let Some(workspace) = controller.workspace.borrow().as_ref() {
-                        workspace.apply_settings(controller.settings.borrow().clone());
+                        workspace.apply_settings(settings);
                     }
                 }
             }
@@ -2641,6 +2645,9 @@ impl AppController {
             Theme::Light => adw::ColorScheme::ForceLight,
             Theme::Dark => adw::ColorScheme::ForceDark,
         });
+        if let Some(home) = self.home.borrow().as_ref() {
+            home.apply_theme(theme);
+        }
     }
 
     /// Present a standalone font picker for screenshots. Configure with

@@ -43,6 +43,7 @@
 .translucent { background-color: alpha(@window_bg_color, 0.94); }
 .zoom-badge { padding: 4px 10px; border-radius: 999px; background-color: alpha(@window_fg_color, 0.82); color: @window_bg_color; font-size: 0.9em; font-weight: bold; font-feature-settings: "tnum"; }
 .zoom-level { min-width: 64px; font-feature-settings: "tnum"; }
+.theme-system-badge { background-color: @window_bg_color; border-radius: 2px; }
 .heading-minimap { border-left: 1px solid alpha(@borders, 0.6); }
 .minimap-heading { min-height: 0; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: bold; color: @view_fg_color; background-color: alpha(@view_bg_color, 0.86); text-shadow: none; }
 .minimap-heading-2 { font-size: 10px; font-weight: 600; opacity: 0.8; }

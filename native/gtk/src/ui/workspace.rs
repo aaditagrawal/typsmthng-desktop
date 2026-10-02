@@ -400,6 +400,7 @@ pub struct WorkspaceView {
     preview_pages: gtk::Box,
     preview_scroll: gtk::ScrolledWindow,
     compiled_headings: gtk::MenuButton,
+    theme_button: super::appearance::ThemeButton,
     source_jump: gtk::Button,
     preview_identity: Rc<RefCell<Option<PreviewIdentity>>>,
     preview_pictures: Rc<RefCell<Vec<PreviewPicture>>>,
@@ -481,16 +482,13 @@ impl WorkspaceView {
         present.set_icon_name("media-playback-start-symbolic");
         present.set_tooltip_text(Some("Present (F5)"));
         let settings_button = icon_button("preferences-system-symbolic", "Settings (Ctrl+,)");
-        let theme_button = icon_button(
-            "weather-clear-night-symbolic",
-            "Cycle system, light, and dark theme",
-        );
+        let theme_button = super::appearance::ThemeButton::new();
         let update_button = icon_button("software-update-available-symbolic", "Check for updates");
         toolbar.append(&home);
         toolbar.append(&sidebar_toggle);
         toolbar.append(&open_project);
         toolbar.append(&settings_button);
-        toolbar.append(&theme_button);
+        toolbar.append(&theme_button.button);
         toolbar.append(&search);
         toolbar.append(&file_label);
         let view_switcher = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1238,7 +1236,7 @@ impl WorkspaceView {
         {
             let settings = settings.clone();
             let changed = callbacks.settings_changed.clone();
-            theme_button.connect_clicked(move |_| {
+            theme_button.button.connect_clicked(move |_| {
                 let mut value = settings.borrow().clone();
                 value.theme = match value.theme {
                     Theme::System => Theme::Light,
@@ -1473,6 +1471,7 @@ impl WorkspaceView {
             preview_pages,
             preview_scroll,
             compiled_headings,
+            theme_button,
             source_jump,
             preview_identity: Rc::new(RefCell::new(None)),
             preview_pictures,
@@ -2206,7 +2205,9 @@ impl WorkspaceView {
                 let title = gtk::Label::new(Some(&heading.title));
                 title.set_xalign(0.0);
                 title.set_hexpand(true);
-                title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                title.set_wrap(true);
+                title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                title.set_max_width_chars(40);
                 row.append(&title);
                 row.append(&gtk::Label::new(Some(&format!(
                     "{}",
@@ -2244,7 +2245,9 @@ impl WorkspaceView {
             }
             let scroll = gtk::ScrolledWindow::new();
             scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-            scroll.set_min_content_width(320);
+            // ScrolledWindow does not reserve min-content-width with a Never
+            // horizontal policy. Request the popover width explicitly.
+            scroll.set_size_request(340, -1);
             scroll.set_max_content_height(400);
             scroll.set_propagate_natural_height(true);
             scroll.set_child(Some(&headings));
@@ -2367,6 +2370,7 @@ impl WorkspaceView {
     }
 
     pub fn apply_settings(&self, settings: UiSettings) {
+        self.theme_button.update(settings.theme);
         self.editor.set_show_line_numbers(settings.line_numbers);
         self.editor.set_wrap_mode(if settings.line_wrapping {
             gtk::WrapMode::WordChar
@@ -4326,7 +4330,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let project = Project::create(directory.path(), "Navigation review").unwrap();
         let source = "#set page(width: 200pt, height: 240pt, margin: 20pt)\n= Start\nFirst page\n#pagebreak()\n#include \"section.typ\"\n#pagebreak()\n#heading(level: 4)[Generated]\nLast page";
-        let imported = "=== Imported section\nPréface Ω café";
+        let imported = "=== Imported section with a long heading that stays readable in the navigation menu\nPréface Ω café";
         std::fs::write(project.root().join("main.typ"), source).unwrap();
         std::fs::write(project.root().join("section.typ"), imported).unwrap();
         let compiler = PreviewCompiler::default();
@@ -4390,6 +4394,51 @@ mod tests {
             .unwrap()
             .downcast::<gtk::Box>()
             .unwrap();
+        drive(Duration::from_millis(150));
+        assert!(
+            scroll.width() >= 340,
+            "heading menu must reserve readable width"
+        );
+        let imported_button = list
+            .first_child()
+            .unwrap()
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        let row = imported_button
+            .child()
+            .unwrap()
+            .downcast::<gtk::Box>()
+            .unwrap();
+        let title = row.first_child().unwrap().downcast::<gtk::Label>().unwrap();
+        assert!(
+            title.width() >= 200,
+            "heading title must have room beside the page number"
+        );
+        assert!(
+            !title.layout().is_ellipsized(),
+            "long headings must remain readable"
+        );
+        assert!(
+            title.layout().line_count() > 1,
+            "long headings must wrap within the menu"
+        );
+        capture("headings");
+        if let Some(base) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") {
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&popover)).snapshot(
+                &snapshot,
+                f64::from(popover.width()),
+                f64::from(popover.height()),
+            );
+            window
+                .renderer()
+                .unwrap()
+                .render_texture(snapshot.to_node().unwrap(), None)
+                .save_to_png(PathBuf::from(base).join("headings-popover.png"))
+                .unwrap();
+        }
         let generated = list
             .last_child()
             .unwrap()
