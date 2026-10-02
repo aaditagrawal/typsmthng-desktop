@@ -154,6 +154,8 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 
 Formatting uses Typstyle 0.15.1 and takes one undo step. It preserves selected tokens and scroll position. Carets in whitespace stay near their previous line and character column. Files with syntax errors remain unchanged.
 
+Auto-save defaults to writing the current file atomically 100 ms after the last edit. Settings → Saving lets you disable timed saving, set its delay from 50 ms to 60 seconds, or enable saving when the window loses focus, which defaults to off. Live compilation has its own delay and reads unsaved edits without writing them to disk. `Ctrl+S`, switching files, and closing still save; failed writes preserve unsaved changes and block navigation or closing.
+
 On macOS, use Command in place of Control.
 
 ## Packaging
