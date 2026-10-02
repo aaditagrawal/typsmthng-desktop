@@ -3398,7 +3398,7 @@ fn build_settings_dialog(
     equation_highlight_color.set_sensitive(settings.borrow().equation_highlighting);
     group.add(&setting_row(
         "Equation background",
-        "CSS color, such as #f4f1fb; clear to follow the theme",
+        "Color, such as #f4f1fb; clear to follow the theme",
         &equation_highlight_color,
     ));
     equation_highlighting.connect_active_notify({
@@ -3565,11 +3565,11 @@ fn build_settings_dialog(
             let equation_color = equation_highlight_color.text().trim().to_string();
             if equation_highlighting.is_active()
                 && !equation_color.is_empty()
-                && gtk::gdk::RGBA::parse(&equation_color).is_err()
+                && super::equation_style::parse_color(&equation_color).is_none()
             {
                 equation_highlight_color.add_css_class("error");
                 equation_highlight_color.set_tooltip_text(Some(
-                    "Enter a CSS color, such as #f4f1fb, or clear for the theme default",
+                    "Enter a color, such as #f4f1fb, or clear for the theme default",
                 ));
                 equation_highlight_color.grab_focus();
                 return;

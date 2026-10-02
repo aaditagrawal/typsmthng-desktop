@@ -2,32 +2,82 @@
 use super::model::UiSettings;
 use gtk::gdk;
 
+pub fn parse_color(color: &str) -> Option<gdk::RGBA> {
+    if color.trim().eq_ignore_ascii_case("transparent") {
+        Some(gdk::RGBA::TRANSPARENT)
+    } else {
+        gdk::RGBA::parse(color.trim()).ok()
+    }
+}
+
 pub fn customized_scheme(
     base: &sourceview5::StyleScheme,
     settings: &UiSettings,
 ) -> Option<sourceview5::StyleScheme> {
-    let color = if !settings.equation_highlighting {
-        gdk::RGBA::TRANSPARENT
+    let requested = if !settings.equation_highlighting {
+        None
     } else {
-        gdk::RGBA::parse(settings.equation_highlight_color.trim()).ok()?
+        Some(parse_color(&settings.equation_highlight_color)?)
     };
+    // An empty local style clears the inherited background. Transparent
+    // GtkTextTag backgrounds are painted as black by GTK's Cairo renderer.
+    let background_attribute = match requested.filter(|color| color.alpha() > 0.0) {
+        None => String::new(),
+        Some(color) => {
+            let alpha = color.alpha();
+            let paper = base.style("text")?.background()?;
+            let paper = paper
+                .strip_prefix('#')
+                .filter(|value| value.starts_with("rgb"))
+                .unwrap_or(paper.as_str());
+            let background = gdk::RGBA::parse(paper).ok()?;
+            // Blend alpha before GTK creates its opaque text background tag.
+            let component = |ink: f32, paper: f32| {
+                ((ink * alpha + paper * (1.0 - alpha)) * 255.0).round() as u8
+            };
+            format!(
+                " background=\"#{:02x}{:02x}{:02x}\"",
+                component(color.red(), background.red()),
+                component(color.green(), background.green()),
+                component(color.blue(), background.blue())
+            )
+        }
+    };
+    let metadata: String = ["variant", "light-variant", "dark-variant"]
+        .iter()
+        .filter_map(|name| {
+            base.metadata(name).map(|value| {
+                format!(
+                    "<property name=\"{name}\">{}</property>",
+                    glib::markup_escape_text(&value)
+                )
+            })
+        })
+        .collect();
+    // GtkSourceView generates widget CSS from the child scheme's own text
+    // style. Copy both colors explicitly so prose keeps the base palette.
+    let text_style = base.style("text")?;
+    let text_foreground = text_style
+        .foreground()
+        .map(|value| format!(" foreground=\"{}\"", glib::markup_escape_text(&value)))
+        .unwrap_or_default();
+    let text_background = text_style
+        .background()
+        .map(|value| format!(" background=\"{}\"", glib::markup_escape_text(&value)))
+        .unwrap_or_default();
     let directory = tempfile::tempdir().ok()?;
-    // GtkSourceView recognizes hexadecimal colors, but interprets rgb()/rgba()
-    // strings as named scheme colors. Canonical hex also cannot inject XML.
-    let color = format!(
-        "#{:02x}{:02x}{:02x}{:02x}",
-        (color.red() * 255.0).round() as u8,
-        (color.green() * 255.0).round() as u8,
-        (color.blue() * 255.0).round() as u8,
-        (color.alpha() * 255.0).round() as u8,
-    );
     let xml = format!(
         r#"<?xml version="1.0"?>
 <style-scheme id="typsmthng-custom-equations" name="Custom equations" version="1.0" parent-scheme="{}">
-  <style name="typst:math" background="{}"/>
+  <metadata>{}</metadata>
+  <style name="text"{}{}/>
+  <style name="typst:math"{}/>
 </style-scheme>"#,
         base.id(),
-        color,
+        metadata,
+        text_foreground,
+        text_background,
+        background_attribute,
     );
     std::fs::write(directory.path().join("equations.xml"), xml).ok()?;
     let manager = sourceview5::StyleSchemeManager::new();
@@ -48,12 +98,7 @@ mod tests {
     use super::*;
     use sourceview5::prelude::*;
 
-    fn capture_if_requested(window: &gtk::Window, editor: &sourceview5::View, name: &str) {
-        let Some(directory) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") else {
-            return;
-        };
-        let directory = std::path::PathBuf::from(directory);
-        std::fs::create_dir_all(&directory).unwrap();
+    fn rendered_texture(window: &gtk::Window, editor: &sourceview5::View) -> gdk::Texture {
         let context = glib::MainContext::default();
         let until = std::time::Instant::now() + std::time::Duration::from_millis(60);
         while std::time::Instant::now() < until {
@@ -69,14 +114,57 @@ mod tests {
             .renderer()
             .unwrap()
             .render_texture(frame.to_node().unwrap(), None)
-            .save_to_png(directory.join(name))
-            .unwrap();
+    }
+
+    fn capture_if_requested(texture: &gdk::Texture, name: &str) {
+        let Some(directory) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") else {
+            return;
+        };
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        texture.save_to_png(directory.join(name)).unwrap();
+    }
+
+    fn background_pixel(
+        texture: &gdk::Texture,
+        editor: &sourceview5::View,
+        offset: i32,
+    ) -> [u8; 4] {
+        let rectangle = editor.iter_location(&editor.buffer().iter_at_offset(offset));
+        let (x, y) = editor.buffer_to_window_coords(
+            gtk::TextWindowType::Widget,
+            rectangle.x() + rectangle.width() / 2,
+            rectangle.y() + rectangle.height() / 2,
+        );
+        let mut pixels = vec![0; (texture.width() * texture.height() * 4) as usize];
+        let stride = texture.width() as usize * 4;
+        texture.download(&mut pixels, stride);
+        pixels[y as usize * stride + x as usize * 4..][..4]
+            .try_into()
+            .unwrap()
+    }
+
+    fn prose_pixels(texture: &gdk::Texture, editor: &sourceview5::View) -> Vec<u8> {
+        let end = editor.iter_location(&editor.buffer().iter_at_offset(4));
+        let (width, _) =
+            editor.buffer_to_window_coords(gtk::TextWindowType::Widget, end.x() + end.width(), 0);
+        let stride = texture.width() as usize * 4;
+        let mut pixels = vec![0; stride * texture.height() as usize];
+        texture.download(&mut pixels, stride);
+        pixels
+            .chunks_exact(stride)
+            .take(end.height() as usize)
+            .flat_map(|row| row[..width as usize * 4].iter().copied())
+            .collect()
     }
 
     #[test]
     #[ignore = "requires a display; run one exact filter under Xvfb"]
     fn native_equation_background_settings_preserve_token_styles() {
         adw::init().unwrap();
+        gtk::Settings::default()
+            .unwrap()
+            .set_gtk_enable_animations(false);
         super::super::install_css();
         sourceview5::init();
         let schemes = sourceview5::StyleSchemeManager::default();
@@ -104,25 +192,34 @@ mod tests {
             assert!(customized_scheme(&base, &UiSettings::default()).is_none());
             buffer.set_style_scheme(Some(&base));
             buffer.ensure_highlight(&buffer.start_iter(), &buffer.end_iter());
-            capture_if_requested(
-                &highlighted_window,
-                &highlighted_editor,
-                &format!("{id}-equations-default.png"),
-            );
-            for (enabled, custom, expected) in
-                [(false, "", "rgba(0,0,0,0)"), (true, "#f0cafe", "#f0cafe")]
-            {
+            let baseline = rendered_texture(&highlighted_window, &highlighted_editor);
+            let prose_background = background_pixel(&baseline, &highlighted_editor, 4);
+            capture_if_requested(&baseline, &format!("{id}-equations-default.png"));
+            let background = base.style("text").unwrap().background().unwrap();
+            for (enabled, custom, expected) in [
+                (false, "", background.as_str()),
+                (true, "transparent", background.as_str()),
+                (true, "#f0cafe", "#f0cafe"),
+            ] {
                 let settings = UiSettings {
                     equation_highlighting: enabled,
                     equation_highlight_color: custom.into(),
                     ..UiSettings::default()
                 };
-                let scheme = customized_scheme(&base, &settings).unwrap();
-                let style = scheme.style("typst:math").unwrap();
-                assert_eq!(
-                    gdk::RGBA::parse(style.background().unwrap()).unwrap(),
-                    gdk::RGBA::parse(expected).unwrap()
-                );
+                let scheme = customized_scheme(&base, &settings)
+                    .unwrap_or_else(|| panic!("{id} {custom:?} enabled={enabled}"));
+                if !enabled || custom == "transparent" {
+                    assert!(scheme
+                        .style("typst:math")
+                        .and_then(|style| style.background())
+                        .is_none());
+                } else {
+                    let style = scheme.style("typst:math").unwrap();
+                    assert_eq!(
+                        gdk::RGBA::parse(style.background().unwrap()).unwrap(),
+                        gdk::RGBA::parse(expected).unwrap()
+                    );
+                }
                 assert_eq!(
                     scheme.style("typst:math-symbol").unwrap().foreground(),
                     base.style("typst:math-symbol").unwrap().foreground()
@@ -130,17 +227,50 @@ mod tests {
                 buffer.set_style_scheme(Some(&scheme));
                 buffer.ensure_highlight(&buffer.start_iter(), &buffer.end_iter());
                 let tags = buffer.iter_at_offset(10).tags();
-                assert!(tags.iter().any(|tag| tag.is_background_set()
-                    && tag.background_rgba() == Some(gdk::RGBA::parse(expected).unwrap())));
+                if enabled && custom != "transparent" {
+                    assert!(tags.iter().any(|tag| tag.is_background_set()
+                        && tag.background_rgba() == Some(gdk::RGBA::parse(expected).unwrap())));
+                } else {
+                    assert!(tags.iter().all(|tag| !tag.is_background_set()));
+                }
                 assert!(tags.iter().any(|tag| tag.is_foreground_set()));
+                let texture = rendered_texture(&highlighted_window, &highlighted_editor);
+                assert_eq!(
+                    background_pixel(&texture, &highlighted_editor, 4),
+                    prose_background,
+                    "customizing equations must preserve baseline prose background in {id}"
+                );
+                assert!(
+                    prose_pixels(&texture, &highlighted_editor)
+                        == prose_pixels(&baseline, &highlighted_editor),
+                    "customizing equations must preserve prose glyph colors and background in {id}"
+                );
+                if !enabled || custom == "transparent" {
+                    assert_eq!(
+                        background_pixel(&texture, &highlighted_editor, 7),
+                        background_pixel(&texture, &highlighted_editor, 4),
+                        "disabled or transparent equations must match prose background in {id}"
+                    );
+                }
                 capture_if_requested(
-                    &highlighted_window,
-                    &highlighted_editor,
+                    &texture,
                     &format!(
                         "{id}-equations-{}.png",
                         if enabled { "custom" } else { "disabled" }
                     ),
                 );
+            }
+            let half_alpha = UiSettings {
+                equation_highlight_color: "rgba(255, 255, 255, 0.5)".into(),
+                ..UiSettings::default()
+            };
+            buffer.set_style_scheme(customized_scheme(&base, &half_alpha).as_ref());
+            buffer.ensure_highlight(&buffer.start_iter(), &buffer.end_iter());
+            let blended = rendered_texture(&highlighted_window, &highlighted_editor);
+            let math_background = background_pixel(&blended, &highlighted_editor, 7);
+            for channel in 0..3 {
+                assert!((i16::from(math_background[channel]) - (i16::from(prose_background[channel]) + 255) / 2).abs() <= 1,
+                    "half-alpha equation backgrounds should blend into baseline prose background in {id}");
             }
             let invalid = UiSettings {
                 equation_highlight_color: "invalid\"/>".into(),
