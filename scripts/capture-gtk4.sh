@@ -19,7 +19,7 @@ for appearance in light dark; do
   capture "editor-$appearance" env TYPSMTHNG_SMOKE_THEME="$appearance" "$binary" --smoke-test native/gtk/tests/fixtures/demo
   capture "settings-$appearance" env TYPSMTHNG_SMOKE_THEME="$appearance" TYPSMTHNG_SMOKE_VIEW=settings "$binary" --smoke-test
  done
-for view in templates import name; do
+for view in templates import name guide; do
   capture "$view" env TYPSMTHNG_SMOKE_THEME=light TYPSMTHNG_SMOKE_VIEW="$view" "$binary" --smoke-test
 done
 capture home-empty env TYPSMTHNG_SMOKE_THEME=light "$binary" --smoke-test

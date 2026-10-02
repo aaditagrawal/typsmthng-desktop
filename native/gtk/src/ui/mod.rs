@@ -4,6 +4,7 @@ mod controls;
 mod editor_tools;
 mod equation_style;
 mod font_picker;
+mod guide;
 mod home;
 mod minimap;
 pub mod model;
