@@ -3921,6 +3921,47 @@ mod tests {
             auto_save_delay_ms: 250,
             ..Default::default()
         };
+        if let Some(directory) = std::env::var_os("TYPSMTHNG_AUTOSAVE_ARTIFACT_DIR") {
+            let directory = PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            let style = adw::StyleManager::default();
+            let previous_scheme = style.color_scheme();
+            style.set_color_scheme(adw::ColorScheme::ForceLight);
+            workspace.settings_dialog.window.present();
+            drive(150);
+            let group = workspace
+                .settings_dialog
+                .auto_save
+                .ancestor(adw::PreferencesGroup::static_type())
+                .unwrap();
+            let scroll = group
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_downcast::<gtk::ScrolledWindow>()
+                .unwrap();
+            let bounds = group.compute_bounds(&group.parent().unwrap()).unwrap();
+            scroll.vadjustment().set_value(f64::from(bounds.y()));
+            drive(150);
+            let snapshot = gtk::Snapshot::new();
+            snapshot.append_color(
+                &gtk::gdk::RGBA::WHITE,
+                &gtk::graphene::Rect::new(0.0, 0.0, group.width() as f32, group.height() as f32),
+            );
+            gtk::WidgetPaintable::new(Some(&group)).snapshot(
+                &snapshot,
+                f64::from(group.width()),
+                f64::from(group.height()),
+            );
+            workspace
+                .settings_dialog
+                .window
+                .renderer()
+                .unwrap()
+                .render_texture(snapshot.to_node().unwrap(), None)
+                .save_to_png(directory.join("autosave-settings-after.png"))
+                .unwrap();
+            workspace.settings_dialog.window.set_visible(false);
+            style.set_color_scheme(previous_scheme);
+        }
         workspace.apply_settings(settings.clone());
         workspace.show_text_file("main.typ", "Saved");
         workspace
