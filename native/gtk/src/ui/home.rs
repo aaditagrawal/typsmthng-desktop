@@ -34,6 +34,7 @@ pub struct HomeCallbacks {
 #[derive(Clone)]
 pub struct HomeView {
     pub root: gtk::Box,
+    theme_button: super::appearance::ThemeButton,
     recent_list: gtk::FlowBox,
     recent_paths: Rc<std::cell::RefCell<Vec<String>>>,
     workspace_picker: gtk::DropDown,
@@ -80,12 +81,12 @@ impl HomeView {
         brand.set_hexpand(true);
         brand.set_halign(gtk::Align::Start);
         brand_row.append(&brand);
-        let theme_button = icon_button("weather-clear-night-symbolic", "Change theme (Ctrl+J)");
-        theme_button.set_action_name(Some("app.cycle-theme"));
+        let theme_button = super::appearance::ThemeButton::new();
+        theme_button.button.set_action_name(Some("app.cycle-theme"));
         let guide_button = gtk::Button::with_label("Guide");
         guide_button.add_css_class("flat");
         let settings_button = icon_button("preferences-system-symbolic", "Settings");
-        brand_row.append(&theme_button);
+        brand_row.append(&theme_button.button);
         brand_row.append(&guide_button);
         brand_row.append(&settings_button);
         content.append(&brand_row);
@@ -275,6 +276,7 @@ impl HomeView {
 
         Self {
             root,
+            theme_button,
             recent_list,
             recent_paths,
             workspace_picker,
@@ -283,6 +285,10 @@ impl HomeView {
             callbacks,
             updating_workspaces,
         }
+    }
+
+    pub fn apply_theme(&self, theme: super::model::Theme) {
+        self.theme_button.update(theme);
     }
 
     pub fn set_workspaces(&self, workspaces: &[(String, String)], selected: Option<&str>) {
