@@ -167,14 +167,23 @@ pub fn math_edit(text: &str, cursor: usize, key: char) -> Option<MathEdit> {
     if key != '$' && (!matches!(key, ' ' | '\u{8}') || !empty_pair) {
         return None;
     }
-    let source = following.starts_with('$').then(|| Source::detached(text));
-    if key == '$' && following.starts_with('$') {
-        if let Some(equation) = equation_at(source.as_ref()?, cursor) {
-            if equation.end == cursor + 1 {
+    let closing = (key == '$')
+        .then(|| {
+            following
+                .char_indices()
+                .find(|(_, character)| !character.is_whitespace())
+        })
+        .flatten()
+        .filter(|(_, character)| *character == '$')
+        .map(|(offset, _)| cursor + offset);
+    let source = (closing.is_some() || empty_pair).then(|| Source::detached(text));
+    if let Some(closing) = closing {
+        if let Some(equation) = equation_at(source.as_ref()?, closing) {
+            if equation.start < cursor && equation.end == closing + 1 {
                 return Some(MathEdit {
                     range: cursor..cursor,
                     replacement: String::new(),
-                    cursor: cursor + 1,
+                    cursor: closing + 1,
                 });
             }
         }
@@ -277,6 +286,23 @@ mod tests {
             let cursor = text.find("$$").unwrap() + 1;
             assert_eq!(math_edit(text, cursor, ' '), None, "{text}");
             assert_eq!(math_edit(text, cursor, '\u{8}'), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn closing_math_skips_block_padding_only_inside_the_current_equation() {
+        for text in ["$ x^2 $", "é🙂 $ x^2 \t\n $"] {
+            let cursor = text.find("x^2").unwrap() + 3;
+            let edit = math_edit(text, cursor, '$').unwrap();
+            assert_eq!(edit.range, cursor..cursor);
+            assert!(edit.replacement.is_empty());
+            assert_eq!(edit.cursor, text.rfind('$').unwrap() + 1);
+        }
+        for text in ["Prose $next$", "$previous$ $next$"] {
+            let cursor = text.find(" $next$").unwrap();
+            let edit = math_edit(text, cursor, '$').unwrap();
+            assert_eq!(edit.replacement, "$$");
+            assert_eq!(edit.cursor, cursor + 1);
         }
     }
 

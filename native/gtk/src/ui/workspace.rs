@@ -4155,12 +4155,27 @@ mod tests {
         assert_eq!(buffer_text(&buffer), "é🙂 $  $");
         // GTK restores the inserted range on redo; move back between the spaces.
         buffer.place_cursor(&buffer.iter_at_offset(5));
-        // Enter an equation and type its existing closing delimiter.
+        // Enter an equation at the original caret, before the trailing space,
+        // then type the closing dollar without manually moving the caret.
+        buffer.begin_user_action();
         buffer.insert_at_cursor("x^2");
-        buffer.place_cursor(&buffer.iter_at_offset(buffer.char_count() - 1));
+        buffer.end_user_action();
+        assert_eq!(buffer.cursor_position(), buffer.char_count() - 2);
+        let changes = Rc::new(Cell::new(0));
+        buffer.connect_changed({
+            let changes = changes.clone();
+            move |_| changes.set(changes.get() + 1)
+        });
         assert!(press(gtk::gdk::Key::dollar));
         assert_eq!(buffer_text(&buffer), "é🙂 $ x^2 $");
         assert_eq!(buffer.cursor_position(), buffer.char_count());
+        assert_eq!(changes.get(), 0, "closing skip must only move the caret");
+        buffer.undo();
+        assert_eq!(
+            buffer_text(&buffer),
+            "é🙂 $  $",
+            "skip must add no undo step"
+        );
         buffer.set_text("$$");
         buffer.place_cursor(&buffer.iter_at_offset(1));
         assert!(press(gtk::gdk::Key::BackSpace));
