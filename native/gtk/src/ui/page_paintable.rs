@@ -33,6 +33,7 @@ struct RenderJob {
     latest: Arc<AtomicU64>,
     source: PageSource,
     size: (i32, i32),
+    samples: u32,
     complete: Box<dyn FnOnce(Option<Pixels>) + Send>,
 }
 
@@ -64,7 +65,7 @@ impl Workers {
                         if job.latest.load(Ordering::Relaxed) != job.generation {
                             continue;
                         }
-                        let pixels = rasterize(&job.source, job.size);
+                        let pixels = rasterize_quality(&job.source, job.size, job.samples);
                         if job.latest.load(Ordering::Relaxed) == job.generation {
                             (job.complete)(pixels);
                         }
@@ -107,6 +108,7 @@ mod imp {
         pub(super) scroll_handlers:
             RefCell<Vec<(glib::WeakRef<gtk::Adjustment>, glib::SignalHandlerId)>>,
         pub(super) scale: Cell<f64>,
+        pub(super) samples: Cell<u32>,
         pub(super) surface: RefCell<Option<(glib::WeakRef<gdk::Surface>, glib::SignalHandlerId)>>,
         pub(super) active: Cell<bool>,
         pub(super) disposed: Cell<bool>,
@@ -382,6 +384,7 @@ mod imp {
                 latest: self.latest.clone(),
                 source: source.clone(),
                 size,
+                samples: self.samples.get().max(1),
                 complete: Box::new(move |pixels| {
                     glib::idle_add_once(move || {
                         let Some(page) = weak.upgrade() else { return };
@@ -594,6 +597,32 @@ pub fn load_page(picture: &gtk::Picture, path: &Path, page: Option<typst_layout:
     picture.set_paintable(Some(&paintable));
 }
 
+/// Quality changes invalidate in-flight jobs and cached failure states while
+/// preserving the current image until its replacement is ready.
+pub fn set_quality(picture: &gtk::Picture, quality: &str) {
+    let Some(page) = picture
+        .paintable()
+        .and_then(|paintable| paintable.downcast::<PagePaintable>().ok())
+    else {
+        return;
+    };
+    let samples = match quality {
+        "high" => 2,
+        "ultra" => 3,
+        _ => 1,
+    };
+    let imp = page.imp();
+    if imp.samples.replace(samples) != samples {
+        imp.cancel();
+        imp.failed.set(None);
+        // Retain pixels as the resize fallback; a new quality must always rerender.
+        if let Some(previous) = imp.rendered.take() {
+            imp.original.replace(Some(previous.texture.upcast()));
+        }
+        page.invalidate_contents();
+    }
+}
+
 /// Typst emits numeric root dimensions in points. Parsing only the root header
 /// avoids decoding every page on the GTK thread just to obtain its geometry.
 fn svg_geometry(svg: &str) -> Option<((i32, i32), f64)> {
@@ -673,6 +702,85 @@ fn pixel_size(width: f64, height: f64, scale: f64) -> Option<(i32, i32)> {
         (width * reduction).ceil().max(1.0) as i32,
         (height * reduction).ceil().max(1.0) as i32,
     ))
+}
+
+/// Keep the intermediate raster within the same memory and GPU limits as
+/// ordinary pages. Large zooms already have enough pixels to resolve detail.
+fn quality_samples((width, height): (i32, i32), requested: u32) -> u32 {
+    (1..=requested.clamp(1, 3))
+        .rev()
+        .find(|samples| {
+            let samples = i64::from(*samples);
+            i64::from(width) * samples <= 16_384
+                && i64::from(height) * samples <= 16_384
+                && i64::from(width) * i64::from(height) * samples * samples <= 32_000_000
+        })
+        .unwrap_or(1)
+}
+
+fn rasterize_quality(source: &PageSource, size: (i32, i32), requested: u32) -> Option<Pixels> {
+    let samples = quality_samples(size, requested);
+    let pixels = rasterize(source, (size.0 * samples as i32, size.1 * samples as i32))?;
+    if samples == 1 {
+        return Some(pixels);
+    }
+    Some(downsample(pixels, samples))
+}
+
+/// Average pixel coverage before uploading, so Cairo and GPU backends both
+/// receive a device-sized texture. Premultiplied channels preserve transparency.
+fn downsample(pixels: Pixels, samples: u32) -> Pixels {
+    let samples = samples as usize;
+    let source_width = pixels.width as usize;
+    let source_height = pixels.height as usize;
+    let width = source_width.div_ceil(samples);
+    let height = source_height.div_ceil(samples);
+    let channels = if pixels.format == gdk::MemoryFormat::R8g8b8 {
+        3
+    } else {
+        4
+    };
+    let stride = width * channels;
+    let source_bytes = pixels.bytes.as_ref();
+    let straight_alpha = pixels.format == gdk::MemoryFormat::R8g8b8a8;
+    let mut bytes = vec![0u8; stride * height];
+    for y in 0..height {
+        for x in 0..width {
+            let mut sums = [0u32; 4];
+            let top = y * samples;
+            let left = x * samples;
+            let bottom = (top + samples).min(source_height);
+            let right = (left + samples).min(source_width);
+            for row in top..bottom {
+                for column in left..right {
+                    let offset = row * pixels.stride + column * channels;
+                    for (channel, sum) in sums.iter_mut().take(channels).enumerate() {
+                        let value = u32::from(source_bytes[offset + channel]);
+                        *sum += if straight_alpha && channel < 3 {
+                            (value * u32::from(source_bytes[offset + 3]) + 127) / 255
+                        } else {
+                            value
+                        };
+                    }
+                }
+            }
+            let count = ((bottom - top) * (right - left)) as u32;
+            for (channel, sum) in sums.iter().take(channels).enumerate() {
+                bytes[y * stride + x * channels + channel] = ((sum + count / 2) / count) as u8;
+            }
+        }
+    }
+    Pixels {
+        width: width as i32,
+        height: height as i32,
+        stride,
+        format: if pixels.format == gdk::MemoryFormat::R8g8b8a8 {
+            gdk::MemoryFormat::R8g8b8a8Premultiplied
+        } else {
+            pixels.format
+        },
+        bytes: glib::Bytes::from_owned(bytes),
+    }
 }
 
 fn rasterize(source: &PageSource, (width, height): (i32, i32)) -> Option<Pixels> {
@@ -788,6 +896,110 @@ mod tests {
         }
         let pixels = rasterize(&source, (241, 160)).unwrap();
         assert!(pixels.width <= 241 && pixels.height <= 160);
+    }
+
+    #[test]
+    #[ignore = "manual quality comparison; run with TYPSMTHNG_QUALITY_ARTIFACT_DIR"]
+    fn compare_preview_quality() {
+        let preview = compiled(
+            "#set page(width: 240pt, height: 160pt, margin: 12pt)\n\
+             #set text(size: 7pt)\n\
+             = Fine text and mathematics\n\
+             Affine office, subpixel typography. Lorem ipsum dolor sit amet.\n\
+             $ integral_0^1 x^2 dif x = frac(1,3), sqrt(x^2+y^2) $\n\
+             #line(length: 180pt, stroke: 0.2pt)\n\
+             #rotate(15deg)[Fine diagonal text and curves.]\n\
+             #circle(radius: 12pt, stroke: 0.2pt)",
+        );
+        let source = PageSource::Typst(preview.source_map.page(0).unwrap());
+        let artifact = std::env::var_os("TYPSMTHNG_QUALITY_ARTIFACT_DIR").map(PathBuf::from);
+        if let Some(dir) = &artifact {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for scale in [1, 2] {
+            let size = (480 * scale, 320 * scale);
+            let reference = downsample(rasterize(&source, (size.0 * 8, size.1 * 8)).unwrap(), 8);
+            for (name, samples) in [("standard", 1), ("high", 2), ("ultra", 3)] {
+                let start = Instant::now();
+                let pixels = rasterize_quality(&source, size, samples).unwrap();
+                let elapsed = start.elapsed();
+                let mut times = Vec::new();
+                for _ in 0..5 {
+                    let start = Instant::now();
+                    std::hint::black_box(rasterize_quality(&source, size, samples).unwrap());
+                    times.push(start.elapsed());
+                }
+                times.sort();
+                let error: f64 = pixels
+                    .bytes
+                    .iter()
+                    .zip(reference.bytes.iter())
+                    .map(|(a, b)| (f64::from(*a) - f64::from(*b)).powi(2))
+                    .sum::<f64>()
+                    / pixels.bytes.len() as f64;
+                println!("scale={scale} quality={name} cold={elapsed:?} redraw_median={:?} mse_vs_8x={error:.4}", times[times.len()/2]);
+                if let Some(dir) = &artifact {
+                    let pixbuf = gdk_pixbuf::Pixbuf::from_bytes(
+                        &pixels.bytes,
+                        gdk_pixbuf::Colorspace::Rgb,
+                        true,
+                        8,
+                        pixels.width,
+                        pixels.height,
+                        pixels.stride as i32,
+                    );
+                    pixbuf
+                        .savev(
+                            dir.join(format!("preview-quality-{name}-{scale}x.png")),
+                            "png",
+                            &[],
+                        )
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn supersampling_averages_transparent_colors_without_halos() {
+        let pixels = Pixels {
+            width: 2,
+            height: 2,
+            stride: 8,
+            format: gdk::MemoryFormat::R8g8b8a8,
+            bytes: glib::Bytes::from_owned(vec![
+                255, 0, 0, 255, 0, 255, 0, 0, 255, 0, 0, 255, 0, 255, 0, 0,
+            ]),
+        };
+        let pixel = downsample(pixels, 2);
+        assert_eq!(pixel.format, gdk::MemoryFormat::R8g8b8a8Premultiplied);
+        assert_eq!(pixel.bytes.as_ref(), &[128, 0, 0, 128]);
+    }
+
+    #[test]
+    fn quality_preserves_device_geometry_alpha_and_memory_limits() {
+        let preview = compiled(
+            "#set page(width: 120pt, height: 80pt, margin: 0pt, fill: none)\n\
+             #rect(width: 30pt, height: 30pt, fill: rgb(255, 0, 0, 50%), stroke: none)",
+        );
+        let source = PageSource::Typst(preview.source_map.page(0).unwrap());
+        for scale in [1, 2] {
+            for samples in [1, 2, 3] {
+                let size = (240 * scale, 160 * scale);
+                let pixels = rasterize_quality(&source, size, samples).unwrap();
+                assert_eq!((pixels.width, pixels.height), size);
+                assert_eq!(
+                    &pixels.bytes[10 * pixels.stride + 40..10 * pixels.stride + 44],
+                    &[128, 0, 0, 128]
+                );
+                let offset = (100 * scale + 50 * scale * pixels.width) as usize * 4;
+                assert_eq!(&pixels.bytes[offset..offset + 4], &[0, 0, 0, 0]);
+            }
+        }
+        assert_eq!(quality_samples((794, 1123), 3), 3);
+        assert_eq!(quality_samples((1588, 2246), 3), 2);
+        assert_eq!(quality_samples((4000, 6000), 3), 1);
+        assert_eq!(quality_samples((16384, 1), 3), 1);
     }
 
     #[test]
@@ -1133,6 +1345,23 @@ mod tests {
         drive_until(|| rendered_size(&page).is_some());
         assert_eq!(rendered_size(&page), Some((480 * scale, 320 * scale)));
         assert!(is_current(&picture));
+        let original = page.current_image();
+        for quality in ["high", "ultra", "standard"] {
+            set_quality(&picture, quality);
+            assert!(!is_current(&picture));
+            assert!(page.imp().original.borrow().is_some());
+            drive_until(|| is_current(&picture));
+            assert_eq!(rendered_size(&page), Some((480 * scale, 320 * scale)));
+            assert!(page.imp().original.borrow().is_none());
+        }
+        assert_ne!(page.current_image(), original);
+        let cached = page.current_image();
+        set_quality(&picture, "standard");
+        assert_eq!(
+            page.current_image(),
+            cached,
+            "unchanged quality must reuse the texture"
+        );
         window.destroy();
 
         // PNG and unsupported SVG units retain GTK's loader and file identity.

@@ -3767,6 +3767,7 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         },
         font_size: settings.font_size.round() as u32,
         auto_compile: settings.auto_compile,
+        preview_quality: settings.preview_quality.clone(),
         compile_delay_ms: settings.compile_delay_ms as u32,
         auto_save: settings.auto_save,
         auto_save_delay_ms: settings.auto_save_delay_ms.clamp(50, 60_000) as u32,
@@ -3800,6 +3801,7 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
     UserSettings {
         font_size: settings.font_size as f64,
         auto_compile: settings.auto_compile,
+        preview_quality: settings.preview_quality.clone(),
         compile_delay_ms: settings.compile_delay_ms as u64,
         auto_save: settings.auto_save,
         auto_save_delay_ms: settings.auto_save_delay_ms as u64,

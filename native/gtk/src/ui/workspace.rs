@@ -23,7 +23,7 @@ use super::model::{
     PAGE_SIZES, UI_FONT_SIZES_OFFERED,
 };
 use super::zoom::{
-    connect_ctrl_scroll, fit_text_crop, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
+    connect_ctrl_scroll, fit_text_width, format_scale, step_preview_scale, PreviewZoom, ZoomBadge,
     PIXELS_PER_POINT, PREVIEW_SCROLL_FACTOR,
 };
 
@@ -154,6 +154,11 @@ fn restore_preview_anchor(
     }
 }
 
+fn center_preview_horizontally(adjustment: &gtk::Adjustment) {
+    let end = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
+    adjustment.set_value((adjustment.lower() + end) / 2.0);
+}
+
 /// Wait for layout after a pane reveal or zoom, then use the same centered
 /// Contain/Cover mapping as preview clicks. Stale snapshots never move a page.
 fn reveal_document_position(
@@ -253,6 +258,7 @@ struct SettingsDialog {
     auto_save: gtk::Switch,
     save_delay: gtk::SpinButton,
     save_on_focus_loss: gtk::Switch,
+    preview_quality: gtk::DropDown,
     theme: gtk::DropDown,
     page_size: gtk::DropDown,
     notes_layout: gtk::DropDown,
@@ -307,6 +313,8 @@ impl SettingsDialog {
         self.equation_highlight_color
             .set_sensitive(settings.equation_highlighting);
         self.auto_compile.set_active(settings.auto_compile);
+        self.preview_quality
+            .set_selected(preview_quality_index(&settings.preview_quality));
         self.delay.set_value(settings.compile_delay_ms as f64);
         self.auto_save.set_active(settings.auto_save);
         self.save_delay
@@ -855,14 +863,7 @@ impl WorkspaceView {
                     {
                         picture.widget.set_size_request(size.width, size.height);
                     }
-                    let fit = if size.cropped {
-                        gtk::ContentFit::Cover
-                    } else {
-                        gtk::ContentFit::Contain
-                    };
-                    if picture.widget.content_fit() != fit {
-                        picture.widget.set_content_fit(fit);
-                    }
+                    picture.widget.set_content_fit(gtk::ContentFit::Contain);
                 }
                 let scale = format_scale(displayed_scale());
                 let fitted = viewport_width > PREVIEW_HORIZONTAL_INSET;
@@ -874,6 +875,33 @@ impl WorkspaceView {
                 });
             })
         };
+        preview_scroll.hadjustment().connect_changed({
+            let zoom = zoom.clone();
+            let previous = Cell::new(None);
+            move |adjustment| {
+                let geometry = (
+                    adjustment.lower(),
+                    adjustment.upper(),
+                    adjustment.page_size(),
+                );
+                if previous.replace(Some(geometry)) != Some(geometry)
+                    && zoom.get() == PreviewZoom::FitText
+                {
+                    // GTK configures adjustments while allocating the viewport.
+                    // Defer until that allocation ends so its child transform
+                    // receives the new offset on the next frame.
+                    let adjustment = adjustment.downgrade();
+                    let zoom = zoom.clone();
+                    glib::idle_add_local_once(move || {
+                        if zoom.get() == PreviewZoom::FitText {
+                            if let Some(adjustment) = adjustment.upgrade() {
+                                center_preview_horizontally(&adjustment);
+                            }
+                        }
+                    });
+                }
+            }
+        });
         // Zooming keeps the document point under the pointer (or the viewport
         // centre) fixed. Page sizes change only after the next allocation, so
         // remember where the anchor sat on its page and restore it afterwards.
@@ -919,6 +947,7 @@ impl WorkspaceView {
                     let pending_anchor = pending_anchor.clone();
                     let pictures = pictures.clone();
                     let preview_scroll = preview_scroll.clone();
+                    let zoom = zoom.clone();
                     let allocated_once = Cell::new(false);
                     preview_pages.add_tick_callback(move |_, _| {
                         if !allocated_once.replace(true) {
@@ -926,6 +955,9 @@ impl WorkspaceView {
                         }
                         if let Some(anchor) = pending_anchor.borrow_mut().take() {
                             restore_preview_anchor(&pictures.borrow(), &preview_scroll, &anchor);
+                            if zoom.get() == PreviewZoom::FitText {
+                                center_preview_horizontally(&preview_scroll.hadjustment());
+                            }
                         }
                         glib::ControlFlow::Break
                     });
@@ -940,7 +972,9 @@ impl WorkspaceView {
         zoom_choices.set_margin_end(6);
         let fit_text = gtk::Button::with_label("Fit text width");
         fit_text.add_css_class("flat");
-        fit_text.set_tooltip_text(Some("Crop the side margins"));
+        fit_text.set_tooltip_text(Some(
+            "Zoom until the text width fits, keeping the full page scrollable",
+        ));
         fit_text.connect_clicked({
             let set_zoom = set_zoom.clone();
             let popover = zoom_popover.clone();
@@ -2084,6 +2118,7 @@ impl WorkspaceView {
                     .then_some(compiled)
             });
             super::page_paintable::load_page(&picture, page, compiled_page);
+            super::page_paintable::set_quality(&picture, &self.settings.borrow().preview_quality);
             if picture.paintable().is_none() {
                 self.preview_identity.replace(None);
             }
@@ -2473,6 +2508,10 @@ impl WorkspaceView {
         }
         self.vim_status.set_visible(settings.vim_mode);
         self.minimap.set_visible(settings.minimap);
+        for picture in self.preview_pictures.borrow().iter() {
+            super::page_paintable::set_quality(&picture.widget, &settings.preview_quality);
+        }
+        self.magnifier.hide();
         let view_mode = settings.view_mode;
         let centered = settings.centered_scrolling;
         let center_changed = self.settings.borrow().centered_scrolling != centered;
@@ -2793,8 +2832,6 @@ fn should_uncomment_lines(lines: &[String]) -> bool {
 struct PreviewSize {
     width: i32,
     height: i32,
-    /// The widget shows a centred strip of the page (`ContentFit::Cover`).
-    cropped: bool,
 }
 
 fn preview_dimensions(
@@ -2815,23 +2852,22 @@ fn preview_dimensions(
         FALLBACK_PAGE_WIDTH
     };
     let available = viewport_width - PREVIEW_HORIZONTAL_INSET;
-    let (width, visible_width) = match (zoom, content_column) {
+    let width = match (zoom, content_column) {
         (PreviewZoom::FitWidth | PreviewZoom::FitText, _) if available <= 0 => {
-            (DEFAULT_PREVIEW_WIDTH, page_width)
+            DEFAULT_PREVIEW_WIDTH
         }
         (PreviewZoom::FitText, Some(column)) => {
-            (f64::from(available), fit_text_crop(page_width, column))
+            f64::from(available) * page_width / fit_text_width(page_width, column)
         }
-        (PreviewZoom::FitWidth | PreviewZoom::FitText, _) => (f64::from(available), page_width),
-        (PreviewZoom::Scale(scale), _) => (page_width * PIXELS_PER_POINT * scale, page_width),
+        (PreviewZoom::FitWidth | PreviewZoom::FitText, _) => f64::from(available),
+        (PreviewZoom::Scale(scale), _) => page_width * PIXELS_PER_POINT * scale,
     };
     let width = width.max(48.0);
-    // The full page height at the scale that makes the visible strip `width`.
-    let height = width * page_width / visible_width / aspect_ratio;
+    // Keep the full page geometry at the scale of the measured text column.
+    let height = width / aspect_ratio;
     PreviewSize {
         width: width.round() as i32,
         height: height.round() as i32,
-        cropped: visible_width < page_width,
     }
 }
 
@@ -3240,6 +3276,14 @@ fn schedule_editor_updates(
     }
 }
 
+fn preview_quality_index(quality: &str) -> u32 {
+    match quality {
+        "high" => 1,
+        "ultra" => 2,
+        _ => 0,
+    }
+}
+
 fn build_settings_dialog(
     parent: &gtk::ApplicationWindow,
     settings: Rc<RefCell<UiSettings>>,
@@ -3458,6 +3502,13 @@ fn build_settings_dialog(
         "Debounce in milliseconds",
         &delay,
     ));
+    let preview_quality = gtk::DropDown::from_strings(&["Standard", "High", "Ultra"]);
+    preview_quality.set_selected(preview_quality_index(&settings.borrow().preview_quality));
+    group.add(&setting_row(
+        "Preview quality",
+        "High and Ultra refine fine lines and curves. Higher quality uses more processing time.",
+        &preview_quality,
+    ));
     let theme = gtk::DropDown::from_strings(&["System", "Light", "Dark"]);
     theme.set_selected(match settings.borrow().theme {
         Theme::System => 0,
@@ -3551,6 +3602,7 @@ fn build_settings_dialog(
         auto_save: auto_save.clone(),
         save_delay: save_delay.clone(),
         save_on_focus_loss: save_on_focus_loss.clone(),
+        preview_quality: preview_quality.clone(),
         theme: theme.clone(),
         page_size: page_size.clone(),
         notes_layout: notes_layout.clone(),
@@ -3602,6 +3654,12 @@ fn build_settings_dialog(
                 auto_save: auto_save.is_active(),
                 auto_save_delay_ms: save_delay.value() as u32,
                 save_on_focus_loss: save_on_focus_loss.is_active(),
+                preview_quality: match preview_quality.selected() {
+                    1 => "high",
+                    2 => "ultra",
+                    _ => "standard",
+                }
+                .into(),
                 page_size: (page_size.selected() as usize)
                     .checked_sub(1)
                     .and_then(|index| PAGE_SIZES.get(index))
@@ -4576,15 +4634,57 @@ mod tests {
             assert!(!workspace.magnifier.lens.is_visible());
             drive(150);
             if zoom == PreviewZoom::FitText {
-                assert_eq!(picture.content_fit(), gtk::ContentFit::Cover);
+                assert_eq!(picture.content_fit(), gtk::ContentFit::Contain);
+                assert!(picture.width() > workspace.preview_scroll.width());
+                let horizontal = workspace.preview_scroll.hadjustment();
+                let end = horizontal.upper() - horizontal.page_size();
+                assert!(
+                    end > 0.0,
+                    "page margins must remain horizontally scrollable"
+                );
+                assert!((horizontal.value() - end / 2.0).abs() < 1.0);
+                let centered = picture.compute_bounds(&workspace.preview_scroll).unwrap();
+                assert!(
+                    (centered.x() + centered.width() / 2.0 - horizontal.page_size() as f32 / 2.0)
+                        .abs()
+                        < 1.0,
+                    "the page itself must be centered after GTK allocation"
+                );
+                horizontal.set_value(0.0);
+                drive(30);
+                assert_eq!(
+                    horizontal.value(),
+                    0.0,
+                    "fit text must allow panning to the page edge"
+                );
+                let left = picture.compute_bounds(&workspace.preview_scroll).unwrap();
+                assert!(
+                    left.x() > centered.x(),
+                    "panning must expose the original margin"
+                );
+                horizontal.set_value(end);
+                drive(30);
+                assert!((horizontal.value() - end).abs() < 1.0);
+                center_preview_horizontally(&horizontal);
+                drive(30);
             }
+            let bounds = picture.compute_bounds(&workspace.preview_scroll).unwrap();
             let (x, y) = (
-                f64::from(picture.width()) / 2.0,
-                f64::from(picture.height()) / 2.0,
+                (f64::from(workspace.preview_scroll.width()) / 2.0 - f64::from(bounds.x()))
+                    .clamp(1.0, f64::from(picture.width()) - 1.0),
+                (f64::from(workspace.preview_scroll.height()) / 2.0 - f64::from(bounds.y()))
+                    .clamp(1.0, f64::from(picture.height()) - 1.0),
             );
-            motion.emit_by_name::<()>("motion", &[&x, &y]);
-            assert!(workspace.magnifier.lens.is_visible());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !super::super::page_paintable::is_current(&picture) && Instant::now() < deadline {
+                drive(10);
+            }
             assert!(super::super::page_paintable::is_current(&picture));
+            motion.emit_by_name::<()>("motion", &[&x, &y]);
+            assert!(
+                workspace.magnifier.lens.is_visible(),
+                "magnifier at {zoom:?}"
+            );
             if zoom == PreviewZoom::Scale(1.5) {
                 let hidden = Rc::new(Cell::new(false));
                 let notification = workspace.magnifier.lens.connect_visible_notify({
@@ -5248,27 +5348,30 @@ mod tests {
     }
 
     #[test]
-    fn fit_text_crops_margins_and_keeps_full_page_height() {
+    fn fit_text_zooms_full_page_and_preserves_margins() {
         let a4 = (595.28, 841.89);
-        let column = (70.87, 524.41);
-        let size = preview_dimensions(436, PreviewZoom::FitText, a4.0, a4.0 / a4.1, Some(column));
-        assert!(size.cropped);
-        assert_eq!(size.width, 372);
-        let crop = super::fit_text_crop(a4.0, column);
-        let expected = 372.0 * a4.0 / crop * a4.1 / a4.0;
-        assert_eq!(size.height, expected.round() as i32);
-        // A click on the strip's left edge lands on the column's left side.
-        let (x, _) = preview_point(
-            f64::from(size.width),
-            f64::from(size.height),
-            a4.0 / a4.1,
-            true,
-            a4.1,
-            0.0,
-            10.0,
-        )
-        .unwrap();
-        assert!((x - (a4.0 - crop) / 2.0).abs() < 0.5);
+        for column in [(70.87, 524.41), (100.0, 400.0)] {
+            let size =
+                preview_dimensions(436, PreviewZoom::FitText, a4.0, a4.0 / a4.1, Some(column));
+            let scale = 372.0 / super::fit_text_width(a4.0, column);
+            assert_eq!(size.width, (a4.0 * scale).round() as i32);
+            assert_eq!(size.height, (a4.1 * scale).round() as i32);
+            assert!(size.width > 372);
+            let (x, _) = preview_point(
+                f64::from(size.width),
+                f64::from(size.height),
+                a4.0 / a4.1,
+                false,
+                a4.1,
+                0.0,
+                10.0,
+            )
+            .unwrap();
+            assert!(
+                x.abs() < 0.5,
+                "page edge must still map to the original margin"
+            );
+        }
     }
 
     #[test]
@@ -5546,6 +5649,90 @@ mod tests {
         drive(Duration::from_millis(950));
         assert!(workspace.diagnostics_revealer.reveals_child());
         workspace.cancel_pending_compile();
+        if let Some(artifacts) = std::env::var_os("TYPSMTHNG_FIT_TEXT_ARTIFACT_DIR") {
+            let artifacts = PathBuf::from(artifacts);
+            std::fs::create_dir_all(&artifacts).unwrap();
+            let source = "#set page(paper: \"a4\", margin: 25mm)\n\
+                #set text(size: 11pt)\n\
+                = Text width and page margins\n\
+                Given wavelength of light $lambda = 500 \"nm\"$, reflectivity $R = 0.4$, and absorption coefficient $alpha = 2 \"um\"^(-1)$.\n\
+                $ eta = underbrace((1-0.4), \"unreflected\") times underbrace((1-exp(-2)), \"absorbed\") = 0.519 $\n\
+                == Original page geometry\n\
+                The original page margins stay available when the text width fills the viewport. Pan sideways to inspect either margin.";
+            std::fs::write(dir.path().join("main.typ"), source).unwrap();
+            let preview = compiler
+                .compile(&project, "main.typ", &options)
+                .unwrap()
+                .artifact
+                .unwrap();
+            std::fs::write(&page, &preview.pages[0].svg).unwrap();
+            workspace.show_text_file("main.typ", source);
+            workspace.set_source_map(Some(preview.source_map));
+            workspace.set_compiled_preview(std::slice::from_ref(&page), "main.typ");
+            workspace.set_view_mode(ViewMode::Split);
+            drive(Duration::from_millis(200));
+            let picture = workspace.preview_pictures.borrow()[0].clone();
+            let capture = |name| {
+                drive(Duration::from_millis(250));
+                wait_for_page(&picture.widget);
+                let snapshot = gtk::Snapshot::new();
+                gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                    &snapshot,
+                    f64::from(window.width()),
+                    f64::from(window.height()),
+                );
+                let texture = window
+                    .renderer()
+                    .unwrap()
+                    .render_texture(snapshot.to_node().unwrap(), None);
+                texture.save_to_png(artifacts.join(name)).unwrap();
+            };
+            // Recreate the previous crop with today's renderer, isolating geometry.
+            workspace.preview_zoom.set(PreviewZoom::Scale(1.0));
+            let (left, right) = workspace.content_column.get().unwrap();
+            let center = picture.page_width / 2.0;
+            let air = ((right - left) * 0.03).max(6.0);
+            let crop =
+                (2.0 * ((center - left).max(right - center) + air)).clamp(1.0, picture.page_width);
+            let width = workspace.preview_scroll.width() - PREVIEW_HORIZONTAL_INSET;
+            let height = (f64::from(width) * picture.page_width / crop / picture.aspect_ratio)
+                .round() as i32;
+            picture.widget.set_size_request(width, height);
+            picture.widget.set_content_fit(gtk::ContentFit::Cover);
+            capture("fit-text-before.png");
+            workspace.preview_zoom.set(PreviewZoom::FitText);
+            (workspace.resize_preview)();
+            drive(Duration::from_millis(200));
+            center_preview_horizontally(&workspace.preview_scroll.hadjustment());
+            drive(Duration::from_millis(250));
+            let centered = picture
+                .widget
+                .compute_bounds(&workspace.preview_scroll)
+                .unwrap();
+            let horizontal = workspace.preview_scroll.hadjustment();
+            println!(
+                "fit centered bounds={centered:?} h={}/{}/{} width={} column={:?}",
+                horizontal.value(),
+                horizontal.upper(),
+                horizontal.page_size(),
+                picture.widget.width(),
+                workspace.content_column.get()
+            );
+            capture("fit-text-after.png");
+            workspace.preview_scroll.hadjustment().set_value(0.0);
+            drive(Duration::from_millis(250));
+            let left = picture
+                .widget
+                .compute_bounds(&workspace.preview_scroll)
+                .unwrap();
+            println!("fit left bounds={left:?}");
+            assert!(
+                left.x() > centered.x(),
+                "panning must expose original page margins"
+            );
+            capture("fit-text-original-left-margin.png");
+            assert_eq!(picture.widget.content_fit(), gtk::ContentFit::Contain);
+        }
         window.destroy();
     }
 }

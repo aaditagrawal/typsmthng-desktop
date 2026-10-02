@@ -184,3 +184,57 @@ delayed diagnostics, and the cached magnifier. The interaction and keyboard
 smokes passed rapid edits, save/undo/redo, file switching, binary preservation,
 resize, and presentation controls. Fractional sizes have numerical regression
 coverage; a physical fractional-scale Wayland session was not available here.
+
+## Preview quality
+
+Settings offers Standard, High, and Ultra. Standard retains the native display
+resolution. High and Ultra rasterize with up to two or three samples per axis,
+then average coverage into the device-sized texture before GTK paints it. This
+refines fine lines, curves, and diagonal text without increasing the cached
+texture size. Premultiplied channels preserve transparent edges. Intermediate
+rasters keep the 32-megapixel and 16,384-pixel dimension limits; large pages or
+high display scales reduce the sample count to stay within those limits.
+
+Changing quality cancels stale jobs and retains the previous pixels until the
+replacement arrives. The two workers, queue coalescing, and offscreen eviction
+apply to all quality levels. Standard remains the default for fast live edits.
+
+Measured October 2, 2026, in the Ubuntu 24.04 development container, Rust 1.93.1,
+with an optimized release test. The fixture contains 7-point text, mathematics,
+rotated text, a 0.2-point line, and a circle. Times are the median of five warm
+rasterizations, including downsampling, excluding GTK upload. Mean squared
+pixel error compares each device-sized output with an eight-sample reference;
+lower error means coverage closer to that reference. It measures this fixture,
+not perceived contrast or legibility across all documents and displays.
+
+| Output pixels | Quality | Warm raster | Mean squared error |
+| --- | --- | ---: | ---: |
+| 480 × 320 | Standard | 0.24 ms | 3.0720 |
+| 480 × 320 | High | 1.87 ms | 1.1484 |
+| 480 × 320 | Ultra | 3.05 ms | 0.6971 |
+| 960 × 640 | Standard | 0.51 ms | 2.6016 |
+| 960 × 640 | High | 7.08 ms | 0.8035 |
+| 960 × 640 | Ultra | 12.63 ms | 0.3994 |
+
+```sh
+TYPSMTHNG_QUALITY_ARTIFACT_DIR=build/preview-quality \
+  cargo test --locked --release --bin typsmthng \
+  compare_preview_quality -- --ignored --nocapture
+```
+
+Fit text width now scales the full page by its measured text width, preserving
+page dimensions and margins. It centers the page horizontally and allows
+sideways panning. Source navigation and the magnifier use the same full-page
+coordinates. The display regressions cover centering, panning, source clicks,
+and quality switching at 1× and 2×. An optional geometry comparison recreates
+the earlier cropped sizing with the current renderer, then captures the full
+page and the original left margin, isolating the zoom change:
+
+```sh
+dbus-run-session -- xvfb-run -a -s '-screen 0 3840x2400x24' \
+  env GTK_A11Y=none GSK_RENDERER=cairo \
+  TYPSMTHNG_FIT_TEXT_ARTIFACT_DIR=build/fit-text \
+  cargo test --locked --bin typsmthng \
+  native_preview_clicks_and_diagnostic_idle_timing \
+  -- --ignored --test-threads=1
+```

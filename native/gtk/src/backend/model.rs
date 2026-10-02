@@ -139,6 +139,7 @@ pub struct UserSettings {
     pub save_on_focus_loss: bool,
     #[serde(alias = "compileDelay")]
     pub compile_delay_ms: u64,
+    pub preview_quality: String,
     pub line_wrapping: bool,
     pub line_numbers: bool,
     pub theme: Theme,
@@ -169,6 +170,7 @@ impl Default for UserSettings {
         Self {
             font_size: 15.0,
             auto_compile: true,
+            preview_quality: "standard".into(),
             compile_delay_ms: 100,
             auto_save: true,
             auto_save_delay_ms: 100,
@@ -253,6 +255,20 @@ mod tests {
         let restored: UserSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
+    }
+
+    #[test]
+    fn preview_quality_defaults_and_round_trips() {
+        let mut settings: UserSettings = serde_json::from_str(r#"{"compileDelay":175}"#).unwrap();
+        assert_eq!(settings.preview_quality, "standard");
+        assert_eq!(settings.compile_delay_ms, 175);
+        settings.preview_quality = "ultra".into();
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains(r#""previewQuality":"ultra""#));
+        assert_eq!(
+            serde_json::from_str::<UserSettings>(&json).unwrap(),
+            settings
+        );
     }
 
     #[test]
