@@ -2602,7 +2602,11 @@ fn install_pair_completion(
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed({
         let buffer = buffer.clone();
+        let editor = editor.downgrade();
         move |_, key, _, modifiers| {
+            let Some(editor) = editor.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
             if vim_context.borrow().is_some()
                 || modifiers.intersects(
                     gtk::gdk::ModifierType::CONTROL_MASK
@@ -2613,7 +2617,51 @@ fn install_pair_completion(
                 return glib::Propagation::Proceed;
             }
 
+            if !editor.is_editable() {
+                return glib::Propagation::Proceed;
+            }
             let cursor = buffer.iter_at_mark(&buffer.get_insert());
+            if !buffer.has_selection()
+                && buffer
+                    .language()
+                    .is_some_and(|language| language.id() == "typst")
+            {
+                let character = if key == gtk::gdk::Key::BackSpace {
+                    Some('\u{8}')
+                } else {
+                    key.to_unicode()
+                };
+                if let Some(character @ ('$' | ' ' | '\u{8}')) = character {
+                    let text = buffer_text(&buffer);
+                    let byte = typsmthng_gtk::backend::editor::char_to_byte(
+                        &text,
+                        cursor.offset() as usize,
+                    )
+                    .unwrap();
+                    if let Some(edit) =
+                        typsmthng_gtk::backend::editor::math_edit(&text, byte, character)
+                    {
+                        let start = text[..edit.range.start].chars().count() as i32;
+                        let end = text[..edit.range.end].chars().count() as i32;
+                        let mut result = text.clone();
+                        result.replace_range(edit.range, &edit.replacement);
+                        let caret = result[..edit.cursor].chars().count() as i32;
+                        if start == end && edit.replacement.is_empty() {
+                            buffer.place_cursor(&buffer.iter_at_offset(caret));
+                        } else {
+                            buffer.begin_user_action();
+                            buffer.delete(
+                                &mut buffer.iter_at_offset(start),
+                                &mut buffer.iter_at_offset(end),
+                            );
+                            buffer.insert(&mut buffer.iter_at_offset(start), &edit.replacement);
+                            buffer.place_cursor(&buffer.iter_at_offset(caret));
+                            buffer.end_user_action();
+                        }
+                        return glib::Propagation::Stop;
+                    }
+                }
+            }
             if key == gtk::gdk::Key::BackSpace {
                 if buffer.has_selection() {
                     return glib::Propagation::Proceed;
@@ -4065,6 +4113,83 @@ mod tests {
         assert!(!workspace.is_dirty());
         workspace.cancel_pending_compile();
         window.destroy();
+    }
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    fn native_math_pair_input_and_undo() {
+        use super::*;
+        gtk::init().unwrap();
+        sourceview5::init();
+        let languages = sourceview5::LanguageManager::new();
+        for path in data_search_paths("language-specs") {
+            languages.append_search_path(path.to_str().unwrap());
+        }
+        let buffer = sourceview5::Buffer::with_language(&languages.language("typst").unwrap());
+        let editor = sourceview5::View::with_buffer(&buffer);
+        let vim = Rc::new(RefCell::new(None));
+        install_pair_completion(&editor, &buffer, vim.clone());
+        let key = editor
+            .observe_controllers()
+            .item(0)
+            .unwrap()
+            .downcast::<gtk::EventControllerKey>()
+            .unwrap();
+        let press = |value| {
+            key.emit_by_name::<bool>(
+                "key-pressed",
+                &[&value, &0_u32, &gtk::gdk::ModifierType::empty()],
+            )
+        };
+        buffer.set_text("é🙂 ");
+        buffer.place_cursor(&buffer.end_iter());
+        assert!(press(gtk::gdk::Key::dollar));
+        assert_eq!(buffer_text(&buffer), "é🙂 $$");
+        assert_eq!(buffer.cursor_position(), 4);
+        assert!(press(gtk::gdk::Key::space));
+        assert_eq!(buffer_text(&buffer), "é🙂 $  $");
+        assert_eq!(buffer.cursor_position(), 5);
+        buffer.undo();
+        assert_eq!(buffer_text(&buffer), "é🙂 $$");
+        buffer.redo();
+        assert_eq!(buffer_text(&buffer), "é🙂 $  $");
+        // GTK restores the inserted range on redo; move back between the spaces.
+        buffer.place_cursor(&buffer.iter_at_offset(5));
+        // Enter an equation and type its existing closing delimiter.
+        buffer.insert_at_cursor("x^2");
+        buffer.place_cursor(&buffer.iter_at_offset(buffer.char_count() - 1));
+        assert!(press(gtk::gdk::Key::dollar));
+        assert_eq!(buffer_text(&buffer), "é🙂 $ x^2 $");
+        assert_eq!(buffer.cursor_position(), buffer.char_count());
+        buffer.set_text("$$");
+        buffer.place_cursor(&buffer.iter_at_offset(1));
+        assert!(press(gtk::gdk::Key::BackSpace));
+        assert_eq!(buffer_text(&buffer), "");
+        buffer.undo();
+        assert_eq!(buffer_text(&buffer), "$$");
+        for text in [
+            r"\",
+            "`raw ",
+            "// comment ",
+            "/* comment ",
+            "#let s = \"string ",
+        ] {
+            buffer.set_text(text);
+            buffer.place_cursor(&buffer.end_iter());
+            assert!(!press(gtk::gdk::Key::dollar), "{text}");
+        }
+        editor.set_editable(false);
+        buffer.set_text("");
+        assert!(!press(gtk::gdk::Key::dollar));
+        editor.set_editable(true);
+        assert!(!key.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &gtk::gdk::Key::dollar,
+                &0_u32,
+                &gtk::gdk::ModifierType::CONTROL_MASK,
+            ]
+        ));
     }
 
     #[test]
