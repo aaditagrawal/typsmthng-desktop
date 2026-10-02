@@ -90,6 +90,8 @@ jobs:
           done
       - name: Math delimiter keyboard editing and undo
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::workspace::tests::native_math_pair_input_and_undo -- --exact --ignored --test-threads=1
+      - name: Equation background preferences and ligature shaping
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::equation_style::tests::native_equation_background_settings_preserve_token_styles -- --exact --ignored --test-threads=1
       - name: Typst syntax highlighting grammar and schemes
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --manifest-path native/gtk/Cargo.toml --test typst_highlighting -- --ignored --test-threads=1
       - name: Click-triggered native updates

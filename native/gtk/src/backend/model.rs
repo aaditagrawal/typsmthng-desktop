@@ -155,6 +155,9 @@ pub struct UserSettings {
     pub editor_font_family: String,
     pub editor_line_height: u32,
     pub editor_ligatures: bool,
+    pub equation_highlighting: bool,
+    /// Empty follows the active theme; otherwise a GTK CSS color.
+    pub equation_highlight_color: String,
     pub ui_font_family: String,
     pub ui_font_size: u32,
     #[serde(flatten)]
@@ -186,6 +189,8 @@ impl Default for UserSettings {
             editor_font_family: String::new(),
             editor_line_height: 100,
             editor_ligatures: true,
+            equation_highlighting: true,
+            equation_highlight_color: String::new(),
             ui_font_family: String::new(),
             ui_font_size: 0,
             extra: BTreeMap::new(),

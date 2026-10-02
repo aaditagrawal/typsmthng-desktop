@@ -2,6 +2,7 @@ mod app;
 mod appearance;
 mod controls;
 mod editor_tools;
+mod equation_style;
 mod font_picker;
 mod home;
 mod minimap;

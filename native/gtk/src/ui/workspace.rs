@@ -246,6 +246,8 @@ struct SettingsDialog {
     refresh_editor_family: Rc<dyn Fn()>,
     line_height: gtk::SpinButton,
     ligatures: gtk::Switch,
+    equation_highlighting: gtk::Switch,
+    equation_highlight_color: gtk::Entry,
     auto_compile: gtk::Switch,
     delay: gtk::SpinButton,
     auto_save: gtk::Switch,
@@ -298,6 +300,12 @@ impl SettingsDialog {
         self.line_height
             .set_value(f64::from(settings.editor_line_height) / 100.0);
         self.ligatures.set_active(settings.editor_ligatures);
+        self.equation_highlighting
+            .set_active(settings.equation_highlighting);
+        self.equation_highlight_color
+            .set_text(&settings.equation_highlight_color);
+        self.equation_highlight_color
+            .set_sensitive(settings.equation_highlighting);
         self.auto_compile.set_active(settings.auto_compile);
         self.delay.set_value(settings.compile_delay_ms as f64);
         self.auto_save.set_active(settings.auto_save);
@@ -2423,6 +2431,8 @@ impl WorkspaceView {
             &["typsmthng-light", "Adwaita", "classic"]
         };
         let scheme = preferred.iter().find_map(|id| schemes.scheme(id));
+        let scheme = scheme
+            .map(|base| super::equation_style::customized_scheme(&base, &settings).unwrap_or(base));
         self.buffer.set_style_scheme(scheme.as_ref());
         apply_editor_typography(&self.editor, &self.editor_style, &settings);
         if settings.vim_mode && self.vim_context.borrow().is_none() {
@@ -3371,6 +3381,35 @@ fn build_settings_dialog(
         "Join sequences like -> and != when the font supports it",
         &ligatures,
     ));
+    let group = adw::PreferencesGroup::builder().title("Equations").build();
+    rows.append(&group);
+    let equation_highlighting = gtk::Switch::new();
+    equation_highlighting.set_active(settings.borrow().equation_highlighting);
+    group.add(&setting_row(
+        "Highlight equation regions",
+        "Tint math backgrounds while keeping syntax colors",
+        &equation_highlighting,
+    ));
+    let equation_highlight_color = gtk::Entry::new();
+    equation_highlight_color.set_placeholder_text(Some("Theme default"));
+    equation_highlight_color.set_width_chars(16);
+    equation_highlight_color.set_max_length(100);
+    equation_highlight_color.set_text(&settings.borrow().equation_highlight_color);
+    equation_highlight_color.set_sensitive(settings.borrow().equation_highlighting);
+    group.add(&setting_row(
+        "Equation background",
+        "CSS color, such as #f4f1fb; clear to follow the theme",
+        &equation_highlight_color,
+    ));
+    equation_highlighting.connect_active_notify({
+        let color = equation_highlight_color.clone();
+        move |toggle| color.set_sensitive(toggle.is_active())
+    });
+    equation_highlight_color.connect_changed(|entry| {
+        entry.remove_css_class("error");
+        entry.set_tooltip_text(None);
+    });
+
     let group = adw::PreferencesGroup::builder().title("Saving").build();
     group.set_description(Some("Ctrl+S always saves. Changes are also saved before switching files or closing; a failed save keeps the document open."));
     rows.append(&group);
@@ -3505,6 +3544,8 @@ fn build_settings_dialog(
         refresh_editor_family: refresh_editor_family.clone(),
         line_height: line_height.clone(),
         ligatures: ligatures.clone(),
+        equation_highlighting: equation_highlighting.clone(),
+        equation_highlight_color: equation_highlight_color.clone(),
         auto_compile: auto_compile.clone(),
         delay: delay.clone(),
         auto_save: auto_save.clone(),
@@ -3521,6 +3562,18 @@ fn build_settings_dialog(
     apply.connect_clicked({
         let dialog = dialog.clone();
         move |_| {
+            let equation_color = equation_highlight_color.text().trim().to_string();
+            if equation_highlighting.is_active()
+                && !equation_color.is_empty()
+                && gtk::gdk::RGBA::parse(&equation_color).is_err()
+            {
+                equation_highlight_color.add_css_class("error");
+                equation_highlight_color.set_tooltip_text(Some(
+                    "Enter a CSS color, such as #f4f1fb, or clear for the theme default",
+                ));
+                equation_highlight_color.grab_focus();
+                return;
+            }
             let value = UiSettings {
                 theme: match theme.selected() {
                     1 => Theme::Light,
@@ -3542,6 +3595,8 @@ fn build_settings_dialog(
                 editor_font_family: editor_family.borrow().clone(),
                 editor_line_height: (line_height.value() * 100.0).round() as u32,
                 editor_ligatures: ligatures.is_active(),
+                equation_highlighting: equation_highlighting.is_active(),
+                equation_highlight_color: equation_color,
                 auto_compile: auto_compile.is_active(),
                 compile_delay_ms: delay.value() as u32,
                 auto_save: auto_save.is_active(),
