@@ -248,6 +248,9 @@ struct SettingsDialog {
     ligatures: gtk::Switch,
     auto_compile: gtk::Switch,
     delay: gtk::SpinButton,
+    auto_save: gtk::Switch,
+    save_delay: gtk::SpinButton,
+    save_on_focus_loss: gtk::Switch,
     theme: gtk::DropDown,
     page_size: gtk::DropDown,
     notes_layout: gtk::DropDown,
@@ -297,6 +300,11 @@ impl SettingsDialog {
         self.ligatures.set_active(settings.editor_ligatures);
         self.auto_compile.set_active(settings.auto_compile);
         self.delay.set_value(settings.compile_delay_ms as f64);
+        self.auto_save.set_active(settings.auto_save);
+        self.save_delay
+            .set_value(settings.auto_save_delay_ms as f64);
+        self.save_on_focus_loss
+            .set_active(settings.save_on_focus_loss);
         self.theme.set_selected(match settings.theme {
             Theme::System => 0,
             Theme::Light => 1,
@@ -426,6 +434,8 @@ pub struct WorkspaceView {
     dirty: Rc<Cell<bool>>,
     suppress_changes: Rc<Cell<bool>>,
     pending_compile: Rc<RefCell<Option<glib::SourceId>>>,
+    pending_save: Rc<RefCell<Option<glib::SourceId>>>,
+    schedule_updates: Rc<dyn Fn()>,
     pending_diagnostics: Rc<RefCell<Option<glib::SourceId>>>,
     pending_error: Rc<RefCell<Option<glib::SourceId>>>,
     revision: Rc<Cell<u64>>,
@@ -1163,6 +1173,45 @@ impl WorkspaceView {
         let document_search_dialog = build_document_search_dialog(window, &buffer, &editor);
 
         let pending_compile = Rc::new(RefCell::new(None::<glib::SourceId>));
+        let pending_save = Rc::new(RefCell::new(None::<glib::SourceId>));
+        let schedule_updates: Rc<dyn Fn()> = {
+            let buffer = buffer.downgrade();
+            let settings = settings.clone();
+            let dirty = dirty.clone();
+            let pending_save = pending_save.clone();
+            let pending_compile = pending_compile.clone();
+            let callbacks = callbacks.clone();
+            Rc::new(move || {
+                schedule_editor_updates(
+                    &buffer,
+                    &settings,
+                    &dirty,
+                    &pending_save,
+                    &pending_compile,
+                    &callbacks,
+                );
+            })
+        };
+        {
+            let editor = editor.downgrade();
+            let buffer = buffer.downgrade();
+            let settings = settings.clone();
+            let dirty = dirty.clone();
+            let pending_save = pending_save.clone();
+            let save = callbacks.save.clone();
+            window.connect_is_active_notify(move |window| {
+                if window.is_active() || !settings.borrow().save_on_focus_loss || !dirty.get() {
+                    return;
+                }
+                if !editor.upgrade().is_some_and(|editor| editor.is_editable()) {
+                    return;
+                }
+                cancel_timer(&pending_save);
+                if let Some(buffer) = buffer.upgrade() {
+                    save(buffer_text(&buffer));
+                }
+            });
+        }
         let pending_diagnostics = Rc::new(RefCell::new(None::<glib::SourceId>));
         let pending_error = Rc::new(RefCell::new(None::<glib::SourceId>));
         let revision = Rc::new(Cell::new(0_u64));
@@ -1356,10 +1405,7 @@ impl WorkspaceView {
             let dirty = dirty.clone();
             let suppress_changes = suppress_changes.clone();
             let save_label = save_label.clone();
-            let callback_buffer = buffer.clone();
-            let callbacks = callbacks.clone();
-            let settings = settings.clone();
-            let pending = pending_compile.clone();
+            let schedule_updates = schedule_updates.clone();
             let revision = revision.clone();
             let last_edit = last_edit.clone();
             let source_map = source_map.clone();
@@ -1392,26 +1438,7 @@ impl WorkspaceView {
                     }
                     dirty.set(true);
                     save_label.set_text("Unsaved changes");
-                    if let Some(source) = pending.borrow_mut().take() {
-                        source.remove();
-                    }
-                    let live_compile = settings.borrow().auto_compile;
-                    let buffer = callback_buffer.clone();
-                    let callbacks = callbacks.clone();
-                    let delay = settings.borrow().compile_delay_ms.max(50) as u64;
-                    let pending_done = pending.clone();
-                    let id = glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(delay),
-                        move || {
-                            pending_done.borrow_mut().take();
-                            let text = buffer_text(&buffer);
-                            (callbacks.save)(text.clone());
-                            if live_compile {
-                                (callbacks.refresh_compile)(text);
-                            }
-                        },
-                    );
-                    pending.replace(Some(id));
+                    schedule_updates();
                 }
             });
         }
@@ -1497,6 +1524,8 @@ impl WorkspaceView {
             dirty,
             suppress_changes,
             pending_compile,
+            pending_save,
+            schedule_updates,
             pending_diagnostics,
             pending_error,
             revision,
@@ -1799,6 +1828,7 @@ impl WorkspaceView {
     }
 
     pub fn mark_saved(&self) {
+        cancel_timer(&self.pending_save);
         self.buffer.set_modified(false);
         self.dirty.set(false);
         self.save_label.set_text("Saved");
@@ -1809,6 +1839,7 @@ impl WorkspaceView {
     }
 
     pub fn request_save(&self) {
+        cancel_timer(&self.pending_save);
         if self.editor.is_editable() {
             (self.callbacks.save)(self.source_text());
         }
@@ -1831,6 +1862,7 @@ impl WorkspaceView {
     pub fn cancel_pending_compile(&self) {
         for pending in [
             &self.pending_compile,
+            &self.pending_save,
             &self.pending_diagnostics,
             &self.pending_error,
         ] {
@@ -2440,6 +2472,7 @@ impl WorkspaceView {
             self.centered_scroll.center();
         }
         self.set_view_mode(view_mode);
+        (self.schedule_updates)();
     }
 
     pub fn toggle_minimap(&self) {
@@ -3090,6 +3123,65 @@ fn select_document_match(
     Ok(true)
 }
 
+fn cancel_timer(pending: &RefCell<Option<glib::SourceId>>) {
+    if let Some(timer) = pending.borrow_mut().take() {
+        timer.remove();
+    }
+}
+
+fn schedule_editor_updates(
+    buffer: &glib::WeakRef<sourceview5::Buffer>,
+    settings: &Rc<RefCell<UiSettings>>,
+    dirty: &Rc<Cell<bool>>,
+    pending_save: &Rc<RefCell<Option<glib::SourceId>>>,
+    pending_compile: &Rc<RefCell<Option<glib::SourceId>>>,
+    callbacks: &WorkspaceCallbacks,
+) {
+    cancel_timer(pending_save);
+    cancel_timer(pending_compile);
+    if !dirty.get() {
+        return;
+    }
+    let value = settings.borrow();
+    if value.auto_save {
+        let pending = pending_save.clone();
+        let buffer = buffer.clone();
+        let settings = settings.clone();
+        let dirty = dirty.clone();
+        let save = callbacks.save.clone();
+        let timer = glib::timeout_add_local_once(
+            Duration::from_millis(u64::from(value.auto_save_delay_ms.clamp(50, 60_000))),
+            move || {
+                pending.borrow_mut().take();
+                if settings.borrow().auto_save && dirty.get() {
+                    if let Some(buffer) = buffer.upgrade() {
+                        save(buffer_text(&buffer));
+                    }
+                }
+            },
+        );
+        pending_save.replace(Some(timer));
+    }
+    if value.auto_compile {
+        let pending = pending_compile.clone();
+        let buffer = buffer.clone();
+        let settings = settings.clone();
+        let compile = callbacks.refresh_compile.clone();
+        let timer = glib::timeout_add_local_once(
+            Duration::from_millis(u64::from(value.compile_delay_ms.max(50))),
+            move || {
+                pending.borrow_mut().take();
+                if settings.borrow().auto_compile {
+                    if let Some(buffer) = buffer.upgrade() {
+                        compile(buffer_text(&buffer));
+                    }
+                }
+            },
+        );
+        pending_compile.replace(Some(timer));
+    }
+}
+
 fn build_settings_dialog(
     parent: &gtk::ApplicationWindow,
     settings: Rc<RefCell<UiSettings>>,
@@ -3231,6 +3323,36 @@ fn build_settings_dialog(
         "Join sequences like -> and != when the font supports it",
         &ligatures,
     ));
+    let group = adw::PreferencesGroup::builder().title("Saving").build();
+    group.set_description(Some("Ctrl+S always saves. Changes are also saved before switching files or closing; a failed save keeps the document open."));
+    rows.append(&group);
+    let auto_save = gtk::Switch::new();
+    auto_save.set_active(settings.borrow().auto_save);
+    group.add(&setting_row(
+        "Auto-save after editing",
+        "Save after you stop typing",
+        &auto_save,
+    ));
+    let save_delay = gtk::SpinButton::with_range(50.0, 60_000.0, 50.0);
+    save_delay.set_value(settings.borrow().auto_save_delay_ms as f64);
+    save_delay.set_sensitive(auto_save.is_active());
+    auto_save.connect_active_notify({
+        let save_delay = save_delay.clone();
+        move |toggle| save_delay.set_sensitive(toggle.is_active())
+    });
+    group.add(&setting_row(
+        "Auto-save delay",
+        "Milliseconds after the last edit; independent of compilation",
+        &save_delay,
+    ));
+    let save_on_focus_loss = gtk::Switch::new();
+    save_on_focus_loss.set_active(settings.borrow().save_on_focus_loss);
+    group.add(&setting_row(
+        "Save when the window loses focus",
+        "Save immediately when you leave the document window",
+        &save_on_focus_loss,
+    ));
+
     let group = adw::PreferencesGroup::builder()
         .title("Compilation")
         .build();
@@ -3337,6 +3459,9 @@ fn build_settings_dialog(
         ligatures: ligatures.clone(),
         auto_compile: auto_compile.clone(),
         delay: delay.clone(),
+        auto_save: auto_save.clone(),
+        save_delay: save_delay.clone(),
+        save_on_focus_loss: save_on_focus_loss.clone(),
         theme: theme.clone(),
         page_size: page_size.clone(),
         notes_layout: notes_layout.clone(),
@@ -3371,6 +3496,9 @@ fn build_settings_dialog(
                 editor_ligatures: ligatures.is_active(),
                 auto_compile: auto_compile.is_active(),
                 compile_delay_ms: delay.value() as u32,
+                auto_save: auto_save.is_active(),
+                auto_save_delay_ms: save_delay.value() as u32,
+                save_on_focus_loss: save_on_focus_loss.is_active(),
                 page_size: (page_size.selected() as usize)
                     .checked_sub(1)
                     .and_then(|index| PAGE_SIZES.get(index))
@@ -3694,6 +3822,209 @@ mod tests {
         preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
         svg_aspect_ratio, PreviewZoom,
     };
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    fn native_autosave_timers_preferences_navigation_and_failures() {
+        use super::*;
+        adw::init().unwrap();
+        super::super::install_css();
+        let application = gtk::Application::builder()
+            .application_id("dev.typsmthng.AutosaveTest")
+            .build();
+        application.register(None::<&gio::Cancellable>).unwrap();
+        let window = gtk::ApplicationWindow::builder()
+            .application(&application)
+            .build();
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("main.typ");
+        std::fs::write(&file, "Saved").unwrap();
+        let saves = Rc::new(RefCell::new(Vec::<String>::new()));
+        let compiles = Rc::new(RefCell::new(Vec::<String>::new()));
+        let fail_save = Rc::new(Cell::new(false));
+        let noop: Rc<dyn Fn()> = Rc::new(|| {});
+        let path_noop: Rc<dyn Fn(String)> = Rc::new(|_| {});
+        let workspace = WorkspaceView::new(
+            &window,
+            WorkspaceCallbacks {
+                editor_query: Rc::new(|request| {
+                    let typsmthng_gtk::backend::editor::EditorQuery::Format { anchor } =
+                        request.query
+                    else {
+                        return None;
+                    };
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    sender
+                        .send(typsmthng_gtk::backend::editor::format_source(
+                            typst::syntax::Source::detached(request.text),
+                            request.cursor,
+                            anchor,
+                        ))
+                        .unwrap();
+                    Some(receiver)
+                }),
+                go_home: noop.clone(),
+                open_project: noop.clone(),
+                save: {
+                    let saves = saves.clone();
+                    let fail_save = fail_save.clone();
+                    let file = file.clone();
+                    Rc::new(move |text| {
+                        saves.borrow_mut().push(text.clone());
+                        if fail_save.get() {
+                            return false;
+                        }
+                        std::fs::write(&file, text).unwrap();
+                        true
+                    })
+                },
+                force_save: Rc::new(|_| true),
+                select_file: path_noop.clone(),
+                create_file: noop.clone(),
+                create_folder: noop.clone(),
+                import_files: noop.clone(),
+                drop_files: Rc::new(|_| {}),
+                move_path: Rc::new(|_| {}),
+                toggle_hidden: noop.clone(),
+                rename_path: path_noop.clone(),
+                duplicate_path: path_noop.clone(),
+                trash_path: path_noop.clone(),
+                reveal_path: path_noop.clone(),
+                open_external: path_noop.clone(),
+                preview_asset: path_noop.clone(),
+                check_update: noop.clone(),
+                export_pdf: noop.clone(),
+                export_document: noop.clone(),
+                export_project: noop.clone(),
+                present_single: noop.clone(),
+                present_dual: noop,
+                refresh_compile: {
+                    let compiles = compiles.clone();
+                    Rc::new(move |text| compiles.borrow_mut().push(text))
+                },
+                search: Rc::new(|_, _, reply| reply(Vec::new())),
+                settings_changed: Rc::new(|_| {}),
+                preferences_changed: Rc::new(|_| {}),
+            },
+        );
+        let drive = |milliseconds| {
+            let until = Instant::now() + Duration::from_millis(milliseconds);
+            while Instant::now() < until {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let mut settings = UiSettings {
+            compile_delay_ms: 50,
+            auto_save_delay_ms: 250,
+            ..Default::default()
+        };
+        workspace.apply_settings(settings.clone());
+        workspace.show_text_file("main.typ", "Saved");
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " first");
+        drive(80);
+        assert_eq!(compiles.borrow().as_slice(), &["Saved first"]);
+        assert!(saves.borrow().is_empty());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Saved");
+        // A second edit resets only the independent save debounce.
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " final");
+        drive(180);
+        assert!(saves.borrow().is_empty());
+        drive(100);
+        assert_eq!(saves.borrow().as_slice(), &["Saved first final"]);
+        assert_eq!(compiles.borrow().last().unwrap(), "Saved first final");
+        workspace.mark_saved();
+
+        // Disabling autosave takes effect for an already queued edit.
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " disabled");
+        settings.auto_save = false;
+        workspace.apply_settings(settings.clone());
+        drive(300);
+        assert_eq!(saves.borrow().len(), 1);
+        assert_eq!(
+            compiles.borrow().last().unwrap(),
+            "Saved first final disabled"
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Saved first final");
+        assert!(workspace.is_dirty());
+        window.notify("is-active");
+        assert_eq!(saves.borrow().len(), 1);
+        // Focus-loss saving is independently configurable.
+        settings.save_on_focus_loss = true;
+        workspace.apply_settings(settings.clone());
+        window.notify("is-active");
+        assert_eq!(saves.borrow().len(), 2);
+        workspace.mark_saved();
+
+        // Autosave also works with live compile paused.
+        settings.auto_save = true;
+        settings.auto_compile = false;
+        settings.auto_save_delay_ms = 50;
+        workspace.apply_settings(settings.clone());
+        let compile_count = compiles.borrow().len();
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " paused");
+        drive(80);
+        assert_eq!(saves.borrow().len(), 3);
+        assert_eq!(compiles.borrow().len(), compile_count);
+        workspace.mark_saved();
+
+        // A file replacement cancels a pending save rather than saving the
+        // replacement buffer under the previous file's deadline.
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " old file");
+        workspace.show_text_file("other.typ", "Replacement");
+        drive(100);
+        assert_eq!(saves.borrow().len(), 3);
+        assert!(!workspace.is_dirty());
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " binary timer");
+        workspace.show_missing_file("other.typ");
+        drive(100);
+        assert_eq!(saves.borrow().len(), 3);
+
+        // Failed writes preserve the dirty buffer and block navigation even
+        // when timed autosave is disabled. Ctrl+S remains available.
+        workspace.show_text_file("main.typ", "Unsaved");
+        settings.auto_save = false;
+        settings.save_on_focus_loss = false;
+        workspace.apply_settings(settings.clone());
+        workspace
+            .buffer
+            .insert(&mut workspace.buffer.end_iter(), " changes");
+        fail_save.set(true);
+        // Enabling auto-save while dirty schedules the current buffer at once;
+        // a failed timer write leaves the same buffer marked as unsaved.
+        settings.auto_save = true;
+        workspace.apply_settings(settings.clone());
+        drive(80);
+        assert!(workspace.is_dirty());
+        assert_eq!(workspace.save_label.text(), "Unsaved changes");
+        settings.auto_save = false;
+        workspace.apply_settings(settings.clone());
+        assert!(!workspace.save_before_navigation());
+        assert!(workspace.is_dirty());
+        assert_eq!(workspace.source_text(), "Unsaved changes");
+        assert_eq!(workspace.save_label.text(), "Unsaved changes");
+        fail_save.set(false);
+        workspace.request_save();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Unsaved changes");
+        workspace.mark_saved();
+        assert!(!workspace.is_dirty());
+        workspace.cancel_pending_compile();
+        window.destroy();
+    }
 
     #[test]
     #[ignore = "requires a display; run one exact filter under Xvfb"]

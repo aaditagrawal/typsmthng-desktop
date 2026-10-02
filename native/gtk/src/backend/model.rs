@@ -134,6 +134,9 @@ impl Default for AppMetadata {
 pub struct UserSettings {
     pub font_size: f64,
     pub auto_compile: bool,
+    pub auto_save: bool,
+    pub auto_save_delay_ms: u64,
+    pub save_on_focus_loss: bool,
     #[serde(alias = "compileDelay")]
     pub compile_delay_ms: u64,
     pub line_wrapping: bool,
@@ -164,6 +167,9 @@ impl Default for UserSettings {
             font_size: 15.0,
             auto_compile: true,
             compile_delay_ms: 100,
+            auto_save: true,
+            auto_save_delay_ms: 100,
+            save_on_focus_loss: false,
             line_wrapping: true,
             line_numbers: true,
             theme: Theme::System,
@@ -228,6 +234,21 @@ pub struct Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::UserSettings;
+
+    #[test]
+    fn autosave_preferences_default_and_round_trip() {
+        let mut settings: UserSettings = serde_json::from_str(r#"{"compileDelay":750}"#).unwrap();
+        assert!(settings.auto_save);
+        assert_eq!(settings.auto_save_delay_ms, 100);
+        assert!(!settings.save_on_focus_loss);
+        assert_eq!(settings.compile_delay_ms, 750);
+        settings.auto_save = false;
+        settings.auto_save_delay_ms = 12_000;
+        settings.save_on_focus_loss = true;
+        let restored: UserSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+    }
 
     #[test]
     fn centered_scrolling_defaults_off_and_round_trips_saved_preferences() {
