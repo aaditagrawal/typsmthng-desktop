@@ -1219,11 +1219,13 @@ impl AppController {
                 return;
             }
         };
-        if let Some(current) = self.current_file.borrow().as_deref() {
-            if !self.write_current_checked(&project, current, &source, "Could not save file") {
-                return;
-            }
-        }
+        // Preview reads the editor buffer without writing it to disk. Saving
+        // has its own timer and may be disabled or delayed independently.
+        let current_source = self
+            .current_file
+            .borrow()
+            .clone()
+            .map(|path| (path, source.clone()));
         if let Some(cancel) = self.compile_cancellation.borrow().as_ref() {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -1265,7 +1267,7 @@ impl AppController {
             move || {
                 let mut source_map = None;
                 let result = compiler
-                    .compile(&project, &main, &options)
+                    .compile_with_source(&project, &main, current_source, &options)
                     .and_then(|output| {
                         let output = CompileOutput {
                             artifact: output.artifact.map(|preview| {
@@ -3766,6 +3768,9 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         font_size: settings.font_size.round() as u32,
         auto_compile: settings.auto_compile,
         compile_delay_ms: settings.compile_delay_ms as u32,
+        auto_save: settings.auto_save,
+        auto_save_delay_ms: settings.auto_save_delay_ms.clamp(50, 60_000) as u32,
+        save_on_focus_loss: settings.save_on_focus_loss,
         line_wrapping: settings.line_wrapping,
         line_numbers: settings.line_numbers,
         vim_mode: settings.vim_mode,
@@ -3794,6 +3799,9 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         font_size: settings.font_size as f64,
         auto_compile: settings.auto_compile,
         compile_delay_ms: settings.compile_delay_ms as u64,
+        auto_save: settings.auto_save,
+        auto_save_delay_ms: settings.auto_save_delay_ms as u64,
+        save_on_focus_loss: settings.save_on_focus_loss,
         line_wrapping: settings.line_wrapping,
         line_numbers: settings.line_numbers,
         theme: match settings.theme {

@@ -652,7 +652,11 @@ struct Request {
 }
 
 enum Task {
-    Compile(String, mpsc::Sender<Result<CompileOutput<Preview>>>),
+    Compile(
+        String,
+        Option<(String, String)>,
+        mpsc::Sender<Result<CompileOutput<Preview>>>,
+    ),
     Editor(EditorRequest, mpsc::Sender<Result<EditorResponse>>),
 }
 
@@ -684,12 +688,13 @@ impl Default for PreviewCompiler {
                         Ok(())
                     })();
                     match request.task {
-                        Task::Compile(main, reply) => {
+                        Task::Compile(main, source, reply) => {
                             let result = ready
                                 .and_then(|_| {
                                     engine.as_mut().unwrap().compile(
                                         &request.project,
                                         &main,
+                                        source,
                                         &request.options,
                                     )
                                 })
@@ -728,13 +733,25 @@ impl PreviewCompiler {
         main: &str,
         options: &CompileOptions,
     ) -> Result<CompileOutput<Preview>> {
+        self.compile_with_source(project, main, None, options)
+    }
+
+    /// Compile an unsaved current file, including an imported file, without
+    /// changing the disk copy. The overlay is limited to this request.
+    pub fn compile_with_source(
+        &self,
+        project: &Project,
+        main: &str,
+        source: Option<(String, String)>,
+        options: &CompileOptions,
+    ) -> Result<CompileOutput<Preview>> {
         let options = options.resolved()?;
         let (reply, response) = mpsc::channel();
         self.requests
             .send(Request {
                 project: project.clone(),
                 options,
-                task: Task::Compile(main.into(), reply),
+                task: Task::Compile(main.into(), source, reply),
                 font_revision: self.font_revision.load(Ordering::Relaxed),
             })
             .map_err(|_| BackendError::Process("Preview compiler stopped".into()))?;
@@ -854,10 +871,18 @@ impl Engine {
         &mut self,
         project: &Project,
         main: &str,
+        source: Option<(String, String)>,
         options: &CompileOptions,
     ) -> Result<CompileOutput<Preview>> {
         let started = Instant::now();
         self.overlay = None;
+        if let Some((path, text)) = source {
+            super::paths::safe_existing_path(project.root(), &path)?;
+            let path = VirtualPath::new(&path)
+                .map_err(|error| BackendError::Process(error.to_string()))?;
+            let id = RootedPath::new(VirtualRoot::Project, path).intern();
+            self.overlay = Some(Source::new(id, text));
+        }
         let cancelled = || {
             options
                 .cancellation
@@ -1009,6 +1034,7 @@ impl World for Engine {
     }
     fn source(&self, id: FileId) -> FileResult<Source> {
         if let Some(source) = self.overlay.as_ref().filter(|source| source.id() == id) {
+            self.sources.lock().unwrap().insert(id, source.clone());
             return Ok(source.clone());
         }
         let source = self.files.source(id)?;
@@ -1114,6 +1140,75 @@ mod tests {
         let output = compiler.compile(project, "main.typ", &options()).unwrap();
         assert!(output.success(), "{}", output.stderr);
         output.artifact.unwrap()
+    }
+
+    #[test]
+    fn preview_unsaved_main_and_imported_overlays_do_not_write_or_leak() {
+        let (_dir, project) = fixture("#include \"chapters/edit.typ\"");
+        fs::create_dir(project.root().join("chapters")).unwrap();
+        fs::write(project.root().join("chapters/edit.typ"), "Saved chapter").unwrap();
+        let compiler = PreviewCompiler::default();
+        let chapter = "= Unsaved chapter\nCharacters café λ";
+        let output = compiler
+            .compile_with_source(
+                &project,
+                "main.typ",
+                Some(("chapters/edit.typ".into(), chapter.into())),
+                &options(),
+            )
+            .unwrap();
+        assert!(output.success(), "{}", output.stderr);
+        let preview = output.artifact.unwrap();
+        assert_eq!(preview.source_map.headings()[0].title, "Unsaved chapter");
+        assert!(preview
+            .source_map
+            .jump_from_cursor("chapters/edit.typ", chapter, 2)
+            .is_some());
+        assert_eq!(
+            fs::read_to_string(project.root().join("chapters/edit.typ")).unwrap(),
+            "Saved chapter"
+        );
+        assert_eq!(
+            fs::read_to_string(project.root().join("main.typ")).unwrap(),
+            "#include \"chapters/edit.typ\""
+        );
+        assert!(compiled(&compiler, &project)
+            .source_map
+            .headings()
+            .is_empty());
+        let mut page_options = options();
+        page_options.page_preamble = Some("#set page(width: 240pt, height: 180pt)".into());
+        let output = compiler
+            .compile_with_source(
+                &project,
+                "main.typ",
+                Some(("main.typ".into(), "= Unsaved main".into())),
+                &page_options,
+            )
+            .unwrap();
+        assert_eq!(
+            output.artifact.unwrap().source_map.headings()[0].title,
+            "Unsaved main"
+        );
+        assert!(compiled(&compiler, &project)
+            .source_map
+            .headings()
+            .is_empty());
+        // An unrelated current buffer must not replace the main document.
+        fs::write(project.root().join("other.typ"), "Saved other").unwrap();
+        let output = compiler
+            .compile_with_source(
+                &project,
+                "main.typ",
+                Some(("other.typ".into(), "= Unrelated unsaved".into())),
+                &options(),
+            )
+            .unwrap();
+        assert!(output.artifact.unwrap().source_map.headings().is_empty());
+        assert_eq!(
+            fs::read_to_string(project.root().join("other.typ")).unwrap(),
+            "Saved other"
+        );
     }
 
     #[test]
