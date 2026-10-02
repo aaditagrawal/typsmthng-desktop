@@ -147,6 +147,7 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Save, compile, or export PDF: `Ctrl+S`, `Ctrl+Enter`, `Ctrl+Shift+E`
 - Search, settings, or file tree: `Ctrl+K`, `Ctrl+,`, `Ctrl+\`
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
+- Type `$` to open a paired math region, then Space between the delimiters to start a block equation. Typing the closing `$` moves past it. Backspace removes an empty pair.
 - Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.
 - Toggle the preview magnifier in the preview toolbar to inspect rendered text at 2× without changing the page zoom.
 - Format the current Typst document: `Ctrl+Shift+I`, or "Format document" in the command palette

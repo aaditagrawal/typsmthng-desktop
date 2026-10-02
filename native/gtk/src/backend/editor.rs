@@ -138,6 +138,91 @@ pub fn byte_to_char(text: &str, offset: usize) -> Option<usize> {
     text.get(..offset).map(|prefix| prefix.chars().count())
 }
 
+/// One atomic math-delimiter edit, in UTF-8 byte offsets.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MathEdit {
+    pub range: Range<usize>,
+    pub replacement: String,
+    pub cursor: usize,
+}
+
+/// Use Typst's parser to distinguish real equation delimiters from literal
+/// dollars in escapes, raw text, comments and strings.
+pub fn math_edit(text: &str, cursor: usize, key: char) -> Option<MathEdit> {
+    use typst::syntax::SyntaxKind;
+    fn equation_at(source: &Source, offset: usize) -> Option<Range<usize>> {
+        let root = LinkedNode::new(source.root());
+        let leaf = root.leaf_at(offset, Side::After)?;
+        if leaf.kind() != SyntaxKind::Dollar || leaf.offset() != offset {
+            return None;
+        }
+        let parent = leaf.parent()?;
+        (parent.kind() == SyntaxKind::Equation).then(|| parent.range())
+    }
+    if !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let following = text.get(cursor..)?;
+    let empty_pair = cursor > 0 && text[..cursor].ends_with('$') && following.starts_with('$');
+    if key != '$' && (!matches!(key, ' ' | '\u{8}') || !empty_pair) {
+        return None;
+    }
+    let closing = (key == '$')
+        .then(|| {
+            following
+                .char_indices()
+                .find(|(_, character)| !character.is_whitespace())
+        })
+        .flatten()
+        .filter(|(_, character)| *character == '$')
+        .map(|(offset, _)| cursor + offset);
+    let source = (closing.is_some() || empty_pair).then(|| Source::detached(text));
+    if let Some(closing) = closing {
+        if let Some(equation) = equation_at(source.as_ref()?, closing) {
+            if equation.start < cursor && equation.end == closing + 1 {
+                return Some(MathEdit {
+                    range: cursor..cursor,
+                    replacement: String::new(),
+                    cursor: closing + 1,
+                });
+            }
+        }
+    }
+    if matches!(key, ' ' | '\u{8}')
+        && empty_pair
+        && equation_at(source.as_ref()?, cursor - 1) == Some(cursor - 1..cursor + 1)
+    {
+        return Some(MathEdit {
+            range: if key == ' ' {
+                cursor..cursor
+            } else {
+                cursor - 1..cursor + 1
+            },
+            replacement: if key == ' ' {
+                "  ".into()
+            } else {
+                String::new()
+            },
+            cursor: if key == ' ' { cursor + 1 } else { cursor - 1 },
+        });
+    }
+    if key != '$' {
+        return None;
+    }
+    let mut candidate = text.to_string();
+    candidate.insert_str(cursor, "$$");
+    let candidate = Source::detached(candidate);
+    if equation_at(&candidate, cursor).is_some_and(|range| range.start == cursor) {
+        Some(MathEdit {
+            range: cursor..cursor,
+            replacement: "$$".into(),
+            cursor: cursor + 1,
+        })
+    } else {
+        None
+    }
+}
+
 /// Typst IDE snippets use `${name}` placeholders, including empty `${}`.
 /// Insert their plain text and select the first placeholder in one undo step.
 pub fn flatten_snippet(snippet: &str) -> (String, Option<Range<usize>>) {
@@ -173,6 +258,54 @@ pub fn flatten_snippet(snippet: &str) -> (String, Option<Range<usize>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn math_delimiters_respect_typst_context() {
+        for text in ["", "é🙂 ", "#text[inside ", "$x$ after "] {
+            let edit = math_edit(text, text.len(), '$').expect(text);
+            assert_eq!(edit.replacement, "$$");
+            assert_eq!(edit.cursor, text.len() + 1);
+        }
+        for text in [
+            r"\",
+            "`raw ",
+            "```typ\nraw ",
+            "// comment ",
+            "/* comment ",
+            "#let s = \"string ",
+            "$x + ",
+        ] {
+            assert_eq!(math_edit(text, text.len(), '$'), None, "{text}");
+        }
+        let edit = math_edit("é $$", 4, ' ').unwrap();
+        assert_eq!(edit.replacement, "  ");
+        assert_eq!(edit.cursor, 5);
+        assert_eq!(math_edit("$x$", 2, '$').unwrap().cursor, 3);
+        let edit = math_edit("$$", 1, '\u{8}').unwrap();
+        assert_eq!(edit.range, 0..2);
+        for text in [r"\$$", "`$$`", "// $$", "#let s = \"$$\""] {
+            let cursor = text.find("$$").unwrap() + 1;
+            assert_eq!(math_edit(text, cursor, ' '), None, "{text}");
+            assert_eq!(math_edit(text, cursor, '\u{8}'), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn closing_math_skips_block_padding_only_inside_the_current_equation() {
+        for text in ["$ x^2 $", "é🙂 $ x^2 \t\n $"] {
+            let cursor = text.find("x^2").unwrap() + 3;
+            let edit = math_edit(text, cursor, '$').unwrap();
+            assert_eq!(edit.range, cursor..cursor);
+            assert!(edit.replacement.is_empty());
+            assert_eq!(edit.cursor, text.rfind('$').unwrap() + 1);
+        }
+        for text in ["Prose $next$", "$previous$ $next$"] {
+            let cursor = text.find(" $next$").unwrap();
+            let edit = math_edit(text, cursor, '$').unwrap();
+            assert_eq!(edit.replacement, "$$");
+            assert_eq!(edit.cursor, cursor + 1);
+        }
+    }
+
     #[test]
     fn offsets_and_snippets_preserve_unicode() {
         assert_eq!(char_to_byte("é🙂x", 2), Some(6));
