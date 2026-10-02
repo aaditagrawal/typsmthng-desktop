@@ -148,6 +148,8 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Search, settings, or file tree: `Ctrl+K`, `Ctrl+,`, `Ctrl+\`
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
 - Type `$` to open a paired math region, then Space between the delimiters to start a block equation. Typing the closing `$` moves past it. Backspace removes an empty pair.
+- Font ligatures default to on and can be disabled in Settings → Fonts. The selected editor font must include the ligatures.
+- Settings → Equations lets you disable equation backgrounds or choose a CSS color. Clear the color to follow the light or dark theme. Syntax colors remain enabled.
 - Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.
 - Toggle the preview magnifier in the preview toolbar to inspect rendered text at 2× without changing the page zoom.
 - Format the current Typst document: `Ctrl+Shift+I`, or "Format document" in the command palette

@@ -74,6 +74,9 @@ pub struct UiSettings {
     /// Line height as a percentage of the font's own line height.
     pub editor_line_height: u32,
     pub editor_ligatures: bool,
+    pub equation_highlighting: bool,
+    /// Empty follows the active theme; otherwise a GTK CSS color.
+    pub equation_highlight_color: String,
     /// Empty uses the desktop interface font.
     pub ui_font_family: String,
     /// Points; 0 uses the desktop interface font size.
@@ -105,6 +108,8 @@ impl Default for UiSettings {
             editor_font_family: String::new(),
             editor_line_height: 100,
             editor_ligatures: true,
+            equation_highlighting: true,
+            equation_highlight_color: String::new(),
             ui_font_family: String::new(),
             ui_font_size: 0,
         }
@@ -327,7 +332,7 @@ pub fn editor_css(settings: &UiSettings) -> String {
         ),
     };
     let features = if settings.editor_ligatures {
-        ""
+        "font-feature-settings: \"liga\" 1, \"calt\" 1; "
     } else {
         "font-feature-settings: \"liga\" 0, \"calt\" 0, \"dlig\" 0; "
     };
@@ -458,7 +463,10 @@ mod tests {
     #[test]
     fn font_settings_render_css_padding_and_interface_names() {
         let mut settings = UiSettings::default();
-        assert_eq!(editor_css(&settings), ".typst-editor { font-size: 15pt; }");
+        assert_eq!(
+            editor_css(&settings),
+            ".typst-editor { font-size: 15pt; font-feature-settings: \"liga\" 1, \"calt\" 1; }"
+        );
         settings.editor_font_family = "JetBrains \"Mono".into();
         settings.editor_ligatures = false;
         assert_eq!(

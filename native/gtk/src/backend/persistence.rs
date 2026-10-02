@@ -401,7 +401,16 @@ mod tests {
     fn settings_round_trip_and_preserve_unknown_fields() {
         let directory = tempdir().unwrap();
         let store = StateStore::new(directory.path());
-        let mut settings = UserSettings::default();
+        let defaults: UserSettings = serde_json::from_str("{}").unwrap();
+        assert!(defaults.editor_ligatures);
+        assert!(defaults.equation_highlighting);
+        assert!(defaults.equation_highlight_color.is_empty());
+        let mut settings = UserSettings {
+            equation_highlighting: false,
+            equation_highlight_color: "#f0cafe".into(),
+            editor_ligatures: false,
+            ..UserSettings::default()
+        };
         settings.extra.insert("futureOption".into(), true.into());
         store.save_settings(&settings).unwrap();
         assert_eq!(store.load_settings().unwrap(), settings);

@@ -3786,6 +3786,8 @@ fn settings_from_backend(settings: &UserSettings) -> UiSettings {
         editor_font_family: settings.editor_font_family.clone(),
         editor_line_height: settings.editor_line_height.clamp(100, 200),
         editor_ligatures: settings.editor_ligatures,
+        equation_highlighting: settings.equation_highlighting,
+        equation_highlight_color: settings.equation_highlight_color.clone(),
         ui_font_family: settings.ui_font_family.clone(),
         ui_font_size: match settings.ui_font_size {
             0 => 0,
@@ -3822,6 +3824,8 @@ fn settings_to_backend(settings: &UiSettings) -> UserSettings {
         editor_font_family: settings.editor_font_family.clone(),
         editor_line_height: settings.editor_line_height,
         editor_ligatures: settings.editor_ligatures,
+        equation_highlighting: settings.equation_highlighting,
+        equation_highlight_color: settings.equation_highlight_color.clone(),
         ui_font_family: settings.ui_font_family.clone(),
         ui_font_size: settings.ui_font_size,
         ..UserSettings::default()
