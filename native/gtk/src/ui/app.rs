@@ -461,6 +461,7 @@ impl AppController {
         } else if options.smoke_test {
             match std::env::var("TYPSMTHNG_SMOKE_VIEW").as_deref() {
                 Ok("settings") => controller.show_settings(),
+                Ok("guide") => controller.show_guide(),
                 Ok("font-picker") => controller.show_font_picker_smoke(),
                 Ok("export") => controller.choose_document_export(),
                 Ok("templates") => controller.create_from_template(),
@@ -3492,69 +3493,7 @@ impl AppController {
     }
 
     fn show_guide(&self) {
-        let guide = gtk::Window::builder()
-            .title("Guide — typsmthng")
-            .transient_for(&self.window)
-            .modal(false)
-            .hide_on_close(true)
-            .default_width(760)
-            .default_height(720)
-            .build();
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let header = gtk::HeaderBar::new();
-        header.set_title_widget(Some(&gtk::Label::new(Some("typsmthng guide"))));
-        root.append(&header);
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 20);
-        content.set_margin_top(28);
-        content.set_margin_bottom(36);
-        content.set_margin_start(32);
-        content.set_margin_end(32);
-        guide_section(
-            &content,
-            "HOW IT FITS TOGETHER",
-            "A file is an ordinary document or asset on disk. A project is the folder containing those files. A workspace is only an optional home-screen grouping; it never moves or owns project files.",
-        );
-        guide_section(
-            &content,
-            "GETTING STARTED",
-            "Create a blank project, use a built-in starter, initialize a template from Typst Universe, open an existing folder, or import a .typst/.zip archive. LaTeX imports accept individual files, whole directories, and archives while preserving relative assets. Conversion warnings identify constructs that still need review; custom packages, custom macros, and TikZ may require manual work.",
-        );
-        guide_section(
-            &content,
-            "THE EDITOR",
-            "GtkSourceView provides Typst highlighting, line numbers, matching brackets, auto-pairs, undo/redo, optional Vim input, wrapping, and automatic saves. Use Ctrl/Cmd+F or Ctrl/Cmd+H for document find and replace, Ctrl/Cmd+K for project files/content/commands, Ctrl/Cmd+/ to comment, Ctrl/Cmd+D to duplicate lines, and Ctrl/Cmd+S to save now.",
-        );
-        guide_section(
-            &content,
-            "WRITING TYPST",
-            "Start headings with =, emphasize with *bold* and _italic_, create lists with - item, insert images with #image(\"images/figure.png\"), and add citations with @key plus #bibliography(\"refs.bib\"). A project may use typst.toml, main.typ, or another selected .typ entrypoint.",
-        );
-        guide_section(
-            &content,
-            "PREVIEW AND DIAGNOSTICS",
-            "The right pane uses a persistent Typst compiler. Click rendered text or formulas to jump to their source. Ctrl+Shift+J shows the source cursor in the preview after compilation. The compiled headings menu includes imported and generated headings. Rendered statistics count pages and non-whitespace Unicode characters in the final document, including headers, footers, and footnotes. Resize the split, zoom or fit pages, follow safe external links, and activate diagnostics to jump to their file and line. External edits are watched; conflicting unsaved changes must be resolved before saving.",
-        );
-        guide_section(
-            &content,
-            "PRESENTATION",
-            "F5 presents in this window; Shift+F5 opens presenter and audience windows. Navigate with arrows, Page Up/Down, Space, or a typed slide number. Presenter view includes current/next slides, editable sidecar and inline notes, a timer, grid, black/white screen, laser pointer, pen, highlighter, eraser, monitor selection, and note font controls.",
-        );
-        guide_section(
-            &content,
-            "EXPORTING AND UPDATES",
-            "Export the current document as PDF with an optional PDF/A or PDF/UA profile, all SVG or PNG pages in a ZIP, or experimental HTML. The PDF toolbar button and Ctrl+Shift+E use the default PDF profile. More actions opens the format chooser. Package one, selected, or all projects as portable archives. Template metadata is retained but private .typsmthng state is excluded. Update checks show a button when a stable release is available. Click to download, then restart to install. Downloads are verified against the release SHA-256 checksums. Linux system packages update through their package manager.",
-        );
-        guide_section(
-            &content,
-            "STORAGE AND RECOVERY",
-            "Projects stay in regular filesystem folders and work with git, sync tools, and other editors. App preferences, recents, workspaces, and window state live in the platform application-data directory. File deletion uses the operating system Trash when available.",
-        );
-        let scroll = gtk::ScrolledWindow::new();
-        scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroll.set_child(Some(&content));
-        root.append(&scroll);
-        guide.set_child(Some(&root));
-        guide.present();
+        super::guide::window(&self.window).present();
     }
 
     fn prompt_name(
@@ -3891,23 +3830,6 @@ fn reveal_in_file_manager(target: &Path) -> bool {
         "file manager reveal is unsupported",
     ));
     status.is_ok_and(|status| status.success())
-}
-
-fn guide_section(container: &gtk::Box, heading: &str, body: &str) {
-    let title = gtk::Label::new(Some(heading));
-    title.add_css_class("eyebrow");
-    title.set_halign(gtk::Align::Start);
-    title.set_selectable(true);
-    container.append(&title);
-    let text = gtk::Label::new(Some(body));
-    text.set_halign(gtk::Align::Start);
-    text.set_valign(gtk::Align::Start);
-    text.set_wrap(true);
-    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-    text.set_selectable(true);
-    text.set_xalign(0.0);
-    container.append(&text);
-    container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 }
 
 fn write_template_metadata(
