@@ -171,10 +171,6 @@ impl ExternalWatcher {
         Ok(output)
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     fn is_suppressed(&mut self, path: &str, fingerprint: Option<&FileFingerprint>) -> bool {
         let now = SystemTime::now();
         self.suppressed.retain(|_, (_, expiry)| *expiry > now);

@@ -21,7 +21,6 @@ use gtk::pango;
 use gtk::prelude::*;
 
 use crate::backend::error::{BackendError, Result};
-use crate::backend::fonts::GoogleFontCache;
 
 thread_local! {
     static REGISTERED: RefCell<HashSet<PathBuf>> = RefCell::new(HashSet::new());
@@ -82,16 +81,6 @@ pub fn register_app_font_files(paths: &[PathBuf]) -> Result<()> {
         platform::refresh_font_map(&font_map);
     }
     first_error.map_or(Ok(()), Err)
-}
-
-/// Make a Google Fonts family usable by GTK, e.g. for a persisted setting at
-/// startup. Uses cached files when present and downloads otherwise, which
-/// blocks: prefer `ui::font_picker::ensure_registered_async` on the main
-/// thread unless [`GoogleFontCache::cached_family_files`] already succeeds.
-pub fn ensure_registered(family: &str) -> Result<Vec<PathBuf>> {
-    let files = GoogleFontCache::default().ensure_family_files(family)?;
-    register_app_font_files(&files)?;
-    Ok(files)
 }
 
 /// Whether a font file has been registered by [`register_app_font_files`].
@@ -373,6 +362,7 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::fonts::GoogleFontCache;
 
     fn test_font(name: &str) -> Option<PathBuf> {
         let directory = std::env::var_os("TYPSMTHNG_TEST_FONT_DIR")?;

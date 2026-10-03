@@ -83,10 +83,6 @@ impl UpdateClient {
         status_from_release(current, release)
     }
 
-    pub fn download(&self, asset: &ReleaseAsset, destination: impl AsRef<Path>) -> Result<PathBuf> {
-        self.download_with_progress(asset, destination, |_, _| {})
-    }
-
     pub fn download_with_progress(
         &self,
         asset: &ReleaseAsset,
