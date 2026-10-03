@@ -24,9 +24,7 @@ pub mod update_install;
 pub mod watcher;
 
 #[cfg(feature = "desktop")]
-pub use app_fonts::{
-    ensure_registered, family_is_available, list_local_families, register_app_font_files,
-};
+pub use app_fonts::{family_is_available, list_local_families, register_app_font_files};
 pub use archive::{
     export_project, export_projects, import_project, import_projects, ArchiveLimits,
 };

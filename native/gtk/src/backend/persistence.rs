@@ -48,10 +48,6 @@ impl StateStore {
         }
     }
 
-    pub fn directory(&self) -> &Path {
-        &self.directory
-    }
-
     pub fn metadata_path(&self) -> PathBuf {
         self.directory.join("app-state.json")
     }
