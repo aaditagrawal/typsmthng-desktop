@@ -63,7 +63,7 @@ Install development packages on Ubuntu 24.04 or a compatible Debian system:
 sudo apt install build-essential pkg-config libgtk-4-dev libgtksourceview-5-dev libadwaita-1-dev librsvg2-common
 ```
 
-Windows builds use MSYS2 MinGW64 with `mingw-w64-x86_64-gtk4`, `mingw-w64-x86_64-gtksourceview5`, `mingw-w64-x86_64-libadwaita`, `mingw-w64-x86_64-pkgconf`, and the Rust GNU toolchain.
+Windows builds use MSYS2 UCRT64 with `mingw-w64-ucrt-x86_64-gtk4`, `mingw-w64-ucrt-x86_64-gtksourceview5`, `mingw-w64-ucrt-x86_64-libadwaita`, `mingw-w64-ucrt-x86_64-pkgconf`, and the Rust GNU toolchain.
 
 ## Build and run
 

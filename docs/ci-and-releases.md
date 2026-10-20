@@ -12,6 +12,8 @@ include the operating system, architecture, and profile in their shared key.
 Compatible release candidates and fallback builds share a cache. CI and shipping
 objects use separate caches so an immutable CI cache cannot suppress a shipping
 cache save.
+Windows uses the MSYS2 UCRT64 packages and separate cache keys from the former
+MINGW64 builds, including the GTK runtime collected for the installer.
 
 ## Build once and publish the verified packages
 
