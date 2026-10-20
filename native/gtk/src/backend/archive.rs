@@ -266,6 +266,7 @@ fn extract_into(archive_path: &Path, destination: &Path, limits: ArchiveLimits) 
     let mut total = 0_u64;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
+        let entry_name = entry.name()?.into_owned();
         if entry.size() > limits.max_file_bytes {
             return Err(BackendError::ArchiveLimit("single file size"));
         }
@@ -280,12 +281,11 @@ fn extract_into(archive_path: &Path, destination: &Path, limits: ArchiveLimits) 
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
             return Err(BackendError::InvalidArchive(format!(
-                "symbolic links are not supported: {}",
-                entry.name()
+                "symbolic links are not supported: {entry_name}"
             )));
         }
         let enclosed = entry.enclosed_name().ok_or_else(|| {
-            BackendError::InvalidArchive(format!("path escapes project: {}", entry.name()))
+            BackendError::InvalidArchive(format!("path escapes project: {entry_name}"))
         })?;
         let normalized = normalize_relative_path(enclosed)?;
         let output = destination.join(relative_pathbuf(&normalized));
@@ -300,8 +300,7 @@ fn extract_into(archive_path: &Path, destination: &Path, limits: ArchiveLimits) 
         let copied = copy_bounded(&mut entry, &mut file, limits.max_file_bytes)?;
         if copied != entry.size() {
             return Err(BackendError::InvalidArchive(format!(
-                "truncated entry: {}",
-                entry.name()
+                "truncated entry: {entry_name}"
             )));
         }
     }
@@ -379,7 +378,14 @@ mod tests {
         export_project(&source, &destination).unwrap();
         let mut archive = ZipArchive::new(File::open(destination).unwrap()).unwrap();
         let names = (0..archive.len())
-            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .map(|index| {
+                archive
+                    .by_index(index)
+                    .unwrap()
+                    .name()
+                    .unwrap()
+                    .into_owned()
+            })
             .collect::<Vec<_>>();
         assert!(!names.iter().any(|name| name == "project.zip"));
         assert!(!names.iter().any(|name| name == ".typsmthng/private.json"));

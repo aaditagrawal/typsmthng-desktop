@@ -27,11 +27,11 @@ jobs:
       source_sha: ${{ steps.version.outputs.source_sha }}
       rust_toolchain: ${{ steps.version.outputs.rust_toolchain }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.sha }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools

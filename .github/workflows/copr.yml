@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
@@ -51,7 +51,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y rpm
       - name: Build self-contained source RPM
         run: bash packaging/copr/build-srpm.sh "$PWD/build/copr"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: fedora-source-rpm
           path: build/copr/*.src.rpm

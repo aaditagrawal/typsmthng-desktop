@@ -3998,7 +3998,7 @@ mod tests {
         let server_requests = requests.clone();
         let body = b"example update";
         use sha2::Digest;
-        let checksum = format!("{:x}", sha2::Sha256::digest(body));
+        let checksum = hex::encode(sha2::Sha256::digest(body));
         let metadata = serde_json::json!({"tag_name": "v99.0.0", "html_url": base,
         "assets": [
             {"name": "typsmthng-linux-x64.AppImage", "browser_download_url": format!("{base}/app")},

@@ -25,7 +25,7 @@ impl FileFingerprint {
         let metadata = fs::metadata(path).map_err(|error| BackendError::io(path, error))?;
         let sha256 = if metadata.is_file() && metadata.len() <= 8 * 1024 * 1024 {
             let bytes = fs::read(path).map_err(|error| BackendError::io(path, error))?;
-            Some(format!("{:x}", Sha256::digest(bytes)))
+            Some(hex::encode(Sha256::digest(bytes)))
         } else {
             None
         };

@@ -28,11 +28,11 @@ jobs:
       source_sha: ${{ steps.version.outputs.source_sha }}
       rust_toolchain: ${{ steps.version.outputs.rust_toolchain }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -50,13 +50,13 @@ jobs:
     needs: preflight
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-release
@@ -95,7 +95,7 @@ jobs:
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none timeout 45s "$appimage" --appimage-extract-and-run --presentation-smoke-test native/gtk/tests/fixtures/demo
           dpkg-deb --info build/release/*.deb >/dev/null
           rpm -qip build/release/*.rpm >/dev/null
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: package-linux-x64
           path: build/release/*
@@ -116,13 +116,13 @@ jobs:
             arch: x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-release
@@ -184,7 +184,7 @@ jobs:
           xcrun stapler validate "$dmg"
       - name: Verify disk image integrity
         run: hdiutil verify "build/release/typsmthng-${VERSION}-macos-${ARCH}.dmg"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: package-macos-${{ matrix.arch }}
           path: build/release/*.dmg
@@ -202,21 +202,21 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ needs.preflight.outputs.rust_toolchain }}
           targets: x86_64-pc-windows-gnu
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2.33.0
         id: msys2
         with:
           msystem: MINGW64
           update: true
           install: mingw-w64-x86_64-toolchain mingw-w64-x86_64-gtk4 mingw-w64-x86_64-adwaita-icon-theme mingw-w64-x86_64-libadwaita mingw-w64-x86_64-gtksourceview5
             mingw-w64-x86_64-pkgconf mingw-w64-x86_64-nsis unzip
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-release
@@ -247,7 +247,7 @@ jobs:
       - name: Verify install, upgrade, uninstall, and unrelated file preservation
         shell: pwsh
         run: packaging/windows/test-installer.ps1
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: package-windows-x64
           path: build/release/*.exe
@@ -265,11 +265,11 @@ jobs:
       FLATPAK_CACHE: ${{ github.workspace }}/.cache/flatpak-release
       SOURCE_REPOSITORY: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -284,7 +284,7 @@ jobs:
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
           echo "commit=$(flatpak info --show-commit org.gnome.Sdk//50)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6.1.0
         with:
           path: |-
             .cache/flatpak-release/.flatpak-builder/cache
@@ -298,7 +298,7 @@ jobs:
             flatpak-x64-sdk-${{ steps.sdk.outputs.commit }}-rust-${{ needs.preflight.outputs.rust_toolchain }}-manifest-${{ hashFiles('packaging/flatpak/**') }}-
       - name: Build and verify the cached Flatpak bundle
         run: .release-tools/packaging/flatpak/build.sh "$VERSION" "$PWD/build/release" "$FLATPAK_CACHE"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: package-flatpak-x64
           path: build/release/*.flatpak
@@ -324,11 +324,11 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       BUILD_RUN_ID: ${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -336,7 +336,7 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
           enable-cache: false
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: artifacts
           pattern: package-*
@@ -345,7 +345,7 @@ jobs:
         run: |-
           uv run --no-project .release-tools/packaging/release/release_artifacts.py assemble artifacts --version "$VERSION" --source-sha "$SOURCE_SHA" --signing "$SIGNING" \
             --repository "$REPOSITORY" --run-id "$BUILD_RUN_ID" --rust-toolchain "$RUST_TOOLCHAIN"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: release-candidate-metadata
           path: artifacts/release-metadata.json
@@ -353,7 +353,7 @@ jobs:
           compression-level: 0
           retention-days: 14
           overwrite: true
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: verified-release
           path: artifacts/*

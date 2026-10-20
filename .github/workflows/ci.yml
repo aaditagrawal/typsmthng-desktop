@@ -13,7 +13,7 @@ jobs:
   typst-compatibility:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - name: Read pinned Rust toolchain
         id: toolchain
         shell: bash
@@ -25,7 +25,7 @@ jobs:
         with:
           toolchain: ${{ steps.toolchain.outputs.version }}
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-dev
@@ -37,7 +37,7 @@ jobs:
   rust-quality:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - name: Read pinned Rust toolchain
         id: toolchain
         shell: bash
@@ -49,7 +49,7 @@ jobs:
         with:
           toolchain: ${{ steps.toolchain.outputs.version }}
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-dev
@@ -146,7 +146,7 @@ jobs:
             os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - name: Read pinned Rust toolchain
         id: toolchain
         shell: bash
@@ -157,14 +157,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.toolchain.outputs.version }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-ci
       - name: macOS GTK dependencies
         if: runner.os == 'macOS'
         run: brew install gtk4 gtksourceview5 libadwaita adwaita-icon-theme
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2.33.0
         if: runner.os == 'Windows'
         with:
           msystem: MINGW64

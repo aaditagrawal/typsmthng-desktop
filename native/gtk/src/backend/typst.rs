@@ -928,7 +928,7 @@ mod tests {
             for index in 0..12 {
                 let mut page = archive.by_index(index).unwrap();
                 assert_eq!(
-                    page.name(),
+                    page.name().unwrap(),
                     format!("page-{:02}.{}", index + 1, format.cli_format())
                 );
                 let mut bytes = Vec::new();
