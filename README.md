@@ -151,6 +151,7 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Font ligatures default to on and can be disabled in Settings → Fonts. The selected editor font must include the ligatures.
 - Settings → Equations lets you disable equation backgrounds or choose a CSS color. Clear the color to follow the light or dark theme. Syntax colors remain enabled.
 - Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.
+- Scroll past the last line to bring your working area into the middle of the editor, even in short documents. Extra scroll space is available with centered scrolling off.
 - In Settings, Preview quality offers Standard, High, and Ultra. Higher quality refines fine lines and curves with more processing time; only nearby pages render, and raster memory remains capped.
 - Fit text width zooms the full page and centers it horizontally. Pan sideways to inspect the original page margins.
 - Toggle the preview magnifier in the preview toolbar to inspect rendered text at 2× without changing the page zoom.
