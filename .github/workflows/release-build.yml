@@ -212,14 +212,15 @@ jobs:
       - uses: msys2/setup-msys2@v2
         id: msys2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
-          install: mingw-w64-x86_64-toolchain mingw-w64-x86_64-gtk4 mingw-w64-x86_64-adwaita-icon-theme mingw-w64-x86_64-libadwaita mingw-w64-x86_64-gtksourceview5
-            mingw-w64-x86_64-pkgconf mingw-w64-x86_64-nsis unzip
+          install: mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-adwaita-icon-theme mingw-w64-ucrt-x86_64-libadwaita mingw-w64-ucrt-x86_64-gtksourceview5
+            mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-nsis unzip
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
           shared-key: native-${{ runner.os }}-${{ runner.arch }}-release
+          key: ucrt64
       - name: Build
         env:
           RUSTUP_TOOLCHAIN: ${{ needs.preflight.outputs.rust_toolchain }}
@@ -228,16 +229,16 @@ jobs:
           "$(cygpath -u "$CARGO_HOME")/bin/rustc.exe" --version --verbose
           export RUSTC="$(cygpath -m "$CARGO_HOME")/bin/rustc.exe"
           export PKG_CONFIG_ALLOW_CROSS=1
-          export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig:/mingw64/share/pkgconfig
+          export PKG_CONFIG_PATH=/ucrt64/lib/pkgconfig:/ucrt64/share/pkgconfig
           "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --features console --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
           packaging/download-typst.sh x86_64-pc-windows-msvc target/x86_64-pc-windows-gnu/release
-          export PATH="/mingw64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
+          export PATH="/ucrt64/bin:$PWD/target/x86_64-pc-windows-gnu/release:$PATH"
           timeout 20s target/x86_64-pc-windows-gnu/release/typsmthng.exe --smoke-test
           timeout 30s target/x86_64-pc-windows-gnu/release/typsmthng.exe --presentation-smoke-test native/gtk/tests/fixtures/demo
           "$(cygpath -u "$CARGO_HOME")/bin/cargo.exe" build --locked --release --target x86_64-pc-windows-gnu --manifest-path native/gtk/Cargo.toml
       - name: Collect GTK runtime
         env:
-          TYPSMTHNG_MINGW_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\mingw64
+          TYPSMTHNG_MINGW_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\ucrt64
         shell: pwsh
         run: packaging/windows/collect-runtime.ps1
       - name: Installer

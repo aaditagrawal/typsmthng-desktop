@@ -42,7 +42,9 @@ impl CenteredScrolling {
             move |_| controls.cancel_centering()
         });
         if let Some(adjustment) = editor.vadjustment() {
-            adjustment.connect_page_size_notify({
+            // Font changes and wrapping can change the line height as well as
+            // the scroll range, without changing the viewport's page size.
+            adjustment.connect_changed({
                 let controls = controls.clone();
                 move |_| controls.update_padding()
             });
@@ -69,11 +71,13 @@ impl CenteredScrolling {
                 .buffer()
                 .iter_at_offset(editor.buffer().cursor_position()),
         );
-        let padding = ((editor.visible_rect().height() - line.height()) / 2).max(0);
+        let extra = (editor.visible_rect().height() - line.height()).max(0);
         let (top, bottom) = if settings.borrow().centered_scrolling {
-            (padding, padding)
+            (extra / 2, extra / 2)
         } else {
-            (14, 24)
+            // Let even a short document scroll its last line to the top. This
+            // is view padding, so scrolling never inserts blank source lines.
+            (14, extra.max(24))
         };
         let previous = editor.top_margin();
         if previous == top && editor.bottom_margin() == bottom {

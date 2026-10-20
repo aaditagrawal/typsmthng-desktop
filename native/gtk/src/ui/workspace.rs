@@ -4410,13 +4410,64 @@ mod tests {
         window.set_child(Some(&workspace.root));
         window.present();
         drive(200);
-        assert_eq!(
-            (
-                workspace.editor.top_margin(),
-                workspace.editor.bottom_margin()
-            ),
-            (14, 24)
-        );
+        let assert_scroll_past_end = || {
+            let end = workspace.editor.iter_location(&workspace.buffer.end_iter());
+            let adjustment = workspace.editor.vadjustment().unwrap();
+            let target = f64::from(end.y() + workspace.editor.top_margin());
+            assert!(
+                adjustment.upper() - adjustment.page_size() >= target - 2.0,
+                "the last line must be scrollable to the top of the viewport"
+            );
+            adjustment.set_value(target);
+            drive(100);
+            let (_, y) = workspace.editor.buffer_to_window_coords(
+                gtk::TextWindowType::Widget,
+                end.x(),
+                end.y(),
+            );
+            assert!(y.abs() < 3, "last line should reach the top, y={y}");
+            assert_eq!(workspace.editor.top_margin(), 14);
+        };
+        assert_scroll_past_end();
+        let short = (1..=24)
+            .map(|line| format!("Line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for text in ["", "One line", "First\nSecond\nThird", &short, &source] {
+            workspace.show_text_file("main.typ", text);
+            workspace.buffer.place_cursor(&workspace.buffer.end_iter());
+            drive(150);
+            assert_scroll_past_end();
+            assert_eq!(buffer_text(&workspace.buffer), text);
+            if text == short {
+                let line = workspace.editor.iter_location(&workspace.buffer.end_iter());
+                let height = workspace.editor.visible_rect().height();
+                assert!(line.y() < height, "fixture must fit in the viewport");
+                let adjustment = workspace.editor.vadjustment().unwrap();
+                let target = f64::from(line.y() + workspace.editor.top_margin())
+                    + f64::from(line.height() - height) / 2.0;
+                assert!(target > 0.0, "fixture must extend below the midpoint");
+                adjustment.set_value(target);
+                drive(150);
+                let (_, y) = workspace.editor.buffer_to_window_coords(
+                    gtk::TextWindowType::Widget,
+                    line.x(),
+                    line.y() + line.height() / 2,
+                );
+                assert!((y - height / 2).abs() < 3);
+                assert!((adjustment.value() - target).abs() < 1.0);
+            }
+        }
+        for (height, font_size) in [(640, 24), (900, 12), (800, 14)] {
+            window.set_default_size(1280, height);
+            settings.font_size = font_size;
+            workspace.apply_settings(settings.clone());
+            drive(200);
+            assert_scroll_past_end();
+        }
+        workspace
+            .buffer
+            .place_cursor(&workspace.buffer.start_iter());
         assert!(!workspace.magnifier.toggle.is_active());
         settings.centered_scrolling = true;
         workspace.apply_settings(settings.clone());
@@ -4499,13 +4550,7 @@ mod tests {
         settings.centered_scrolling = false;
         workspace.apply_settings(settings.clone());
         drive(150);
-        assert_eq!(
-            (
-                workspace.editor.top_margin(),
-                workspace.editor.bottom_margin()
-            ),
-            (14, 24)
-        );
+        assert_scroll_past_end();
         let stable = adjustment.value();
         // Pending centering and padding restoration must observe the final toggle state.
         settings.centered_scrolling = true;
