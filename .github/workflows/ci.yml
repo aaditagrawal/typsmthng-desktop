@@ -13,11 +13,11 @@ jobs:
   rust-quality:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
       - name: GTK development libraries
@@ -63,15 +63,15 @@ jobs:
             os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
       - name: macOS GTK dependencies
         if: runner.os == 'macOS'
         run: brew install gtk4 gtksourceview5 adwaita-icon-theme
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2.33.0
         if: runner.os == 'Windows'
         with:
           msystem: MINGW64

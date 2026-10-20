@@ -159,7 +159,7 @@ impl GoogleFontCache {
     }
 
     fn family_manifest(&self, family: &str) -> PathBuf {
-        let hash = format!("{:x}", Sha256::digest(family.as_bytes()));
+        let hash = hex::encode(Sha256::digest(family.as_bytes()));
         self.directory.join(format!(".family-{hash}.json"))
     }
 
@@ -214,7 +214,7 @@ impl GoogleFontCache {
     }
 
     fn font_destination(&self, url: &str) -> PathBuf {
-        let hash = format!("{:x}", Sha256::digest(url.as_bytes()));
+        let hash = hex::encode(Sha256::digest(url.as_bytes()));
         let extension = Path::new(url)
             .extension()
             .and_then(|value| value.to_str())
