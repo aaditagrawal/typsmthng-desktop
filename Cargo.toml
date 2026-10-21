@@ -1,6 +1,7 @@
 [workspace]
 members = ["native/gtk"]
 resolver = "2"
+exclude = ["third-party/syntect", "third-party/hayagriva", "third-party/biblatex"]
 
 [profile.release]
 lto = "thin"
@@ -21,3 +22,8 @@ codegen-units = 256
 # Upstream's quick-xml 0.41 migration fixes RUSTSEC-2026-0194/0195 without
 # changing our pinned Typst 0.15.1 compiler or bibliography model.
 citationberg = { git = "https://github.com/typst/citationberg", rev = "06a591e2f237d25e1dfdedac3f3d1494c496c52d" }
+
+# Backport maintained replacements without changing Typst's diagnostic API.
+syntect = { path = "third-party/syntect" }
+hayagriva = { path = "third-party/hayagriva" }
+biblatex = { path = "third-party/biblatex" }

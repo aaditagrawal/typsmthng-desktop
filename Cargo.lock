@@ -45,6 +45,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -83,24 +89,13 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 [[package]]
 name = "biblatex"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "591eba69b7c085632e22ca03606f0bbea68d53bbe26c8962e2d549af20c6a561"
 dependencies = [
- "paste",
+ "pastey",
  "roman-numerals-rs",
  "strum",
  "unic-langid",
  "unicode-normalization",
  "unscanny",
-]
-
-[[package]]
-name = "bincode"
-version = "1.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -628,7 +623,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -726,6 +721,12 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "foldhash"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "foldhash"
@@ -961,7 +962,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 9.0.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1020,8 +1021,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d99fc21d493812643aae86d53b7bbd02f376434a90317e8a790bc209fdd6605e"
 dependencies = [
  "bytemuck",
- "foldhash",
- "hashbrown",
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
  "log",
  "peniko",
  "png",
@@ -1180,18 +1181,34 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.15.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+dependencies = [
+ "foldhash 0.1.5",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "foldhash",
+ "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
+dependencies = [
+ "hashbrown 0.15.5",
 ]
 
 [[package]]
 name = "hayagriva"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b6c185c5c72546d50b25b70187f01ab9a1a2fa21c4db8691e2426fa5fce805c"
 dependencies = [
  "biblatex",
  "ciborium",
@@ -1199,7 +1216,7 @@ dependencies = [
  "icu_collator",
  "icu_locale",
  "indexmap",
- "paste",
+ "pastey",
  "roman-numerals-rs",
  "serde",
  "serde_yaml",
@@ -1660,7 +1677,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
- "hashbrown",
+ "hashbrown 0.17.1",
  "rayon",
  "serde",
  "serde_core",
@@ -1809,12 +1826,6 @@ name = "linebender_resource_handle"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
-
-[[package]]
-name = "linked-hash-map"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "linux-raw-sys"
@@ -2133,10 +2144,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.15"
+name = "pastey"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "peniko"
@@ -2603,7 +2614,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2704,6 +2715,17 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-wincode"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9aa9d3a86c66cf10ce79df36f555a5a4c8d72a82515d9ea8ca420e02c925c30f"
+dependencies = [
+ "serde",
+ "thiserror",
+ "wincode",
 ]
 
 [[package]]
@@ -2992,10 +3014,7 @@ dependencies = [
 [[package]]
 name = "syntect"
 version = "5.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "656b45c05d95a5704399aeef6bd0ddec7b2b3531b7c9e900abbf7c4d2190c925"
 dependencies = [
- "bincode",
  "fancy-regex",
  "flate2",
  "fnv",
@@ -3003,11 +3022,12 @@ dependencies = [
  "plist",
  "regex-syntax",
  "serde",
+ "serde-wincode",
  "serde_derive",
  "serde_json",
  "thiserror",
  "walkdir",
- "yaml-rust",
+ "yaml-rust2",
 ]
 
 [[package]]
@@ -3063,7 +3083,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3342,6 +3362,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sourceview5",
+ "syntect",
  "tempfile",
  "thiserror",
  "trash",
@@ -3969,7 +3990,7 @@ dependencies = [
  "bytemuck",
  "fearless_simd 0.4.1",
  "guillotiere",
- "hashbrown",
+ "hashbrown 0.17.1",
  "log",
  "peniko",
  "png",
@@ -3986,7 +4007,7 @@ dependencies = [
  "bytemuck",
  "fearless_simd 0.4.1",
  "guillotiere",
- "hashbrown",
+ "hashbrown 0.17.1",
  "log",
  "peniko",
  "png",
@@ -4002,7 +4023,7 @@ checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo",
- "hashbrown",
+ "hashbrown 0.17.1",
  "png",
  "vello_common 0.0.8",
 ]
@@ -4156,7 +4177,19 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "wincode"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063b5affe63fb4e584a33101d8808f01f2348b4f533db6223bf27263a0fdb9e9"
+dependencies = [
+ "pastey",
+ "proc-macro2",
+ "quote",
+ "thiserror",
 ]
 
 [[package]]
@@ -4472,12 +4505,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
-name = "yaml-rust"
-version = "0.4.5"
+name = "yaml-rust2"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
+checksum = "2462ea039c445496d8793d052e13787f2b90e750b833afee748e601c17621ed9"
 dependencies = [
- "linked-hash-map",
+ "arraydeque",
+ "hashlink",
 ]
 
 [[package]]

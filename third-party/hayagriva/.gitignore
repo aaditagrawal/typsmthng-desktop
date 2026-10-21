@@ -1,0 +1,16 @@
+# VS Code
+.vscode
+
+# Trying stuff locally
+/_studies
+
+# Rust
+/target
+/main/target
+**/*.rs.bk
+
+# macOS
+.DS_Store
+
+# Zed editor
+.zed

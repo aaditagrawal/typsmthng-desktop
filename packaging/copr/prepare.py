@@ -13,7 +13,8 @@ def prepare(source: Path, vendor: Path, output: Path):
     notices.mkdir()
     licenses = {"MIT", "Apache-2.0"}
     inventory = []
-    for manifest in sorted(vendor.glob("*/Cargo.toml")):
+    manifests = [*vendor.glob("*/Cargo.toml"), *(source / "third-party").glob("*/Cargo.toml")]
+    for manifest in sorted(manifests):
         dependency = tomllib.loads(manifest.read_text())["package"]
         license_id = dependency.get("license", "").replace("/", " OR ")
         if not license_id or any(char in license_id for char in "\r\n@"):

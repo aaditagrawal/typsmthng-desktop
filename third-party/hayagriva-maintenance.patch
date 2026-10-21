@@ -1,0 +1,12 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -95,7 +95,8 @@
+ features = ["serde"]
+ 
+ [dependencies.paste]
+-version = "1.0.14"
++version = "0.2.3"
++package = "pastey"
+ 
+ [dependencies.roman-numerals-rs]
+ version = "3.1.0"

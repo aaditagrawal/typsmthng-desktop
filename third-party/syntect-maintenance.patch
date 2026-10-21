@@ -1,0 +1,216 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -78,11 +78,11 @@
+ default-themes = ["dump-load"]
+ dump-create = [
+     "flate2",
+-    "bincode",
++    "serde-wincode",
+ ]
+ dump-load = [
+     "flate2",
+-    "bincode",
++    "serde-wincode",
+ ]
+ html = ["parsing"]
+ metadata = [
+@@ -172,8 +172,8 @@
+ path = "benches/parsing.rs"
+ harness = false
+ 
+-[dependencies.bincode]
+-version = "1.0"
++[dependencies.serde-wincode]
++version = "0.1.2"
+ optional = true
+ 
+ [dependencies.fancy-regex]
+@@ -221,7 +221,9 @@
+ version = "2.0"
+ 
+ [dependencies.yaml-rust]
+-version = "0.4.5"
++version = "0.10.4"
++package = "yaml-rust2"
++default-features = false
+ optional = true
+ 
+ [dev-dependencies.criterion]
+--- a/src/dumps.rs
++++ b/src/dumps.rs
+@@ -17,11 +17,6 @@
+ #[cfg(feature = "default-syntaxes")]
+ use crate::parsing::SyntaxSet;
+ #[cfg(feature = "dump-load")]
+-use bincode::deserialize_from;
+-#[cfg(feature = "dump-create")]
+-use bincode::serialize_into;
+-use bincode::Result;
+-#[cfg(feature = "dump-load")]
+ use flate2::bufread::ZlibDecoder;
+ #[cfg(feature = "dump-create")]
+ use flate2::write::ZlibEncoder;
+@@ -38,11 +33,23 @@
+ use std::io::{BufWriter, Write};
+ use std::path::Path;
+ 
++/// An error that can occur during dump/load operations
++#[derive(Debug, thiserror::Error)]
++#[non_exhaustive]
++pub enum DumpError {
++    /// An IO error occurred
++    #[error("IO error: {0}")]
++    Io(#[from] std::io::Error),
++    /// A serialization or deserialization error occurred
++    #[error("Serialization error: {0}")]
++    Serialize(#[source] Box<dyn std::error::Error + Send + Sync>),
++}
++
+ /// Dumps an object to the given writer in a compressed binary format
+ ///
+-/// The writer is encoded with the `bincode` crate and compressed with `flate2`.
+-#[cfg(feature = "dump-create")]
+-pub fn dump_to_writer<T: Serialize, W: Write>(to_dump: &T, output: W) -> Result<()> {
++/// The writer is encoded with the `serde-wincode` crate and compressed with `flate2`.
++#[cfg(feature = "dump-create")]
++pub fn dump_to_writer<T: Serialize, W: Write>(to_dump: &T, output: W) -> Result<(), DumpError> {
+     serialize_to_writer_impl(to_dump, output, true)
+ }
+ 
+@@ -59,18 +66,18 @@
+ /// Dumps an encodable object to a file at a given path, in the same format as [`dump_to_writer`]
+ ///
+ /// If a file already exists at that path it will be overwritten. The files created are encoded with
+-/// the `bincode` crate and then compressed with the `flate2` crate.
++/// the `serde-wincode` crate and then compressed with the `flate2` crate.
+ ///
+ /// [`dump_to_writer`]: fn.dump_to_writer.html
+ #[cfg(feature = "dump-create")]
+-pub fn dump_to_file<T: Serialize, P: AsRef<Path>>(o: &T, path: P) -> Result<()> {
++pub fn dump_to_file<T: Serialize, P: AsRef<Path>>(o: &T, path: P) -> Result<(), DumpError> {
+     let out = BufWriter::new(File::create(path)?);
+     dump_to_writer(o, out)
+ }
+ 
+ /// A helper function for decoding and decompressing data from a reader
+ #[cfg(feature = "dump-load")]
+-pub fn from_reader<T: DeserializeOwned, R: BufRead>(input: R) -> Result<T> {
++pub fn from_reader<T: DeserializeOwned, R: BufRead>(input: R) -> Result<T, DumpError> {
+     deserialize_from_reader_impl(input, true)
+ }
+ 
+@@ -84,7 +91,7 @@
+ 
+ /// Returns a fully loaded object from a binary dump file.
+ #[cfg(feature = "dump-load")]
+-pub fn from_dump_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T> {
++pub fn from_dump_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T, DumpError> {
+     let contents = std::fs::read(path)?;
+     from_reader(&contents[..])
+ }
+@@ -94,7 +101,10 @@
+ /// syntaxes are already compressed. Compressing another time just results in
+ /// bad performance.
+ #[cfg(feature = "dump-create")]
+-pub fn dump_to_uncompressed_file<T: Serialize, P: AsRef<Path>>(o: &T, path: P) -> Result<()> {
++pub fn dump_to_uncompressed_file<T: Serialize, P: AsRef<Path>>(
++    o: &T,
++    path: P,
++) -> Result<(), DumpError> {
+     let out = BufWriter::new(File::create(path)?);
+     serialize_to_writer_impl(o, out, false)
+ }
+@@ -102,7 +112,9 @@
+ /// To be used when deserializing a [`SyntaxSet`] that was previously written to
+ /// file using [dump_to_uncompressed_file].
+ #[cfg(feature = "dump-load")]
+-pub fn from_uncompressed_dump_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T> {
++pub fn from_uncompressed_dump_file<T: DeserializeOwned, P: AsRef<Path>>(
++    path: P,
++) -> Result<T, DumpError> {
+     let contents = std::fs::read(path)?;
+     deserialize_from_reader_impl(&contents[..], false)
+ }
+@@ -111,7 +123,7 @@
+ /// data that has been embedded in your own binary with the [`include_bytes!`]
+ /// macro.
+ #[cfg(feature = "dump-load")]
+-pub fn from_uncompressed_data<T: DeserializeOwned>(v: &[u8]) -> Result<T> {
++pub fn from_uncompressed_data<T: DeserializeOwned>(v: &[u8]) -> Result<T, DumpError> {
+     deserialize_from_reader_impl(v, false)
+ }
+ 
+@@ -121,13 +133,22 @@
+     to_dump: &T,
+     output: W,
+     use_compression: bool,
+-) -> Result<()> {
++) -> Result<(), DumpError> {
++    let mut buf = Vec::new();
++    let serializer: serde_wincode::Serializer<_> = serde_wincode::Serializer::new(&mut buf);
++    to_dump
++        .serialize(serializer)
++        .map_err(|e| DumpError::Serialize(Box::new(e)))?;
+     if use_compression {
+-        let mut encoder = std::io::BufWriter::new(ZlibEncoder::new(output, Compression::best()));
+-        serialize_into(&mut encoder, to_dump)
++        let mut encoder = ZlibEncoder::new(output, Compression::best());
++        encoder.write_all(&buf)?;
++        encoder.finish()?.flush()?;
+     } else {
+-        serialize_into(output, to_dump)
+-    }
++        let mut writer = output;
++        writer.write_all(&buf)?;
++        writer.flush()?;
++    }
++    Ok(())
+ }
+ 
+ /// Private low level helper function used to implement the public API.
+@@ -135,13 +156,20 @@
+ fn deserialize_from_reader_impl<T: DeserializeOwned, R: BufRead>(
+     input: R,
+     use_compression: bool,
+-) -> Result<T> {
+-    if use_compression {
++) -> Result<T, DumpError> {
++    let buf = if use_compression {
+         let mut decoder = ZlibDecoder::new(input);
+-        deserialize_from(&mut decoder)
++        let mut buf = Vec::new();
++        std::io::Read::read_to_end(&mut decoder, &mut buf)?;
++        buf
+     } else {
+-        deserialize_from(input)
+-    }
++        let mut buf = Vec::new();
++        let mut reader = input;
++        std::io::Read::read_to_end(&mut reader, &mut buf)?;
++        buf
++    };
++    let deserializer: serde_wincode::Deserializer<_> = serde_wincode::Deserializer::new(&buf[..]);
++    T::deserialize(deserializer).map_err(|e| DumpError::Serialize(Box::new(e)))
+ }
+ 
+ #[cfg(feature = "default-syntaxes")]
+@@ -160,7 +188,7 @@
+     /// significantly faster than loading the YAML files.
+     ///
+     /// Note that you can load additional syntaxes after doing this. If you want you can even use
+-    /// the fact that SyntaxDefinitions are serializable with the bincode crate to cache dumps of
++    /// the fact that SyntaxDefinitions are serializable with the serde-wincode crate to cache dumps of
+     /// additional syntaxes yourself.
+     ///
+     /// [`load_defaults_newlines`]: #method.load_defaults_nonewlines
+--- a/src/parsing/yaml_load.rs
++++ b/src/parsing/yaml_load.rs
+@@ -815,7 +815,7 @@
+ }
+ 
+ impl Parser<'_> {
+-    fn new(bytes: &[u8]) -> Parser {
++    fn new(bytes: &[u8]) -> Parser<'_> {
+         Parser { bytes, index: 0 }
+     }
+ 

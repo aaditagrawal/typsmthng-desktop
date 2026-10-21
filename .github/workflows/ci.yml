@@ -68,6 +68,8 @@ jobs:
         run: |
           uv run --no-project packaging/release/test_release.py
           bash packaging/flatpak/test-build.sh
+      - name: Verify dependency maintenance backports
+        run: uv run --no-project python scripts/verify-maintenance-vendor.py
       - name: Formatting
         run: cargo fmt --manifest-path native/gtk/Cargo.toml --all -- --check
       - name: Tests

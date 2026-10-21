@@ -97,6 +97,33 @@ fn deterministic_options() -> CompileOptions {
 }
 
 #[test]
+fn runtime_yaml_grammar_and_theme_match_preview_svg_and_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    fs::write(
+        root.join("maintenance.sublime-syntax"),
+        include_str!("fixtures/maintenance.sublime-syntax"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("maintenance.tmTheme"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>name</key><string>Maintenance</string>
+<key>settings</key><array><dict><key>scope</key><string>keyword.control</string>
+<key>settings</key><dict><key>foreground</key><string>#ff0000</string></dict>
+</dict></array></dict></plist>"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("main.typ"),
+        "#set raw(syntaxes: \"maintenance.sublime-syntax\", theme: \"maintenance.tmTheme\")\n\
+         #raw(\"let x = 42;\\nfn f() { \\\"Café\\\" }\", lang: \"maintenance\", block: true)",
+    )
+    .unwrap();
+    assert_matches_cli(&Project::open(root).unwrap(), &deterministic_options());
+}
+
+#[test]
 fn document_features_match_preview_svg_and_pdf() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

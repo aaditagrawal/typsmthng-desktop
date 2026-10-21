@@ -1,0 +1,62 @@
+@XData{macmillan:name,
+	publisher = {Macmillan},
+}
+
+@XData{macmillan:place,
+	location = {New York and London},
+}
+
+@XData{macmillan,
+	xdata = {macmillan:name,macmillan:place}
+}
+
+@Book{recursive,
+	author= {Wemheuer, Moritz},
+	title= {Recursive shennenigans and other important stuff},
+	date= {2016-04-03},
+	xdata= {macmillan},
+}
+
+@periodical{polecon,
+	title={Journal of Political Economy},
+	date={2007-12},
+	volume={115},
+	number={6},
+	editor={Uhlig, Harald and Heckman, James J. and Kamencia, Emir},
+}
+
+@article{arrgh,
+	title={An‐arrgh‐chy: The Law and Economics of Pirate Organization},
+	author={Leeson, Peter T.},
+	crossref={polecon}
+}
+
+@www{issue201,
+	title={Use of ids field creates unstable references},
+	author={{cfr42}},
+	url={https://github.com/plk/biblatex/issues/201},
+	date={2014-02-02/2014-02-07},
+	ids={unstable, github}
+}
+
+@misc{cannonfodder,
+	title={An Insight into Bibliographical Distress},
+	author={Aldrin, Buzz}
+}
+
+@thesis{haug2019,
+	title={Batch Localization Algorithm for Floating Wireless Sensor Networks},
+	author={Haug, Martin},
+	type={Bachelor's Thesis},
+	institution={Technische Universität Berlin},
+	date={2019-10},
+}
+
+@mvproceedings{ill-defined,
+	maintitle={Journal of Ill-Definedness},
+	author={In a Basement, actually, Dude},
+	month=oct,
+	chapter={5},
+	volumes={20},
+	gender={attack helicopter}
+}
