@@ -47,7 +47,7 @@ pub enum DumpError {
 
 /// Dumps an object to the given writer in a compressed binary format
 ///
-/// The writer is encoded with the `serde-wincode` crate and compressed with `flate2`.
+/// The writer is encoded with the `bincode-next` crate and compressed with `flate2`.
 #[cfg(feature = "dump-create")]
 pub fn dump_to_writer<T: Serialize, W: Write>(to_dump: &T, output: W) -> Result<(), DumpError> {
     serialize_to_writer_impl(to_dump, output, true)
@@ -66,7 +66,7 @@ pub fn dump_binary<T: Serialize>(o: &T) -> Vec<u8> {
 /// Dumps an encodable object to a file at a given path, in the same format as [`dump_to_writer`]
 ///
 /// If a file already exists at that path it will be overwritten. The files created are encoded with
-/// the `serde-wincode` crate and then compressed with the `flate2` crate.
+/// the `bincode-next` crate and then compressed with the `flate2` crate.
 ///
 /// [`dump_to_writer`]: fn.dump_to_writer.html
 #[cfg(feature = "dump-create")]
@@ -134,10 +134,7 @@ fn serialize_to_writer_impl<T: Serialize, W: Write>(
     output: W,
     use_compression: bool,
 ) -> Result<(), DumpError> {
-    let mut buf = Vec::new();
-    let serializer: serde_wincode::Serializer<_> = serde_wincode::Serializer::new(&mut buf);
-    to_dump
-        .serialize(serializer)
+    let buf = bincode_next::serde::encode_to_vec(to_dump, bincode_next::config::legacy())
         .map_err(|e| DumpError::Serialize(Box::new(e)))?;
     if use_compression {
         let mut encoder = ZlibEncoder::new(output, Compression::best());
@@ -168,8 +165,9 @@ fn deserialize_from_reader_impl<T: DeserializeOwned, R: BufRead>(
         std::io::Read::read_to_end(&mut reader, &mut buf)?;
         buf
     };
-    let deserializer: serde_wincode::Deserializer<_> = serde_wincode::Deserializer::new(&buf[..]);
-    T::deserialize(deserializer).map_err(|e| DumpError::Serialize(Box::new(e)))
+    bincode_next::serde::decode_from_slice(&buf, bincode_next::config::legacy())
+        .map(|(value, _)| value)
+        .map_err(|e| DumpError::Serialize(Box::new(e)))
 }
 
 #[cfg(feature = "default-syntaxes")]
@@ -188,7 +186,7 @@ impl SyntaxSet {
     /// significantly faster than loading the YAML files.
     ///
     /// Note that you can load additional syntaxes after doing this. If you want you can even use
-    /// the fact that SyntaxDefinitions are serializable with the serde-wincode crate to cache dumps of
+    /// the fact that SyntaxDefinitions are serializable with the bincode-next crate to cache dumps of
     /// additional syntaxes yourself.
     ///
     /// [`load_defaults_newlines`]: #method.load_defaults_nonewlines

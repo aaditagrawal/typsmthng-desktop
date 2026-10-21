@@ -94,3 +94,26 @@ fn cache_writes_report_flush_errors_and_truncated_input() {
     assert!(dumps::from_uncompressed_data::<SyntaxSet>(&[0xff, 0xff]).is_err());
     assert!(dumps::from_reader::<SyntaxSet, _>(&[0x78, 0x9c][..]).is_err());
 }
+
+#[test]
+fn large_legacy_compatible_cache_values_round_trip() {
+    // Bincode 1.3 accepted these. Do not inherit a replacement codec's smaller
+    // default allocation ceiling and silently narrow the existing dump API.
+    let value = "x".repeat(5 * 1024 * 1024);
+    let encoded = dumps::dump_binary(&value);
+    let decoded: String = dumps::from_reader(&encoded[..]).unwrap();
+    assert_eq!(decoded, value);
+}
+
+include!("fixtures/maintenance-values.rs");
+
+#[test]
+fn legacy_scalar_and_nested_value_bytes_stay_compatible() {
+    let bytes = include_bytes!("fixtures/maintenance-v5-values.packdump");
+    let decoded: LegacyValues = dumps::from_uncompressed_data(bytes).unwrap();
+    assert_eq!(decoded, legacy_values());
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("values.packdump");
+    dumps::dump_to_uncompressed_file(&decoded, &path).unwrap();
+    assert_eq!(bytes.as_slice(), std::fs::read(&path).unwrap());
+}

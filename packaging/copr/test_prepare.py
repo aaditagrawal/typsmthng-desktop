@@ -24,7 +24,7 @@ class PreparationTests(unittest.TestCase):
             (vendor / "nested/LICENSE").write_text("License notice\n")
             local = root / "third-party/local-dependency"
             local.mkdir(parents=True)
-            (local / "Cargo.toml").write_text('[package]\nname = "local-dependency"\nversion = "2.0"\nlicense = "BSD-3-Clause"\n')
+            (local / "Cargo.toml").write_text('[package]\nname = "local-dependency"\nversion = "2.0"\nlicense = "BSD-3-Clause or Apache-2.0"\n')
             (local / "LICENSE").write_text("Local dependency notice\n")
             captured = io.StringIO()
             with redirect_stdout(captured):
@@ -37,7 +37,7 @@ class PreparationTests(unittest.TestCase):
             self.assertIn("demo\t1.0\tMIT OR Apache-2.0", (root / "bundled-licenses/manifest.tsv").read_text())
             self.assertIn("BSD-3-Clause", spec)
             self.assertEqual((root / "bundled-licenses/local-dependency/LICENSE").read_text(), "Local dependency notice\n")
-            self.assertIn("local-dependency\t2.0\tBSD-3-Clause", (root / "bundled-licenses/manifest.tsv").read_text())
+            self.assertIn("local-dependency\t2.0\tBSD-3-Clause OR Apache-2.0", (root / "bundled-licenses/manifest.tsv").read_text())
 
 
 if __name__ == "__main__":

@@ -14,8 +14,13 @@ as provenance; the workspace's root `Cargo.lock` controls application builds.
 
 - Syntect 5.3.0 adopts the maintained `yaml-rust2` parser using the same change as
   [upstream commit af7d1a8](https://github.com/trishume/syntect/commit/af7d1a88cce6680ed99a2623197cc7fa779f30e4).
-  Its dump module backports the `DumpError` abstraction and the `serde-wincode`
-  migration from [upstream PR 694 at 509deb8](https://github.com/trishume/syntect/pull/694).
+  The backport uses `yaml-rust2` 0.13.0, checked against the same compatibility
+  tests. Its dump module backports the `DumpError` abstraction from
+  [upstream PR 694 at 509deb8](https://github.com/trishume/syntect/pull/694), then
+  uses [Bincode-Next 3.1.1](https://github.com/Apich-Organization/bincode) with its
+  bincode 1 legacy configuration. The proposed `serde-wincode` codec rejected
+  strings above 4 MiB. Bincode-Next preserves that existing cache support without
+  disabling an allocation guard. A 5 MiB regression case covers it.
   It additionally propagates writer flush/compression-finalization failures and
   spells out one parser lifetime for the pinned Rust toolchain. Serialization
   layouts and bundled dumps are unchanged. Newer Syntect revisions erase the
@@ -32,7 +37,7 @@ as provenance; the workspace's root `Cargo.lock` controls application builds.
   release snapshots avoids reverting bibliography fixes or altering their APIs.
 
 The maintained replacements are real dependencies in `Cargo.lock`: `pastey`,
-`yaml-rust2`, and `serde-wincode`/`wincode`. The retired `paste`, `yaml-rust`, and
+`yaml-rust2`, and `bincode-next`. The retired `paste`, `yaml-rust`, and
 `bincode` implementations are absent from the application dependency graph.
 There are no advisory ignores.
 

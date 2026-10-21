@@ -78,11 +78,11 @@ default-syntaxes = [
 default-themes = ["dump-load"]
 dump-create = [
     "flate2",
-    "serde-wincode",
+    "bincode-next",
 ]
 dump-load = [
     "flate2",
-    "serde-wincode",
+    "bincode-next",
 ]
 html = ["parsing"]
 metadata = [
@@ -172,8 +172,10 @@ name = "parsing"
 path = "benches/parsing.rs"
 harness = false
 
-[dependencies.serde-wincode]
-version = "0.1.2"
+[dependencies.bincode-next]
+version = "3.1.1"
+default-features = false
+features = ["std", "serde"]
 optional = true
 
 [dependencies.fancy-regex]
@@ -221,7 +223,7 @@ version = "2.0.12"
 version = "2.0"
 
 [dependencies.yaml-rust]
-version = "0.10.4"
+version = "0.13.0"
 package = "yaml-rust2"
 default-features = false
 optional = true

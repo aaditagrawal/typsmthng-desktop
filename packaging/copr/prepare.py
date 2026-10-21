@@ -19,6 +19,10 @@ def prepare(source: Path, vendor: Path, output: Path):
         license_id = dependency.get("license", "").replace("/", " OR ")
         if not license_id or any(char in license_id for char in "\r\n@"):
             raise ValueError(f"Missing or invalid license expression: {manifest}")
+        license_id = " ".join(
+            token.upper() if token.lower() in {"or", "and", "with"} else token
+            for token in license_id.split()
+        )
         licenses.add(license_id)
         inventory.append(f"{dependency['name']}\t{dependency['version']}\t{license_id}\n")
         destination = notices / manifest.parent.name
