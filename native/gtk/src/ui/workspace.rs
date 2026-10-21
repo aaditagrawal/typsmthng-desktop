@@ -4689,8 +4689,33 @@ mod tests {
             workspace.preview_zoom.set(zoom);
             (workspace.resize_preview)();
             assert!(!workspace.magnifier.lens.is_visible());
-            drive(150);
             if zoom == PreviewZoom::FitText {
+                assert_ne!(
+                    picture.width(),
+                    picture.width_request(),
+                    "fixture must exercise a pending page allocation"
+                );
+                // Adjustment::changed runs during allocation, then the idle
+                // centering callback queues another allocation for the viewport
+                // transform. A centered adjustment alone can still describe an
+                // unscrolled page, especially with a slow scale-2 renderer.
+                let horizontal = workspace.preview_scroll.hadjustment();
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    let bounds = picture.compute_bounds(&workspace.preview_scroll).unwrap();
+                    let end = horizontal.upper() - horizontal.page_size();
+                    let allocated = picture.width() == picture.width_request();
+                    let centered = (horizontal.value() - end / 2.0).abs() < 1.0
+                        && (bounds.x() + bounds.width() / 2.0
+                            - horizontal.page_size() as f32 / 2.0)
+                            .abs()
+                            < 1.0;
+                    if (allocated && centered) || Instant::now() >= deadline {
+                        break;
+                    }
+                    drive(10);
+                }
+                assert_eq!(picture.width(), picture.width_request());
                 assert_eq!(picture.content_fit(), gtk::ContentFit::Contain);
                 assert!(picture.width() > workspace.preview_scroll.width());
                 let horizontal = workspace.preview_scroll.hadjustment();
@@ -4705,7 +4730,8 @@ mod tests {
                     (centered.x() + centered.width() / 2.0 - horizontal.page_size() as f32 / 2.0)
                         .abs()
                         < 1.0,
-                    "the page itself must be centered after GTK allocation"
+                    "the page itself must be centered after GTK allocation: bounds={centered:?}, adjustment={}, upper={}, page_size={}, requested_width={}",
+                    horizontal.value(), horizontal.upper(), horizontal.page_size(), picture.width_request()
                 );
                 horizontal.set_value(0.0);
                 drive(30);
@@ -4724,6 +4750,8 @@ mod tests {
                 assert!((horizontal.value() - end).abs() < 1.0);
                 center_preview_horizontally(&horizontal);
                 drive(30);
+            } else {
+                drive(150);
             }
             let bounds = picture.compute_bounds(&workspace.preview_scroll).unwrap();
             let (x, y) = (
