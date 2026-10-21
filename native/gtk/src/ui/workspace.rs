@@ -4472,29 +4472,41 @@ mod tests {
         settings.centered_scrolling = true;
         workspace.apply_settings(settings.clone());
         let assert_centered = || {
-            let line = workspace.editor.iter_location(
-                &workspace
-                    .buffer
-                    .iter_at_offset(workspace.buffer.cursor_position()),
-            );
-            let visible = workspace.editor.visible_rect();
-            let delta = f64::from(line.y()) + f64::from(line.height()) / 2.0
-                - f64::from(visible.y())
-                - f64::from(visible.height()) / 2.0;
-            let (_, widget_y) = workspace.editor.buffer_to_window_coords(
-                gtk::TextWindowType::Widget,
-                line.x(),
-                line.y() + line.height() / 2,
-            );
-            assert!(
-                (widget_y - workspace.editor.height() / 2).abs() < 3,
-                "GTK widget cursor coordinate {widget_y} should match midpoint {}",
-                workspace.editor.height() / 2
-            );
-            assert!(
+            // Centering spans GTK frame-clock ticks. Wait for its observable
+            // result instead of assuming fixed wall-clock frame timing.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let line = workspace.editor.iter_location(
+                    &workspace
+                        .buffer
+                        .iter_at_offset(workspace.buffer.cursor_position()),
+                );
+                let visible = workspace.editor.visible_rect();
+                let delta = f64::from(line.y()) + f64::from(line.height()) / 2.0
+                    - f64::from(visible.y())
+                    - f64::from(visible.height()) / 2.0;
+                let (_, widget_y) = workspace.editor.buffer_to_window_coords(
+                    gtk::TextWindowType::Widget,
+                    line.x(),
+                    line.y() + line.height() / 2,
+                );
+                if ((widget_y - workspace.editor.height() / 2).abs() >= 3 || delta.abs() >= 3.0)
+                    && Instant::now() < deadline
+                {
+                    drive(20);
+                    continue;
+                }
+                assert!(
+                    (widget_y - workspace.editor.height() / 2).abs() < 3,
+                    "GTK widget cursor coordinate {widget_y} should match midpoint {}; line={line:?} visible={visible:?} margin={} adjustment={} offset={}",
+                    workspace.editor.height() / 2, workspace.editor.top_margin(), workspace.editor.vadjustment().unwrap().value(), workspace.buffer.cursor_position()
+                );
+                assert!(
                 delta.abs() < 3.0,
                 "cursor line should be centered, delta {delta}; line={line:?} visible={visible:?} margin={} adjustment={}", workspace.editor.top_margin(), workspace.editor.vadjustment().unwrap().value()
             );
+                break;
+            }
         };
         for line in [0, 75, 149] {
             workspace

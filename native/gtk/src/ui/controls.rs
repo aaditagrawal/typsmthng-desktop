@@ -46,7 +46,12 @@ impl CenteredScrolling {
             // the scroll range, without changing the viewport's page size.
             adjustment.connect_changed({
                 let controls = controls.clone();
-                move |_| controls.update_padding()
+                move |_| {
+                    controls.update_padding();
+                    // Wrapping can finish laying out lines after the first centering
+                    // tick. Recenter on range changes, not manual value changes.
+                    controls.center();
+                }
             });
         }
         controls
