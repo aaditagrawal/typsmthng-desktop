@@ -58,6 +58,8 @@ typst-kit = { version = "=0.15.1", features = ["datetime", "embedded-fonts", "sc
 libc = "0.2.191"
 
 [dev-dependencies]
+serde_yaml = "0.9.34"
+hayagriva = "=0.10.1"
 filetime = "0.2.29"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "regex-fancy", "plist-load", "yaml-load", "default-syntaxes", "default-themes"] }
 

@@ -1,0 +1,1102 @@
+{
+  "bibliographies": [
+    {
+      "input": "zygos:\n    type: Article\n    author:\n        - Prekas, George\n        - Kogias, Marios\n        - Bugnion, Edouard\n    title:\n        value: \"ZygOS: Achieving Low Tail Latency for Microsecond-Scale Networked Tasks\"\n        verbatim: true\n    date: 2017\n    page-range: 325-341\n    serial-number:\n        doi: 10.1145/3132747.3132780\n    parent:\n        - type: Proceedings\n          title: Proceedings of the 26th Symposium on Operating Systems Principles\n          publisher: Association for Computing Machinery\n          location: New York, NY, USA\n          serial-number: { isbn: \"978-1450350853\" }\n\nwwdc-network:\n    type: Article\n    author:  [\"Mehta, Jiten\", \"Kinnear, Eric\"]\n    title: Boost Performance and Security with Modern Networking\n    date: 2020-06-26\n    parent:\n        - type: Conference\n          title:\n              value: \"{World Wide Developer Conference 2020}\"\n              short: WWDC 2020\n          organization: Apple Inc.\n          location: Mountain View, CA\n        - type: Video\n          runtime: \"00:13:42\"\n          url: { value: https://developer.apple.com/videos/play/wwdc2020/10111/, date: 2020-09-17 }\n\nomarova-libra:\n    type: Article\n    author: [\"Omarova, Saule\", \"Steele, Graham\"]\n    title:\n        value: There’s a Lot We Still Don’t Know About Libra\n        sentence-case: There’s a lot we still don’t know about Libra\n    date: 2019-11-04\n    url: https://www.nytimes.com/2019/11/04/opinion/facebook-libra-cryptocurrency.html\n    parent:\n        type: Newspaper\n        title:\n            value: The New York Times\n            verbatim: true\n        location: \"New York, NY, USA\"\n\ndonne:\n    type: Book\n    title: The \"Anniversaries\" and the \"Epicedes and Obsequies\"\n    author: Donne, John\n    editor: [\"Stringer, Gary A.\", \"Pebworth, Ted-Larry\"]\n    location: Bloomington\n    volume: 6\n    publisher: Indiana University Press\n    date: 1995\n    parent:\n        type: Book\n        title: The Variorum Edition of the Poetry of John Donne\n        editor: Stringer, Gary A.\n\nswedish:\n    type: Article\n    editor: Brown, George C.\n    title:\n        value: \"A Swedish Traveller in Early Wisconsin: The Observations of Fredrika Bremer\"\n        short: Swedish Traveller\n    volume: 1-2\n    parent:\n        type: Periodical\n        title: Wisconsin Magazine of History\n        volume: 61-62\n        date: 1978\n        edition: 2\n\nharry:\n    type: Chapter\n    page-range: 135-139\n    serial-number: 3\n    parent:\n        title: Harry Potter and the Order of the Phoenix\n        author: Rowling, J. K.\n        volume: 5\n        volume-total: 7\n        serial-number: { isbn: 978-0747551003 }\n        page-total: 768\n        date: ~2003-06-21\n\nscience-e-issue:\n    type: Web\n    title: Tokenization of + and - with scientific notation\n    url: https://github.com/typst/typstc/issues/3\n    serial-number: 3\n    author:\n        - name: \"Mädje\"\n          given-name: \"Laurenz\"\n          alias: \"laurmaedje\"\n    date: 2020-07-18\n    parent: \n        type: Repository\n        title: Typst\n        url: https://github.com/typst/typst\n\nterminator-2:\n    type: Video\n    title: \"Terminator 2: Judgment Day\"\n    publisher: Carolco Pictures; Pacific Western Productions; Lightstorm Entertainment; Le Studio Canal+ S.A.\n    affiliated:\n        - role: director\n          names: Cameron, James\n        - role: cast-member\n          names: [\"Schwarzenegger, Arnold\", \"Hamilton, Linda\", \"Patrick, Robert\"]\n        - role: composer\n          names: Fiedel, Brad\n    date: 1991-07-01\n    runtime: \"137:00\"\n    time-range: \"17:05-17:48\"\n\ninterior:\n    type: Video\n    title: \"Conspiracy Theories and Interior Design\"\n    affiliated:\n        - role: director\n          names: Davidson, Adam\n        - role: writer\n          names: McKenna, Chris\n    date: 2010-11-18\n    runtime: \"22:00\"\n    volume: 2\n    issue: 9\n    parent:\n        title: Community\n        affiliated:\n            - role: executive-producer\n              names: Harmon, Dan\n        publisher: Universal Television; Sony Pictures Television; Krasnoff Foster Productions; Harmonious Claptrap; Russo Brothers Film\n        volume-total: 6\n\nwire:\n    type: Video\n    title: The wire\n    date: 2002\n    publisher: Blown Deadline Productions\n    volume-total: 5\n    # From Wikipedia, the free encyclopedia: https://en.wikipedia.org/wiki/The_Wire\n    abstract: |\n        The Wire is an American crime drama television series created and\n        primarily written by American author and former police reporter David\n        Simon. The series was broadcast by the cable network HBO in the United\n        States. The Wire premiered on June 2, 2002, and ended on March 9, 2008,\n        comprising sixty episodes over five seasons. The idea for the show\n        started out as a police drama loosely based on the experiences of\n        Simon's writing partner Ed Burns, a former homicide detective and\n        public school teacher.\n    note: The Wire is noted to be solid\n    genre: Drama\n    affiliated:\n        - role: executive-producer\n          names: [\"Simon, David\", \"Colesberry, Robert F.\", \"Noble, Nina Kostroff\"]\n\nkinetics:\n    type: Article\n    title: Kinetics and luminescence of the excitations of a nonequilibrium polariton condensate\n    author: [\"Doan, T. D.\", \"Tran Thoai, D. B.\", \"Haug, Hartmut\"]\n    serial-number:\n        doi: 10.1103/PhysRevB.102.165126\n    page-total: 13\n    page-range: 165126-165139\n    date: 2020-10-14\n    parent:\n        title:\n            value: Physical Review B\n            verbatim: true\n        volume: 102\n        issue: 16\n        publisher: American Physical Society\n\nhouse:\n    type: Article\n    title: Teaching medicine with the help of \"Dr. House\"\n    author: [\"Jerrentrup, Andreas\", \"Mueller, Tobias\", \"Glowalla, Ulrich\", \"Herder, Meike\", \"Henrichs, Nadine\", \"Neubauer, Andreas\", \"Schaefer, Juergen R.\"]\n    serial-number:\n        doi: 10.1371/journal.pone.0193972\n        serial: e0193972\n    date: 2018-03-13\n    parent:\n        title:\n            value: PLoS ONE\n            verbatim: true\n        volume: 13\n        issue: 3\n\nplaque:\n    type: Misc\n    title: Informational plaque about Jacoby's 1967 photos\n    publisher: Stiftung Reinbeckhallen\n    location: Berlin, Germany\n    date: 2020\n    parent:\n        type: Artwork\n        date: 1967\n        author: Jacoby, Max\n        parent:\n            type: Anthology\n            title: Bleibtreustraße\n            archive: Landesmuseum Koblenz\n            archive-location: Koblenz, Germany\n\noiseau:\n    type: Exhibition\n    title: L'oiseau rare, de l'hirondelle au kakapo\n    date: 2020-12-18\n    organization: Musée des Confluences\n    location: Lyon, France\n    url:\n        value: https://www.museedesconfluences.fr/fr/evenements/l%E2%80%99oiseau-rare-de-l%E2%80%99hirondelle-au-kakapo\n        date: 2020-11-04\n\nrenaissance:\n    type: Book\n    title:\n        value: Renaissance, Les Déracinés\n        translation: Renaissance, The Unrooted\n    language: fr-FR\n    author: Duval, Fred\n    affiliated:\n        - role: illustrator\n          names: [\"Emem\", \"Blanchard, Fred\"]\n    date: 2018\n    publisher: Dargaud\n    edition: 1\n    volume: 1\n    volume-total: 3\n\ngedanken:\n    type: Anthos\n    title: Gedanken-experiments on sequential machines\n    author: Moore, Edward F.\n    page-range: 129-153\n    parent:\n        type: Anthology\n        title: Automata studies\n        editor: [\"Shannon, C. E.\", \"McCarthy, J.\"]\n        volume: 34\n        date: 1956-04\n        serial-number: { isbn: 978-0-691-07916-5 }\n        location: Princeton, NJ, USA\n        publisher: NBS\n        parent:\n            type: Anthology\n            title: Annals of Mathematics Studies\n\ngeorgia:\n    type: post\n    author: Silver, Nate\n    title: Trump's claim to have won Georgia is highly dubious. No network has called it. He's only ahead by 2.5 points there, and the outstanding votes are mostly mail votes in very blue counties, likely very Democratic. Biden may even be a slight favorite there.\n    url: https://twitter.com/NateSilver538/status/1323889051037028353\n    date: 2020-11-04\n\nreally-habitable:\n    type: Article\n    title: Defining the Really Habitable Zone\n    author: [\"Pedbost, Marven F.\", \"Pomalgu, Trillean\", \"Lintott, Chris\", \"Eisner, Nora\", \"Nicholson, Belinda\"]\n    date: 2020\n    serial-number: 2003.13722\n    url: https://arxiv.org/abs/2003.13722\n    parent:\n        type: Repository\n        title: arXiv\n\nelectronic-music:\n    type: Web\n    title: Ishkur's Guide to Electronic Music\n    serial-number: v2.5\n    author: Ishkur\n    url: { value: http://www.techno.org/electronic-music-guide/, date: 2020-11-12 }\n\nmattermost:\n    type: Web\n    title: Mattermost Privacy Policy\n    author: Mattermost\n    url:\n        value: https://mattermost.com/privacy-policy/\n        date: 2020-11-29\n    parent:\n        type: Web\n        title: Policies\n\nworth:\n    type: Blog\n    title: Jon Worth Euroblog\n    author: Worth, Jon\n    url: https://jonworth.eu/\n\nwrong:\n    type: Article\n    title: It is fast or it is wrong\n    date: 2018-12-29\n    author: Prokopov, Nikita\n    url: https://tonsky.me/blog/slow-wrong/\n    parent:\n        type: Blog\n        title: tonsky.me\n\nun-hdr:\n    type: Report\n    author: United Nations Development Programme\n    title: Human Development Report 2019\n    location: New York\n    serial-number: { issn: 2412-3129 }\n    url: http://hdr.undp.org/sites/default/files/hdr2019.pdf\n    date: 2019\n\naudio-descriptions:\n    type: Audio\n    title: Audio Descriptions\n    issue: 8\n    date: 2017-02-07\n    author: Barrows, Miellyn Fitzwater\n    affiliated:\n        - names: Taylor, Dallas\n          role: narrator\n    url: https://www.20k.org/episodes/audio\n    parent:\n        type: Audio\n        title: Twenty Thousand Hertz\n        author: Taylor, Dallas\n\ndrill:\n    type: Artwork\n    title: Drill\n    author: Steyerl, Hito\n    date: 2019-06-20\n    location: New York\n    organization: Thompson Arts Center\n\ncamb:\n    type: Entry\n    title: authoritative\n    url:\n        value: https://dictionary.cambridge.org/dictionary/english/authoritative\n        date: 2020-11-29\n    parent:\n        type: Reference\n        title: Cambridge Dictionary\n\nlogician:\n    type: Entry\n    title: Logician\n    serial-number: n10269785\n    url:\n        value: http://image-net.org/api/text/wordnet.structure.hyponym?wnid=n10269785\n        date: 2019-12-02\n    parent:\n        type: Repository\n        title: ImageNet\n        url: http://image-net.org\n\ndns-encryption:\n    type: Reference\n    title: Secret Key Transaction Authentication for DNS\n    serial-number: RFC 2845\n    author: Internet Engineering Task Force\n    url: https://tools.ietf.org/html/rfc2845\n    date: 2000\n\nroe-wade:\n    type: Case\n    title: Roe v. Wade\n    serial-number: 93 S. Ct. 705\n    date: 1973\n\nfoia:\n    type: Legislation\n    title: Freedom of Information Act\n    serial-number : Pub. L. No. 107-296, 80 Stat. 250\n    date: 1967\n\noverleaf:\n    type: Article\n    title: Celebrating over five million users, a quarter million daily actives, and over five years of dedicated user support\n    date: 2019-11-08\n    author: John\n    url: https://de.overleaf.com/blog/celebrating-over-five-million-users-and-a-quarter-million-daily-actives\n    parent:\n        type: Blog\n        title: Overleaf Blog\n\nlatex-users:\n    type: Article\n    title: How many scholarly articles are written in LaTeX?\n    serial-number:\n        doi: 10.22541/au.148771883.35456290\n    author: Pepe, Alberto\n    date: 2017-02-21\n    parent:\n        type: Repository\n        title: Authorea\n\neditors:\n    type: Artwork\n    title: Types of Editors\n    author: Munroe, Randall\n    date: 2014-03-12\n    url: https://xkcd.com/1341/\n\nbarb:\n    type: Book\n    title: Den Boden unter den Füßen verlieren\n    author: Günther-Haug, Barbara\n    date: 2020\n    publisher: MVG\n    location: München\n    language: de-DE\n\nlamb:\n    type: Book\n    title: The life of a friendly lamb\n    author: Kell-Nehrer, Felips\n    date: 2011\n    chapter: 20\n    volume: 10\n    page-range: 22-23\n    tongus: 2\n\nsnail:\n    type: Book\n    title: A Snail Study\n    author: Kell-Nehrer, Felips\n    date: 2011\n    chapter: 2A\n    volume: 4B\n    page-range: 28\n\nlamb-chapter:\n    type: Chapter\n    page-range: 10-12\n    chapter: 3\n    parent:\n        type: Book\n        title: The life of a friendly lamb\n        author: Kell-Nehrer, Felips\n        date: 2011\n        chapter: 20\n        volume: 10\n        page-range: 22-23\n        tongus: 2\n\nsnail-chapter:\n    type: Chapter\n    page-range: 10-12\n    serial-number: 3\n    parent:\n        type: Book\n        title: A Snail Study\n        author: Kell-Nehrer, Felips\n        date: 2011\n        volume: 4B\n        page-range: 28\n",
+      "result": {
+        "debug": "Library({\"zygos\": Entry { key: \"zygos\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"ZygOS: Achieving Low Tail Latency for Microsecond-Scale Networked Tasks\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Prekas\", given_name: Some(\"George\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Kogias\", given_name: Some(\"Marios\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Bugnion\", given_name: Some(\"Edouard\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2017, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(325), prefix: None, suffix: None }, Numeric { value: Number(341), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"doi\": \"10.1145/3132747.3132780\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"zygos\", entry_type: Proceedings, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Proceedings of the 26th Symposium on Operating Systems Principles\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Association for Computing Machinery\", kind: Normal }]), short: None }), location: None }), location: Some(FormatString { value: ChunkedString([StringChunk { value: \"New York, NY, USA\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"isbn\": \"978-1450350853\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"wwdc-network\": Entry { key: \"wwdc-network\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Boost Performance and Security with Modern Networking\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Mehta\", given_name: Some(\"Jiten\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Kinnear\", given_name: Some(\"Eric\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2020, month: Some(5), day: Some(25), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"wwdc-network\", entry_type: Conference, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"World Wide Developer Conference 2020\", kind: Verbatim }]), short: Some(ChunkedString([StringChunk { value: \"WWDC 2020\", kind: Normal }])) }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: Some(FormatString { value: ChunkedString([StringChunk { value: \"Mountain View, CA\", kind: Normal }]), short: None }), organization: Some(FormatString { value: ChunkedString([StringChunk { value: \"Apple Inc.\", kind: Normal }]), short: None }), issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, Entry { key: \"wwdc-network\", entry_type: Video, title: None, authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: Some(Typed(Duration { days: 0, hours: 0, minutes: 13, seconds: 42, milliseconds: 0 })), url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"developer.apple.com\")), port: None, path: \"/videos/play/wwdc2020/10111/\", query: None, fragment: None }, visit_date: Some(Date { year: 2020, month: Some(8), day: Some(16), approximate: false, season: None }) }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"omarova-libra\": Entry { key: \"omarova-libra\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"There’s a Lot We Still Don’t Know About Libra\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Omarova\", given_name: Some(\"Saule\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Steele\", given_name: Some(\"Graham\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2019, month: Some(10), day: Some(3), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"www.nytimes.com\")), port: None, path: \"/2019/11/04/opinion/facebook-libra-cryptocurrency.html\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"omarova-libra\", entry_type: Newspaper, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"The New York Times\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: Some(FormatString { value: ChunkedString([StringChunk { value: \"New York, NY, USA\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"donne\": Entry { key: \"donne\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"The \\\"Anniversaries\\\" and the \\\"Epicedes and Obsequies\\\"\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Donne\", given_name: Some(\"John\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 1995, month: None, day: None, approximate: false, season: None }), editors: Some([Person { name: \"Stringer\", given_name: Some(\"Gary A.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Pebworth\", given_name: Some(\"Ted-Larry\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Indiana University Press\", kind: Normal }]), short: None }), location: None }), location: Some(FormatString { value: ChunkedString([StringChunk { value: \"Bloomington\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Number(6), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"donne\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"The Variorum Edition of the Poetry of John Donne\", kind: Normal }]), short: None }), authors: None, date: None, editors: Some([Person { name: \"Stringer\", given_name: Some(\"Gary A.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"swedish\": Entry { key: \"swedish\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"A Swedish Traveller in Early Wisconsin: The Observations of Fredrika Bremer\", kind: Normal }]), short: Some(ChunkedString([StringChunk { value: \"Swedish Traveller\", kind: Normal }])) }), authors: None, date: None, editors: Some([Person { name: \"Brown\", given_name: Some(\"George C.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Set([(1, Some(Hyphen)), (2, None)]), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"swedish\", entry_type: Periodical, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Wisconsin Magazine of History\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 1978, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Set([(61, Some(Hyphen)), (62, None)]), prefix: None, suffix: None })), volume_total: None, edition: Some(Typed(Numeric { value: Number(2), prefix: None, suffix: None })), page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"harry\": Entry { key: \"harry\", entry_type: Chapter, title: None, authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(135), prefix: None, suffix: None }, Numeric { value: Number(139), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"serial\": \"3\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"harry\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Harry Potter and the Order of the Phoenix\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Rowling\", given_name: Some(\"J. K.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2003, month: Some(5), day: Some(20), approximate: true, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Number(5), prefix: None, suffix: None })), volume_total: Some(Numeric { value: Number(7), prefix: None, suffix: None }), edition: None, page_range: None, page_total: Some(Numeric { value: Number(768), prefix: None, suffix: None }), time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"isbn\": \"978-0747551003\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"science-e-issue\": Entry { key: \"science-e-issue\", entry_type: Web, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Tokenization of + and - with scientific notation\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Mädje\", given_name: Some(\"Laurenz\"), prefix: None, suffix: None, comma_suffix: false, alias: Some(\"laurmaedje\") }]), date: Some(Date { year: 2020, month: Some(6), day: Some(17), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"github.com\")), port: None, path: \"/typst/typstc/issues/3\", query: None, fragment: None }, visit_date: None }), serial_number: Some(SerialNumber({\"serial\": \"3\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"science-e-issue\", entry_type: Repository, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Typst\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"github.com\")), port: None, path: \"/typst/typst\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"terminator-2\": Entry { key: \"terminator-2\", entry_type: Video, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Terminator 2: Judgment Day\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 1991, month: Some(6), day: Some(0), approximate: false, season: None }), editors: None, affiliated: Some([PersonsWithRoles { names: [Person { name: \"Cameron\", given_name: Some(\"James\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: Director }, PersonsWithRoles { names: [Person { name: \"Schwarzenegger\", given_name: Some(\"Arnold\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Hamilton\", given_name: Some(\"Linda\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Patrick\", given_name: Some(\"Robert\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: CastMember }, PersonsWithRoles { names: [Person { name: \"Fiedel\", given_name: Some(\"Brad\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: Composer }]), publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Carolco Pictures; Pacific Western Productions; Lightstorm Entertainment; Le Studio Canal+ S.A.\", kind: Normal }]), short: None }), location: None }), location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: Some(Typed(DurationRange { start: Duration { days: 0, hours: 0, minutes: 17, seconds: 5, milliseconds: 0 }, end: Duration { days: 0, hours: 0, minutes: 17, seconds: 48, milliseconds: 0 } })), runtime: Some(Typed(Duration { days: 0, hours: 2, minutes: 17, seconds: 0, milliseconds: 0 })), url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"interior\": Entry { key: \"interior\", entry_type: Video, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Conspiracy Theories and Interior Design\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 2010, month: Some(10), day: Some(17), approximate: false, season: None }), editors: None, affiliated: Some([PersonsWithRoles { names: [Person { name: \"Davidson\", given_name: Some(\"Adam\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: Director }, PersonsWithRoles { names: [Person { name: \"McKenna\", given_name: Some(\"Chris\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: Writer }]), publisher: None, location: None, organization: None, issue: Some(Typed(Numeric { value: Number(9), prefix: None, suffix: None })), chapter: None, volume: Some(Typed(Numeric { value: Number(2), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: Some(Typed(Duration { days: 0, hours: 0, minutes: 22, seconds: 0, milliseconds: 0 })), url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"interior\", entry_type: Video, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Community\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: Some([PersonsWithRoles { names: [Person { name: \"Harmon\", given_name: Some(\"Dan\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: ExecutiveProducer }]), publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Universal Television; Sony Pictures Television; Krasnoff Foster Productions; Harmonious Claptrap; Russo Brothers Film\", kind: Normal }]), short: None }), location: None }), location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: Some(Numeric { value: Number(6), prefix: None, suffix: None }), edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"wire\": Entry { key: \"wire\", entry_type: Video, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"The wire\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 2002, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: Some([PersonsWithRoles { names: [Person { name: \"Simon\", given_name: Some(\"David\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Colesberry\", given_name: Some(\"Robert F.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Noble\", given_name: Some(\"Nina Kostroff\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: ExecutiveProducer }]), publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Blown Deadline Productions\", kind: Normal }]), short: None }), location: None }), location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: Some(Numeric { value: Number(5), prefix: None, suffix: None }), edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: Some(FormatString { value: ChunkedString([StringChunk { value: \"The Wire is noted to be solid\", kind: Normal }]), short: None }), abstract_: Some(FormatString { value: ChunkedString([StringChunk { value: \"The Wire is an American crime drama television series created and\\nprimarily written by American author and former police reporter David\\nSimon. The series was broadcast by the cable network HBO in the United\\nStates. The Wire premiered on June 2, 2002, and ended on March 9, 2008,\\ncomprising sixty episodes over five seasons. The idea for the show\\nstarted out as a police drama loosely based on the experiences of\\nSimon's writing partner Ed Burns, a former homicide detective and\\npublic school teacher.\\n\", kind: Normal }]), short: None }), genre: Some(FormatString { value: ChunkedString([StringChunk { value: \"Drama\", kind: Normal }]), short: None }), parents: [] }, \"kinetics\": Entry { key: \"kinetics\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Kinetics and luminescence of the excitations of a nonequilibrium polariton condensate\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Doan\", given_name: Some(\"T. D.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Tran Thoai\", given_name: Some(\"D. B.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Haug\", given_name: Some(\"Hartmut\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2020, month: Some(9), day: Some(13), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(165126), prefix: None, suffix: None }, Numeric { value: Number(165139), prefix: None, suffix: None })] })), page_total: Some(Numeric { value: Number(13), prefix: None, suffix: None }), time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"doi\": \"10.1103/PhysRevB.102.165126\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"kinetics\", entry_type: Periodical, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Physical Review B\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"American Physical Society\", kind: Normal }]), short: None }), location: None }), location: None, organization: None, issue: Some(Typed(Numeric { value: Number(16), prefix: None, suffix: None })), chapter: None, volume: Some(Typed(Numeric { value: Number(102), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"house\": Entry { key: \"house\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Teaching medicine with the help of \\\"Dr. House\\\"\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Jerrentrup\", given_name: Some(\"Andreas\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Mueller\", given_name: Some(\"Tobias\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Glowalla\", given_name: Some(\"Ulrich\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Herder\", given_name: Some(\"Meike\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Henrichs\", given_name: Some(\"Nadine\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Neubauer\", given_name: Some(\"Andreas\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Schaefer\", given_name: Some(\"Juergen R.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2018, month: Some(2), day: Some(12), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"doi\": \"10.1371/journal.pone.0193972\", \"serial\": \"e0193972\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"house\", entry_type: Periodical, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"PLoS ONE\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: Some(Typed(Numeric { value: Number(3), prefix: None, suffix: None })), chapter: None, volume: Some(Typed(Numeric { value: Number(13), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"plaque\": Entry { key: \"plaque\", entry_type: Misc, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Informational plaque about Jacoby's 1967 photos\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 2020, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Stiftung Reinbeckhallen\", kind: Normal }]), short: None }), location: None }), location: Some(FormatString { value: ChunkedString([StringChunk { value: \"Berlin, Germany\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"plaque\", entry_type: Artwork, title: None, authors: Some([Person { name: \"Jacoby\", given_name: Some(\"Max\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 1967, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"plaque\", entry_type: Anthology, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Bleibtreustraße\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: Some(FormatString { value: ChunkedString([StringChunk { value: \"Landesmuseum Koblenz\", kind: Normal }]), short: None }), archive_location: Some(FormatString { value: ChunkedString([StringChunk { value: \"Koblenz, Germany\", kind: Normal }]), short: None }), call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }] }, \"oiseau\": Entry { key: \"oiseau\", entry_type: Exhibition, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"L'oiseau rare, de l'hirondelle au kakapo\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 2020, month: Some(11), day: Some(17), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: Some(FormatString { value: ChunkedString([StringChunk { value: \"Lyon, France\", kind: Normal }]), short: None }), organization: Some(FormatString { value: ChunkedString([StringChunk { value: \"Musée des Confluences\", kind: Normal }]), short: None }), issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"www.museedesconfluences.fr\")), port: None, path: \"/fr/evenements/l%E2%80%99oiseau-rare-de-l%E2%80%99hirondelle-au-kakapo\", query: None, fragment: None }, visit_date: Some(Date { year: 2020, month: Some(10), day: Some(3), approximate: false, season: None }) }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"renaissance\": Entry { key: \"renaissance\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Renaissance, Les Déracinés\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Duval\", given_name: Some(\"Fred\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2018, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: Some([PersonsWithRoles { names: [Person { name: \"Emem\", given_name: None, prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Blanchard\", given_name: Some(\"Fred\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: Illustrator }]), publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Dargaud\", kind: Normal }]), short: None }), location: None }), location: None, organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Number(1), prefix: None, suffix: None })), volume_total: Some(Numeric { value: Number(3), prefix: None, suffix: None }), edition: Some(Typed(Numeric { value: Number(1), prefix: None, suffix: None })), page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: Some(LanguageIdentifier { language: Language(Some(\"fr\")), script: None, region: Some(Region(\"FR\")), variants: None }), archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"gedanken\": Entry { key: \"gedanken\", entry_type: Anthos, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Gedanken-experiments on sequential machines\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Moore\", given_name: Some(\"Edward F.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(129), prefix: None, suffix: None }, Numeric { value: Number(153), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"gedanken\", entry_type: Anthology, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Automata studies\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 1956, month: Some(3), day: None, approximate: false, season: None }), editors: Some([Person { name: \"Shannon\", given_name: Some(\"C. E.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"McCarthy\", given_name: Some(\"J.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"NBS\", kind: Normal }]), short: None }), location: None }), location: Some(FormatString { value: ChunkedString([StringChunk { value: \"Princeton, NJ, USA\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Number(34), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"isbn\": \"978-0-691-07916-5\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"gedanken\", entry_type: Anthology, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Annals of Mathematics Studies\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }] }, \"georgia\": Entry { key: \"georgia\", entry_type: Post, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Trump's claim to have won Georgia is highly dubious. No network has called it. He's only ahead by 2.5 points there, and the outstanding votes are mostly mail votes in very blue counties, likely very Democratic. Biden may even be a slight favorite there.\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Silver\", given_name: Some(\"Nate\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2020, month: Some(10), day: Some(3), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"twitter.com\")), port: None, path: \"/NateSilver538/status/1323889051037028353\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"really-habitable\": Entry { key: \"really-habitable\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Defining the Really Habitable Zone\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Pedbost\", given_name: Some(\"Marven F.\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Pomalgu\", given_name: Some(\"Trillean\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Lintott\", given_name: Some(\"Chris\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Eisner\", given_name: Some(\"Nora\"), prefix: None, suffix: None, comma_suffix: false, alias: None }, Person { name: \"Nicholson\", given_name: Some(\"Belinda\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2020, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"arxiv.org\")), port: None, path: \"/abs/2003.13722\", query: None, fragment: None }, visit_date: None }), serial_number: Some(SerialNumber({\"serial\": \"2003.13722\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"really-habitable\", entry_type: Repository, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"arXiv\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"electronic-music\": Entry { key: \"electronic-music\", entry_type: Web, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Ishkur's Guide to Electronic Music\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Ishkur\", given_name: None, prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"www.techno.org\")), port: None, path: \"/electronic-music-guide/\", query: None, fragment: None }, visit_date: Some(Date { year: 2020, month: Some(10), day: Some(11), approximate: false, season: None }) }), serial_number: Some(SerialNumber({\"serial\": \"v2.5\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"mattermost\": Entry { key: \"mattermost\", entry_type: Web, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Mattermost Privacy Policy\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Mattermost\", given_name: None, prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"mattermost.com\")), port: None, path: \"/privacy-policy/\", query: None, fragment: None }, visit_date: Some(Date { year: 2020, month: Some(10), day: Some(28), approximate: false, season: None }) }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"mattermost\", entry_type: Web, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Policies\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"worth\": Entry { key: \"worth\", entry_type: Blog, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Jon Worth Euroblog\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Worth\", given_name: Some(\"Jon\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"jonworth.eu\")), port: None, path: \"/\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"wrong\": Entry { key: \"wrong\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"It is fast or it is wrong\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Prokopov\", given_name: Some(\"Nikita\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2018, month: Some(11), day: Some(28), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"tonsky.me\")), port: None, path: \"/blog/slow-wrong/\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"wrong\", entry_type: Blog, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"tonsky.me\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"un-hdr\": Entry { key: \"un-hdr\", entry_type: Report, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Human Development Report 2019\", kind: Normal }]), short: None }), authors: Some([Person { name: \"United Nations Development Programme\", given_name: None, prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2019, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: Some(FormatString { value: ChunkedString([StringChunk { value: \"New York\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"hdr.undp.org\")), port: None, path: \"/sites/default/files/hdr2019.pdf\", query: None, fragment: None }, visit_date: None }), serial_number: Some(SerialNumber({\"issn\": \"2412-3129\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"audio-descriptions\": Entry { key: \"audio-descriptions\", entry_type: Audio, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Audio Descriptions\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Barrows\", given_name: Some(\"Miellyn Fitzwater\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2017, month: Some(1), day: Some(6), approximate: false, season: None }), editors: None, affiliated: Some([PersonsWithRoles { names: [Person { name: \"Taylor\", given_name: Some(\"Dallas\"), prefix: None, suffix: None, comma_suffix: false, alias: None }], role: Narrator }]), publisher: None, location: None, organization: None, issue: Some(Typed(Numeric { value: Number(8), prefix: None, suffix: None })), chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"www.20k.org\")), port: None, path: \"/episodes/audio\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"audio-descriptions\", entry_type: Audio, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Twenty Thousand Hertz\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Taylor\", given_name: Some(\"Dallas\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"drill\": Entry { key: \"drill\", entry_type: Artwork, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Drill\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Steyerl\", given_name: Some(\"Hito\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2019, month: Some(5), day: Some(19), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: Some(FormatString { value: ChunkedString([StringChunk { value: \"New York\", kind: Normal }]), short: None }), organization: Some(FormatString { value: ChunkedString([StringChunk { value: \"Thompson Arts Center\", kind: Normal }]), short: None }), issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"camb\": Entry { key: \"camb\", entry_type: Entry, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"authoritative\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"dictionary.cambridge.org\")), port: None, path: \"/dictionary/english/authoritative\", query: None, fragment: None }, visit_date: Some(Date { year: 2020, month: Some(10), day: Some(28), approximate: false, season: None }) }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"camb\", entry_type: Reference, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Cambridge Dictionary\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"logician\": Entry { key: \"logician\", entry_type: Entry, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Logician\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"image-net.org\")), port: None, path: \"/api/text/wordnet.structure.hyponym\", query: Some(\"wnid=n10269785\"), fragment: None }, visit_date: Some(Date { year: 2019, month: Some(11), day: Some(1), approximate: false, season: None }) }), serial_number: Some(SerialNumber({\"serial\": \"n10269785\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"logician\", entry_type: Repository, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"ImageNet\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"image-net.org\")), port: None, path: \"/\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"dns-encryption\": Entry { key: \"dns-encryption\", entry_type: Reference, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Secret Key Transaction Authentication for DNS\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Internet Engineering Task Force\", given_name: None, prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2000, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"tools.ietf.org\")), port: None, path: \"/html/rfc2845\", query: None, fragment: None }, visit_date: None }), serial_number: Some(SerialNumber({\"serial\": \"RFC 2845\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"roe-wade\": Entry { key: \"roe-wade\", entry_type: Case, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Roe v. Wade\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 1973, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"serial\": \"93 S. Ct. 705\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"foia\": Entry { key: \"foia\", entry_type: Legislation, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Freedom of Information Act\", kind: Normal }]), short: None }), authors: None, date: Some(Date { year: 1967, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"serial\": \"Pub. L. No. 107-296, 80 Stat. 250\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"overleaf\": Entry { key: \"overleaf\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Celebrating over five million users, a quarter million daily actives, and over five years of dedicated user support\", kind: Normal }]), short: None }), authors: Some([Person { name: \"John\", given_name: None, prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2019, month: Some(10), day: Some(7), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"de.overleaf.com\")), port: None, path: \"/blog/celebrating-over-five-million-users-and-a-quarter-million-daily-actives\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"overleaf\", entry_type: Blog, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Overleaf Blog\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"latex-users\": Entry { key: \"latex-users\", entry_type: Article, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"How many scholarly articles are written in LaTeX?\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Pepe\", given_name: Some(\"Alberto\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2017, month: Some(1), day: Some(20), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"doi\": \"10.22541/au.148771883.35456290\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"latex-users\", entry_type: Repository, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Authorea\", kind: Normal }]), short: None }), authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"editors\": Entry { key: \"editors\", entry_type: Artwork, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Types of Editors\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Munroe\", given_name: Some(\"Randall\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2014, month: Some(2), day: Some(11), approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: Some(QualifiedUrl { value: Url { scheme: \"https\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"xkcd.com\")), port: None, path: \"/1341/\", query: None, fragment: None }, visit_date: None }), serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"barb\": Entry { key: \"barb\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Den Boden unter den Füßen verlieren\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Günther-Haug\", given_name: Some(\"Barbara\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2020, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"MVG\", kind: Normal }]), short: None }), location: None }), location: Some(FormatString { value: ChunkedString([StringChunk { value: \"München\", kind: Normal }]), short: None }), organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: Some(LanguageIdentifier { language: Language(Some(\"de\")), script: None, region: Some(Region(\"DE\")), variants: None }), archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"lamb\": Entry { key: \"lamb\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"The life of a friendly lamb\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Kell-Nehrer\", given_name: Some(\"Felips\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2011, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: Some(Typed(Numeric { value: Number(20), prefix: None, suffix: None })), volume: Some(Typed(Numeric { value: Number(10), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(22), prefix: None, suffix: None }, Numeric { value: Number(23), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"snail\": Entry { key: \"snail\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"A Snail Study\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Kell-Nehrer\", given_name: Some(\"Felips\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2011, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: Some(Typed(Numeric { value: Number(2), prefix: None, suffix: Some(\"A\") })), volume: Some(Typed(Numeric { value: Number(4), prefix: None, suffix: Some(\"B\") })), volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [SinglePage(Numeric { value: Number(28), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }, \"lamb-chapter\": Entry { key: \"lamb-chapter\", entry_type: Chapter, title: None, authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: Some(Typed(Numeric { value: Number(3), prefix: None, suffix: None })), volume: None, volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(10), prefix: None, suffix: None }, Numeric { value: Number(12), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"lamb-chapter\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"The life of a friendly lamb\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Kell-Nehrer\", given_name: Some(\"Felips\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2011, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: Some(Typed(Numeric { value: Number(20), prefix: None, suffix: None })), volume: Some(Typed(Numeric { value: Number(10), prefix: None, suffix: None })), volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(22), prefix: None, suffix: None }, Numeric { value: Number(23), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }, \"snail-chapter\": Entry { key: \"snail-chapter\", entry_type: Chapter, title: None, authors: None, date: None, editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [Range(Numeric { value: Number(10), prefix: None, suffix: None }, Numeric { value: Number(12), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: Some(SerialNumber({\"serial\": \"3\"})), language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [Entry { key: \"snail-chapter\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"A Snail Study\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Kell-Nehrer\", given_name: Some(\"Felips\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2011, month: None, day: None, approximate: false, season: None }), editors: None, affiliated: None, publisher: None, location: None, organization: None, issue: None, chapter: None, volume: Some(Typed(Numeric { value: Number(4), prefix: None, suffix: Some(\"B\") })), volume_total: None, edition: None, page_range: Some(Typed(PageRanges { ranges: [SinglePage(Numeric { value: Number(28), prefix: None, suffix: None })] })), page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }] }})",
+        "serialized": "zygos:\n  type: article\n  title: 'ZygOS: Achieving Low Tail Latency for Microsecond-Scale Networked Tasks'\n  author:\n  - Prekas, George\n  - Kogias, Marios\n  - Bugnion, Edouard\n  date: 2017\n  page-range: 325-341\n  serial-number:\n    doi: 10.1145/3132747.3132780\n  parent:\n    type: proceedings\n    title: Proceedings of the 26th Symposium on Operating Systems Principles\n    publisher: Association for Computing Machinery\n    location: New York, NY, USA\n    serial-number:\n      isbn: 978-1450350853\nwwdc-network:\n  type: article\n  title: Boost Performance and Security with Modern Networking\n  author:\n  - Mehta, Jiten\n  - Kinnear, Eric\n  date: 2020-06-26\n  parent:\n  - type: conference\n    title:\n      value: '{World Wide Developer Conference 2020}'\n      short: WWDC 2020\n    location: Mountain View, CA\n    organization: Apple Inc.\n  - type: video\n    runtime: 13:42\n    url:\n      value: https://developer.apple.com/videos/play/wwdc2020/10111/\n      date: 2020-09-17\nomarova-libra:\n  type: article\n  title: There’s a Lot We Still Don’t Know About Libra\n  author:\n  - Omarova, Saule\n  - Steele, Graham\n  date: 2019-11-04\n  url: https://www.nytimes.com/2019/11/04/opinion/facebook-libra-cryptocurrency.html\n  parent:\n    type: newspaper\n    title: The New York Times\n    location: New York, NY, USA\ndonne:\n  type: book\n  title: The \"Anniversaries\" and the \"Epicedes and Obsequies\"\n  author: Donne, John\n  date: 1995\n  editor:\n  - Stringer, Gary A.\n  - Pebworth, Ted-Larry\n  publisher: Indiana University Press\n  location: Bloomington\n  volume: 6\n  parent:\n    type: book\n    title: The Variorum Edition of the Poetry of John Donne\n    editor: Stringer, Gary A.\nswedish:\n  type: article\n  title:\n    value: 'A Swedish Traveller in Early Wisconsin: The Observations of Fredrika Bremer'\n    short: Swedish Traveller\n  editor: Brown, George C.\n  volume: 1–2\n  parent:\n    type: periodical\n    title: Wisconsin Magazine of History\n    date: 1978\n    volume: 61–62\n    edition: 2\nharry:\n  type: chapter\n  page-range: 135-139\n  serial-number:\n    serial: '3'\n  parent:\n    type: book\n    title: Harry Potter and the Order of the Phoenix\n    author: Rowling, J. K.\n    date: ~2003-06-21\n    volume: 5\n    volume-total: 7\n    page-total: 768\n    serial-number:\n      isbn: 978-0747551003\nscience-e-issue:\n  type: web\n  title: Tokenization of + and - with scientific notation\n  author:\n    name: Mädje\n    given-name: Laurenz\n    alias: laurmaedje\n  date: 2020-07-18\n  url: https://github.com/typst/typstc/issues/3\n  serial-number:\n    serial: '3'\n  parent:\n    type: repository\n    title: Typst\n    url: https://github.com/typst/typst\nterminator-2:\n  type: video\n  title: 'Terminator 2: Judgment Day'\n  date: 1991-07-01\n  affiliated:\n  - names: Cameron, James\n    role: director\n  - names:\n    - Schwarzenegger, Arnold\n    - Hamilton, Linda\n    - Patrick, Robert\n    role: cast-member\n  - names: Fiedel, Brad\n    role: composer\n  publisher: Carolco Pictures; Pacific Western Productions; Lightstorm Entertainment; Le Studio Canal+ S.A.\n  time-range: 17:05-17:48\n  runtime: 02:17:00\ninterior:\n  type: video\n  title: Conspiracy Theories and Interior Design\n  date: 2010-11-18\n  affiliated:\n  - names: Davidson, Adam\n    role: director\n  - names: McKenna, Chris\n    role: writer\n  issue: 9\n  volume: 2\n  runtime: 22:00\n  parent:\n    type: video\n    title: Community\n    affiliated:\n      names: Harmon, Dan\n      role: executive-producer\n    publisher: Universal Television; Sony Pictures Television; Krasnoff Foster Productions; Harmonious Claptrap; Russo Brothers Film\n    volume-total: 6\nwire:\n  type: video\n  title: The wire\n  date: 2002\n  affiliated:\n    names:\n    - Simon, David\n    - Colesberry, Robert F.\n    - Noble, Nina Kostroff\n    role: executive-producer\n  publisher: Blown Deadline Productions\n  volume-total: 5\n  note: The Wire is noted to be solid\n  abstract: |\n    The Wire is an American crime drama television series created and\n    primarily written by American author and former police reporter David\n    Simon. The series was broadcast by the cable network HBO in the United\n    States. The Wire premiered on June 2, 2002, and ended on March 9, 2008,\n    comprising sixty episodes over five seasons. The idea for the show\n    started out as a police drama loosely based on the experiences of\n    Simon's writing partner Ed Burns, a former homicide detective and\n    public school teacher.\n  genre: Drama\nkinetics:\n  type: article\n  title: Kinetics and luminescence of the excitations of a nonequilibrium polariton condensate\n  author:\n  - Doan, T. D.\n  - Tran Thoai, D. B.\n  - Haug, Hartmut\n  date: 2020-10-14\n  page-range: 165126-165139\n  page-total: 13\n  serial-number:\n    doi: 10.1103/PhysRevB.102.165126\n  parent:\n    type: periodical\n    title: Physical Review B\n    publisher: American Physical Society\n    issue: 16\n    volume: 102\nhouse:\n  type: article\n  title: Teaching medicine with the help of \"Dr. House\"\n  author:\n  - Jerrentrup, Andreas\n  - Mueller, Tobias\n  - Glowalla, Ulrich\n  - Herder, Meike\n  - Henrichs, Nadine\n  - Neubauer, Andreas\n  - Schaefer, Juergen R.\n  date: 2018-03-13\n  serial-number:\n    doi: 10.1371/journal.pone.0193972\n    serial: e0193972\n  parent:\n    type: periodical\n    title: PLoS ONE\n    issue: 3\n    volume: 13\nplaque:\n  type: misc\n  title: Informational plaque about Jacoby's 1967 photos\n  date: 2020\n  publisher: Stiftung Reinbeckhallen\n  location: Berlin, Germany\n  parent:\n    type: artwork\n    author: Jacoby, Max\n    date: 1967\n    parent:\n      type: anthology\n      title: Bleibtreustraße\n      archive: Landesmuseum Koblenz\n      archive-location: Koblenz, Germany\noiseau:\n  type: exhibition\n  title: L'oiseau rare, de l'hirondelle au kakapo\n  date: 2020-12-18\n  location: Lyon, France\n  organization: Musée des Confluences\n  url:\n    value: https://www.museedesconfluences.fr/fr/evenements/l%E2%80%99oiseau-rare-de-l%E2%80%99hirondelle-au-kakapo\n    date: 2020-11-04\nrenaissance:\n  type: book\n  title: Renaissance, Les Déracinés\n  author: Duval, Fred\n  date: 2018\n  affiliated:\n    names:\n    - Emem\n    - Blanchard, Fred\n    role: illustrator\n  publisher: Dargaud\n  volume: 1\n  volume-total: 3\n  edition: 1\n  language: fr-FR\ngedanken:\n  type: anthos\n  title: Gedanken-experiments on sequential machines\n  author: Moore, Edward F.\n  page-range: 129-153\n  parent:\n    type: anthology\n    title: Automata studies\n    date: 1956-04\n    editor:\n    - Shannon, C. E.\n    - McCarthy, J.\n    publisher: NBS\n    location: Princeton, NJ, USA\n    volume: 34\n    serial-number:\n      isbn: 978-0-691-07916-5\n    parent:\n      type: anthology\n      title: Annals of Mathematics Studies\ngeorgia:\n  type: post\n  title: Trump's claim to have won Georgia is highly dubious. No network has called it. He's only ahead by 2.5 points there, and the outstanding votes are mostly mail votes in very blue counties, likely very Democratic. Biden may even be a slight favorite there.\n  author: Silver, Nate\n  date: 2020-11-04\n  url: https://twitter.com/NateSilver538/status/1323889051037028353\nreally-habitable:\n  type: article\n  title: Defining the Really Habitable Zone\n  author:\n  - Pedbost, Marven F.\n  - Pomalgu, Trillean\n  - Lintott, Chris\n  - Eisner, Nora\n  - Nicholson, Belinda\n  date: 2020\n  url: https://arxiv.org/abs/2003.13722\n  serial-number:\n    serial: '2003.13722'\n  parent:\n    type: repository\n    title: arXiv\nelectronic-music:\n  type: web\n  title: Ishkur's Guide to Electronic Music\n  author: Ishkur\n  url:\n    value: http://www.techno.org/electronic-music-guide/\n    date: 2020-11-12\n  serial-number:\n    serial: v2.5\nmattermost:\n  type: web\n  title: Mattermost Privacy Policy\n  author: Mattermost\n  url:\n    value: https://mattermost.com/privacy-policy/\n    date: 2020-11-29\n  parent:\n    type: web\n    title: Policies\nworth:\n  type: blog\n  title: Jon Worth Euroblog\n  author: Worth, Jon\n  url: https://jonworth.eu/\nwrong:\n  type: article\n  title: It is fast or it is wrong\n  author: Prokopov, Nikita\n  date: 2018-12-29\n  url: https://tonsky.me/blog/slow-wrong/\n  parent:\n    type: blog\n    title: tonsky.me\nun-hdr:\n  type: report\n  title: Human Development Report 2019\n  author: United Nations Development Programme\n  date: 2019\n  location: New York\n  url: http://hdr.undp.org/sites/default/files/hdr2019.pdf\n  serial-number:\n    issn: 2412-3129\naudio-descriptions:\n  type: audio\n  title: Audio Descriptions\n  author: Barrows, Miellyn Fitzwater\n  date: 2017-02-07\n  affiliated:\n    names: Taylor, Dallas\n    role: narrator\n  issue: 8\n  url: https://www.20k.org/episodes/audio\n  parent:\n    type: audio\n    title: Twenty Thousand Hertz\n    author: Taylor, Dallas\ndrill:\n  type: artwork\n  title: Drill\n  author: Steyerl, Hito\n  date: 2019-06-20\n  location: New York\n  organization: Thompson Arts Center\ncamb:\n  type: entry\n  title: authoritative\n  url:\n    value: https://dictionary.cambridge.org/dictionary/english/authoritative\n    date: 2020-11-29\n  parent:\n    type: reference\n    title: Cambridge Dictionary\nlogician:\n  type: entry\n  title: Logician\n  url:\n    value: http://image-net.org/api/text/wordnet.structure.hyponym?wnid=n10269785\n    date: 2019-12-02\n  serial-number:\n    serial: n10269785\n  parent:\n    type: repository\n    title: ImageNet\n    url: http://image-net.org/\ndns-encryption:\n  type: reference\n  title: Secret Key Transaction Authentication for DNS\n  author: Internet Engineering Task Force\n  date: 2000\n  url: https://tools.ietf.org/html/rfc2845\n  serial-number:\n    serial: RFC 2845\nroe-wade:\n  type: case\n  title: Roe v. Wade\n  date: 1973\n  serial-number:\n    serial: 93 S. Ct. 705\nfoia:\n  type: legislation\n  title: Freedom of Information Act\n  date: 1967\n  serial-number:\n    serial: Pub. L. No. 107-296, 80 Stat. 250\noverleaf:\n  type: article\n  title: Celebrating over five million users, a quarter million daily actives, and over five years of dedicated user support\n  author: John\n  date: 2019-11-08\n  url: https://de.overleaf.com/blog/celebrating-over-five-million-users-and-a-quarter-million-daily-actives\n  parent:\n    type: blog\n    title: Overleaf Blog\nlatex-users:\n  type: article\n  title: How many scholarly articles are written in LaTeX?\n  author: Pepe, Alberto\n  date: 2017-02-21\n  serial-number:\n    doi: 10.22541/au.148771883.35456290\n  parent:\n    type: repository\n    title: Authorea\neditors:\n  type: artwork\n  title: Types of Editors\n  author: Munroe, Randall\n  date: 2014-03-12\n  url: https://xkcd.com/1341/\nbarb:\n  type: book\n  title: Den Boden unter den Füßen verlieren\n  author: Günther-Haug, Barbara\n  date: 2020\n  publisher: MVG\n  location: München\n  language: de-DE\nlamb:\n  type: book\n  title: The life of a friendly lamb\n  author: Kell-Nehrer, Felips\n  date: 2011\n  chapter: 20\n  volume: 10\n  page-range: 22-23\nsnail:\n  type: book\n  title: A Snail Study\n  author: Kell-Nehrer, Felips\n  date: 2011\n  chapter: 2A\n  volume: 4B\n  page-range: '28'\nlamb-chapter:\n  type: chapter\n  chapter: 3\n  page-range: 10-12\n  parent:\n    type: book\n    title: The life of a friendly lamb\n    author: Kell-Nehrer, Felips\n    date: 2011\n    chapter: 20\n    volume: 10\n    page-range: 22-23\nsnail-chapter:\n  type: chapter\n  page-range: 10-12\n  serial-number:\n    serial: '3'\n  parent:\n    type: book\n    title: A Snail Study\n    author: Kell-Nehrer, Felips\n    date: 2011\n    volume: 4B\n    page-range: '28'\n"
+      }
+    },
+    {
+      "input": "book:\n  type: Book\n  title: Café\n  author: Doe, Jane\n  date: 2024-02-29\n  publisher: Example\n",
+      "result": {
+        "debug": "Library({\"book\": Entry { key: \"book\", entry_type: Book, title: Some(FormatString { value: ChunkedString([StringChunk { value: \"Café\", kind: Normal }]), short: None }), authors: Some([Person { name: \"Doe\", given_name: Some(\"Jane\"), prefix: None, suffix: None, comma_suffix: false, alias: None }]), date: Some(Date { year: 2024, month: Some(1), day: Some(28), approximate: false, season: None }), editors: None, affiliated: None, publisher: Some(Publisher { name: Some(FormatString { value: ChunkedString([StringChunk { value: \"Example\", kind: Normal }]), short: None }), location: None }), location: None, organization: None, issue: None, chapter: None, volume: None, volume_total: None, edition: None, page_range: None, page_total: None, time_range: None, runtime: None, url: None, serial_number: None, language: None, archive: None, archive_location: None, call_number: None, note: None, abstract_: None, genre: None, parents: [] }})",
+        "serialized": "book:\n  type: book\n  title: Café\n  author: Doe, Jane\n  date: 2024-02-29\n  publisher: Example\n"
+      }
+    },
+    {
+      "input": "book:\n  title: Missing type\n",
+      "result": {
+        "debug": "Error(\"book: no entry type for `book`\", line: 2, column: 3)",
+        "display": "book: no entry type for `book` at line 2 column 3",
+        "location": [
+          8,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "input": "book:\n  type: Book\n  date: invalid-date\n",
+      "result": {
+        "debug": "Error(\"book.date: date format unknown\", line: 3, column: 9)",
+        "display": "book.date: date format unknown at line 3 column 9",
+        "location": [
+          27,
+          3,
+          9
+        ]
+      }
+    },
+    {
+      "input": "book: [\n",
+      "result": {
+        "debug": "Error(\"book: invalid type: sequence, expected a map representing a bibliography entry\", line: 1, column: 7)",
+        "display": "book: invalid type: sequence, expected a map representing a bibliography entry at line 1 column 7",
+        "location": [
+          6,
+          1,
+          7
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "input": "title: Café 日本語 🦀\nn: 42\nrows: [1, null, true]\n",
+      "json_value": {
+        "json": {
+          "n": 42,
+          "rows": [
+            1,
+            null,
+            true
+          ],
+          "title": "Café 日本語 🦀"
+        },
+        "yaml": "n: 42\nrows:\n- 1\n- null\n- true\ntitle: Café 日本語 🦀\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"title\": String(\"Café 日本語 🦀\"), \"n\": Number(42), \"rows\": Sequence [Number(1), Null, Bool(true)]}",
+            "yaml": "title: Café 日本語 🦀\nn: 42\nrows:\n- 1\n- null\n- true\n"
+          },
+          "value": "Mapping {\"title\": String(\"Café 日本語 🦀\"), \"n\": Number(42), \"rows\": Sequence [Number(1), Null, Bool(true)]}",
+          "yaml": "title: Café 日本語 🦀\nn: 42\nrows:\n- 1\n- null\n- true\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"title\": String(\"Café 日本語 🦀\"), \"n\": Number(42), \"rows\": Sequence [Number(1), Null, Bool(true)]}",
+          "yaml": "title: Café 日本語 🦀\nn: 42\nrows:\n- 1\n- null\n- true\n"
+        },
+        "value": "Mapping {\"title\": String(\"Café 日本語 🦀\"), \"n\": Number(42), \"rows\": Sequence [Number(1), Null, Bool(true)]}",
+        "yaml": "title: Café 日本語 🦀\nn: 42\nrows:\n- 1\n- null\n- true\n"
+      }
+    },
+    {
+      "input": "hex: 0xff\noctal: 0o777\nboolean: yes\ndate: 2024-01-01\n",
+      "json_value": {
+        "json": {
+          "boolean": "yes",
+          "date": "2024-01-01",
+          "hex": 255,
+          "octal": 511
+        },
+        "yaml": "boolean: yes\ndate: 2024-01-01\nhex: 255\noctal: 511\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"hex\": Number(255), \"octal\": Number(511), \"boolean\": String(\"yes\"), \"date\": String(\"2024-01-01\")}",
+            "yaml": "hex: 255\noctal: 511\nboolean: yes\ndate: 2024-01-01\n"
+          },
+          "value": "Mapping {\"hex\": Number(255), \"octal\": Number(511), \"boolean\": String(\"yes\"), \"date\": String(\"2024-01-01\")}",
+          "yaml": "hex: 255\noctal: 511\nboolean: yes\ndate: 2024-01-01\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"hex\": Number(255), \"octal\": Number(511), \"boolean\": String(\"yes\"), \"date\": String(\"2024-01-01\")}",
+          "yaml": "hex: 255\noctal: 511\nboolean: yes\ndate: 2024-01-01\n"
+        },
+        "value": "Mapping {\"hex\": Number(255), \"octal\": Number(511), \"boolean\": String(\"yes\"), \"date\": String(\"2024-01-01\")}",
+        "yaml": "hex: 255\noctal: 511\nboolean: yes\ndate: 2024-01-01\n"
+      }
+    },
+    {
+      "input": "yes: yes\nno: no\non: on\noff: off\ntrue: TRUE\nfalse: False\n",
+      "json_value": {
+        "json": {
+          "false": false,
+          "no": "no",
+          "off": "off",
+          "on": "on",
+          "true": true,
+          "yes": "yes"
+        },
+        "yaml": "'false': false\nno: no\noff: off\non: on\n'true': true\nyes: yes\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"yes\": String(\"yes\"), \"no\": String(\"no\"), \"on\": String(\"on\"), \"off\": String(\"off\"), true: Bool(true), false: Bool(false)}",
+            "yaml": "yes: yes\nno: no\non: on\noff: off\ntrue: true\nfalse: false\n"
+          },
+          "value": "Mapping {\"yes\": String(\"yes\"), \"no\": String(\"no\"), \"on\": String(\"on\"), \"off\": String(\"off\"), true: Bool(true), false: Bool(false)}",
+          "yaml": "yes: yes\nno: no\non: on\noff: off\ntrue: true\nfalse: false\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"yes\": String(\"yes\"), \"no\": String(\"no\"), \"on\": String(\"on\"), \"off\": String(\"off\"), true: Bool(true), false: Bool(false)}",
+          "yaml": "yes: yes\nno: no\non: on\noff: off\ntrue: true\nfalse: false\n"
+        },
+        "value": "Mapping {\"yes\": String(\"yes\"), \"no\": String(\"no\"), \"on\": String(\"on\"), \"off\": String(\"off\"), true: Bool(true), false: Bool(false)}",
+        "yaml": "yes: yes\nno: no\non: on\noff: off\ntrue: true\nfalse: false\n"
+      }
+    },
+    {
+      "input": "%YAML 1.1\n---\nyes: yes\nnumber: 012\n",
+      "json_value": {
+        "json": {
+          "number": "012",
+          "yes": "yes"
+        },
+        "yaml": "number: '012'\nyes: yes\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+            "yaml": "yes: yes\nnumber: '012'\n"
+          },
+          "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+          "yaml": "yes: yes\nnumber: '012'\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+          "yaml": "yes: yes\nnumber: '012'\n"
+        },
+        "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+        "yaml": "yes: yes\nnumber: '012'\n"
+      }
+    },
+    {
+      "input": "%YAML 1.2\n---\nyes: yes\nnumber: 012\n",
+      "json_value": {
+        "json": {
+          "number": "012",
+          "yes": "yes"
+        },
+        "yaml": "number: '012'\nyes: yes\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+            "yaml": "yes: yes\nnumber: '012'\n"
+          },
+          "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+          "yaml": "yes: yes\nnumber: '012'\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+          "yaml": "yes: yes\nnumber: '012'\n"
+        },
+        "value": "Mapping {\"yes\": String(\"yes\"), \"number\": String(\"012\")}",
+        "yaml": "yes: yes\nnumber: '012'\n"
+      }
+    },
+    {
+      "input": "title: |\n  alpha\n  beta\n",
+      "json_value": {
+        "json": {
+          "title": "alpha\nbeta\n"
+        },
+        "yaml": "title: |\n  alpha\n  beta\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"title\": String(\"alpha\\nbeta\\n\")}",
+            "yaml": "title: |\n  alpha\n  beta\n"
+          },
+          "value": "Mapping {\"title\": String(\"alpha\\nbeta\\n\")}",
+          "yaml": "title: |\n  alpha\n  beta\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"title\": String(\"alpha\\nbeta\\n\")}",
+          "yaml": "title: |\n  alpha\n  beta\n"
+        },
+        "value": "Mapping {\"title\": String(\"alpha\\nbeta\\n\")}",
+        "yaml": "title: |\n  alpha\n  beta\n"
+      }
+    },
+    {
+      "input": "title: >-\n  alpha\n  beta\n",
+      "json_value": {
+        "json": {
+          "title": "alpha beta"
+        },
+        "yaml": "title: alpha beta\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"title\": String(\"alpha beta\")}",
+            "yaml": "title: alpha beta\n"
+          },
+          "value": "Mapping {\"title\": String(\"alpha beta\")}",
+          "yaml": "title: alpha beta\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"title\": String(\"alpha beta\")}",
+          "yaml": "title: alpha beta\n"
+        },
+        "value": "Mapping {\"title\": String(\"alpha beta\")}",
+        "yaml": "title: alpha beta\n"
+      }
+    },
+    {
+      "input": "a: &base {x: 1}\nb: {<<: *base, y: 2}\n",
+      "json_value": {
+        "json": {
+          "a": {
+            "x": 1
+          },
+          "b": {
+            "<<": {
+              "x": 1
+            },
+            "y": 2
+          }
+        },
+        "yaml": "a:\n  x: 1\nb:\n  <<:\n    x: 1\n  y: 2\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"y\": Number(2), \"x\": Number(1)}}",
+            "yaml": "a:\n  x: 1\nb:\n  y: 2\n  x: 1\n"
+          },
+          "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"<<\": Mapping {\"x\": Number(1)}, \"y\": Number(2)}}",
+          "yaml": "a:\n  x: 1\nb:\n  <<:\n    x: 1\n  y: 2\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"y\": Number(2), \"x\": Number(1)}}",
+          "yaml": "a:\n  x: 1\nb:\n  y: 2\n  x: 1\n"
+        },
+        "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"<<\": Mapping {\"x\": Number(1)}, \"y\": Number(2)}}",
+        "yaml": "a:\n  x: 1\nb:\n  <<:\n    x: 1\n  y: 2\n"
+      }
+    },
+    {
+      "input": "a: &a {x: 1}\nb: &b {x: 2, y: 3}\nc: {<<: [*a, *b], z: 4}\n",
+      "json_value": {
+        "json": {
+          "a": {
+            "x": 1
+          },
+          "b": {
+            "x": 2,
+            "y": 3
+          },
+          "c": {
+            "<<": [
+              {
+                "x": 1
+              },
+              {
+                "x": 2,
+                "y": 3
+              }
+            ],
+            "z": 4
+          }
+        },
+        "yaml": "a:\n  x: 1\nb:\n  x: 2\n  y: 3\nc:\n  <<:\n  - x: 1\n  - x: 2\n    y: 3\n  z: 4\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"x\": Number(2), \"y\": Number(3)}, \"c\": Mapping {\"z\": Number(4), \"x\": Number(1), \"y\": Number(3)}}",
+            "yaml": "a:\n  x: 1\nb:\n  x: 2\n  y: 3\nc:\n  z: 4\n  x: 1\n  y: 3\n"
+          },
+          "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"x\": Number(2), \"y\": Number(3)}, \"c\": Mapping {\"<<\": Sequence [Mapping {\"x\": Number(1)}, Mapping {\"x\": Number(2), \"y\": Number(3)}], \"z\": Number(4)}}",
+          "yaml": "a:\n  x: 1\nb:\n  x: 2\n  y: 3\nc:\n  <<:\n  - x: 1\n  - x: 2\n    y: 3\n  z: 4\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"x\": Number(2), \"y\": Number(3)}, \"c\": Mapping {\"z\": Number(4), \"x\": Number(1), \"y\": Number(3)}}",
+          "yaml": "a:\n  x: 1\nb:\n  x: 2\n  y: 3\nc:\n  z: 4\n  x: 1\n  y: 3\n"
+        },
+        "value": "Mapping {\"a\": Mapping {\"x\": Number(1)}, \"b\": Mapping {\"x\": Number(2), \"y\": Number(3)}, \"c\": Mapping {\"<<\": Sequence [Mapping {\"x\": Number(1)}, Mapping {\"x\": Number(2), \"y\": Number(3)}], \"z\": Number(4)}}",
+        "yaml": "a:\n  x: 1\nb:\n  x: 2\n  y: 3\nc:\n  <<:\n  - x: 1\n  - x: 2\n    y: 3\n  z: 4\n"
+      }
+    },
+    {
+      "input": "number: !!str 42\nvalue: !custom [1, 2]\n",
+      "json_value": {
+        "debug": "Error(\"value: invalid type: enum, expected any valid JSON value\", line: 2, column: 8)",
+        "display": "value: invalid type: enum, expected any valid JSON value at line 2 column 8",
+        "location": [
+          24,
+          2,
+          8
+        ]
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"number\": String(\"42\"), \"value\": TaggedValue { tag: !custom, value: Sequence [Number(1), Number(2)] }}",
+            "yaml": "number: '42'\nvalue: !custom\n- 1\n- 2\n"
+          },
+          "value": "Mapping {\"number\": String(\"42\"), \"value\": TaggedValue { tag: !custom, value: Sequence [Number(1), Number(2)] }}",
+          "yaml": "number: '42'\nvalue: !custom\n- 1\n- 2\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"number\": String(\"42\"), \"value\": TaggedValue { tag: !custom, value: Sequence [Number(1), Number(2)] }}",
+          "yaml": "number: '42'\nvalue: !custom\n- 1\n- 2\n"
+        },
+        "value": "Mapping {\"number\": String(\"42\"), \"value\": TaggedValue { tag: !custom, value: Sequence [Number(1), Number(2)] }}",
+        "yaml": "number: '42'\nvalue: !custom\n- 1\n- 2\n"
+      }
+    },
+    {
+      "input": "!!map {a: !!int '12', b: !!bool true}\n",
+      "json_value": {
+        "json": {
+          "a": 12,
+          "b": true
+        },
+        "yaml": "a: 12\nb: true\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"a\": Number(12), \"b\": Bool(true)}",
+            "yaml": "a: 12\nb: true\n"
+          },
+          "value": "Mapping {\"a\": Number(12), \"b\": Bool(true)}",
+          "yaml": "a: 12\nb: true\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"a\": Number(12), \"b\": Bool(true)}",
+          "yaml": "a: 12\nb: true\n"
+        },
+        "value": "Mapping {\"a\": Number(12), \"b\": Bool(true)}",
+        "yaml": "a: 12\nb: true\n"
+      }
+    },
+    {
+      "input": "key: a\nkey: b\n",
+      "json_value": {
+        "json": {
+          "key": "b"
+        },
+        "yaml": "key: b\n"
+      },
+      "stream": [
+        {
+          "debug": "Error(\"duplicate entry with key \\\"key\\\"\", line: 1, column: 1)",
+          "display": "duplicate entry with key \"key\"",
+          "location": [
+            0,
+            1,
+            1
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error(\"duplicate entry with key \\\"key\\\"\", line: 1, column: 1)",
+        "display": "duplicate entry with key \"key\"",
+        "location": [
+          0,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "input": "x: .inf\ny: -.Inf\nz: .NaN\n",
+      "json_value": {
+        "json": {
+          "x": null,
+          "y": null,
+          "z": null
+        },
+        "yaml": "x: null\ny: null\nz: null\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"x\": Number(.inf), \"y\": Number(-.inf), \"z\": Number(.nan)}",
+            "yaml": "x: .inf\ny: -.inf\nz: .nan\n"
+          },
+          "value": "Mapping {\"x\": Number(.inf), \"y\": Number(-.inf), \"z\": Number(.nan)}",
+          "yaml": "x: .inf\ny: -.inf\nz: .nan\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"x\": Number(.inf), \"y\": Number(-.inf), \"z\": Number(.nan)}",
+          "yaml": "x: .inf\ny: -.inf\nz: .nan\n"
+        },
+        "value": "Mapping {\"x\": Number(.inf), \"y\": Number(-.inf), \"z\": Number(.nan)}",
+        "yaml": "x: .inf\ny: -.inf\nz: .nan\n"
+      }
+    },
+    {
+      "input": "min: -9223372036854775808\nmax: 9223372036854775807\nu64: 18446744073709551615\nlarge: 18446744073709551616\n",
+      "json_value": {
+        "debug": "Error(\"large: JSON number out of range\", line: 4, column: 8)",
+        "display": "large: JSON number out of range at line 4 column 8",
+        "location": [
+          84,
+          4,
+          8
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error(\"large: invalid type: integer `18446744073709551616` as u128, expected any YAML value\", line: 4, column: 8)",
+          "display": "large: invalid type: integer `18446744073709551616` as u128, expected any YAML value at line 4 column 8",
+          "location": [
+            84,
+            4,
+            8
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error(\"large: invalid type: integer `18446744073709551616` as u128, expected any YAML value\", line: 4, column: 8)",
+        "display": "large: invalid type: integer `18446744073709551616` as u128, expected any YAML value at line 4 column 8",
+        "location": [
+          84,
+          4,
+          8
+        ]
+      }
+    },
+    {
+      "input": "float: 1.25e-3\nnegative_zero: -0.0\nseparators: 1_000\nsexagesimal: 1:20\n",
+      "json_value": {
+        "json": {
+          "float": 0.00125,
+          "negative_zero": -0.0,
+          "separators": "1_000",
+          "sexagesimal": "1:20"
+        },
+        "yaml": "float: 0.00125\nnegative_zero: -0.0\nseparators: 1_000\nsexagesimal: 1:20\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"float\": Number(0.00125), \"negative_zero\": Number(-0.0), \"separators\": String(\"1_000\"), \"sexagesimal\": String(\"1:20\")}",
+            "yaml": "float: 0.00125\nnegative_zero: -0.0\nseparators: 1_000\nsexagesimal: 1:20\n"
+          },
+          "value": "Mapping {\"float\": Number(0.00125), \"negative_zero\": Number(-0.0), \"separators\": String(\"1_000\"), \"sexagesimal\": String(\"1:20\")}",
+          "yaml": "float: 0.00125\nnegative_zero: -0.0\nseparators: 1_000\nsexagesimal: 1:20\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"float\": Number(0.00125), \"negative_zero\": Number(-0.0), \"separators\": String(\"1_000\"), \"sexagesimal\": String(\"1:20\")}",
+          "yaml": "float: 0.00125\nnegative_zero: -0.0\nseparators: 1_000\nsexagesimal: 1:20\n"
+        },
+        "value": "Mapping {\"float\": Number(0.00125), \"negative_zero\": Number(-0.0), \"separators\": String(\"1_000\"), \"sexagesimal\": String(\"1:20\")}",
+        "yaml": "float: 0.00125\nnegative_zero: -0.0\nseparators: 1_000\nsexagesimal: 1:20\n"
+      }
+    },
+    {
+      "input": "null: null\nempty:\ntilde: ~\nquoted: 'null'\n",
+      "json_value": {
+        "json": {
+          "empty": null,
+          "null": null,
+          "quoted": "null",
+          "tilde": null
+        },
+        "yaml": "empty: null\n'null': null\nquoted: 'null'\ntilde: null\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {Null: Null, \"empty\": Null, \"tilde\": Null, \"quoted\": String(\"null\")}",
+            "yaml": "null: null\nempty: null\ntilde: null\nquoted: 'null'\n"
+          },
+          "value": "Mapping {Null: Null, \"empty\": Null, \"tilde\": Null, \"quoted\": String(\"null\")}",
+          "yaml": "null: null\nempty: null\ntilde: null\nquoted: 'null'\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {Null: Null, \"empty\": Null, \"tilde\": Null, \"quoted\": String(\"null\")}",
+          "yaml": "null: null\nempty: null\ntilde: null\nquoted: 'null'\n"
+        },
+        "value": "Mapping {Null: Null, \"empty\": Null, \"tilde\": Null, \"quoted\": String(\"null\")}",
+        "yaml": "null: null\nempty: null\ntilde: null\nquoted: 'null'\n"
+      }
+    },
+    {
+      "input": "date: 2024-02-29\ntime: 2024-02-29T12:34:56Z\n",
+      "json_value": {
+        "json": {
+          "date": "2024-02-29",
+          "time": "2024-02-29T12:34:56Z"
+        },
+        "yaml": "date: 2024-02-29\ntime: 2024-02-29T12:34:56Z\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"date\": String(\"2024-02-29\"), \"time\": String(\"2024-02-29T12:34:56Z\")}",
+            "yaml": "date: 2024-02-29\ntime: 2024-02-29T12:34:56Z\n"
+          },
+          "value": "Mapping {\"date\": String(\"2024-02-29\"), \"time\": String(\"2024-02-29T12:34:56Z\")}",
+          "yaml": "date: 2024-02-29\ntime: 2024-02-29T12:34:56Z\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"date\": String(\"2024-02-29\"), \"time\": String(\"2024-02-29T12:34:56Z\")}",
+          "yaml": "date: 2024-02-29\ntime: 2024-02-29T12:34:56Z\n"
+        },
+        "value": "Mapping {\"date\": String(\"2024-02-29\"), \"time\": String(\"2024-02-29T12:34:56Z\")}",
+        "yaml": "date: 2024-02-29\ntime: 2024-02-29T12:34:56Z\n"
+      }
+    },
+    {
+      "input": "? [a, b]\n: {1: 2}\n",
+      "json_value": {
+        "debug": "Error(\"invalid type: sequence, expected a string key\", line: 1, column: 3)",
+        "display": "invalid type: sequence, expected a string key at line 1 column 3",
+        "location": [
+          2,
+          1,
+          3
+        ]
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {Sequence [String(\"a\"), String(\"b\")]: Mapping {1: Number(2)}}",
+            "yaml": "? - a\n  - b\n: 1: 2\n"
+          },
+          "value": "Mapping {Sequence [String(\"a\"), String(\"b\")]: Mapping {1: Number(2)}}",
+          "yaml": "? - a\n  - b\n: 1: 2\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {Sequence [String(\"a\"), String(\"b\")]: Mapping {1: Number(2)}}",
+          "yaml": "? - a\n  - b\n: 1: 2\n"
+        },
+        "value": "Mapping {Sequence [String(\"a\"), String(\"b\")]: Mapping {1: Number(2)}}",
+        "yaml": "? - a\n  - b\n: 1: 2\n"
+      }
+    },
+    {
+      "input": "'é': \"\\u263a\\U0001f980\"\n",
+      "json_value": {
+        "json": {
+          "é": "☺🦀"
+        },
+        "yaml": "é: ☺🦀\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"é\": String(\"☺🦀\")}",
+            "yaml": "é: ☺🦀\n"
+          },
+          "value": "Mapping {\"é\": String(\"☺🦀\")}",
+          "yaml": "é: ☺🦀\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"é\": String(\"☺🦀\")}",
+          "yaml": "é: ☺🦀\n"
+        },
+        "value": "Mapping {\"é\": String(\"☺🦀\")}",
+        "yaml": "é: ☺🦀\n"
+      }
+    },
+    {
+      "input": "a: [\n",
+      "json_value": {
+        "debug": "Error { kind: PARSER, problem: \"did not find expected node content\", problem_mark: Mark { line: 2, column: 1 }, context: \"while parsing a flow node\", context_mark: Mark { line: 2, column: 1 } }",
+        "display": "did not find expected node content at line 2 column 1, while parsing a flow node",
+        "location": [
+          5,
+          2,
+          1
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error { kind: PARSER, problem: \"did not find expected node content\", problem_mark: Mark { line: 2, column: 1 }, context: \"while parsing a flow node\", context_mark: Mark { line: 2, column: 1 } }",
+          "display": "did not find expected node content at line 2 column 1, while parsing a flow node",
+          "location": [
+            5,
+            2,
+            1
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error { kind: PARSER, problem: \"did not find expected node content\", problem_mark: Mark { line: 2, column: 1 }, context: \"while parsing a flow node\", context_mark: Mark { line: 2, column: 1 } }",
+        "display": "did not find expected node content at line 2 column 1, while parsing a flow node",
+        "location": [
+          5,
+          2,
+          1
+        ]
+      }
+    },
+    {
+      "input": "é: ok\nbad: [1, 2\n",
+      "json_value": {
+        "debug": "Error { kind: PARSER, problem: \"did not find expected ',' or ']'\", problem_mark: Mark { line: 3, column: 1 }, context: \"while parsing a flow sequence\", context_mark: Mark { line: 2, column: 6 } }",
+        "display": "did not find expected ',' or ']' at line 3 column 1, while parsing a flow sequence at line 2 column 6",
+        "location": [
+          18,
+          3,
+          1
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error { kind: PARSER, problem: \"did not find expected ',' or ']'\", problem_mark: Mark { line: 3, column: 1 }, context: \"while parsing a flow sequence\", context_mark: Mark { line: 2, column: 6 } }",
+          "display": "did not find expected ',' or ']' at line 3 column 1, while parsing a flow sequence at line 2 column 6",
+          "location": [
+            18,
+            3,
+            1
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error { kind: PARSER, problem: \"did not find expected ',' or ']'\", problem_mark: Mark { line: 3, column: 1 }, context: \"while parsing a flow sequence\", context_mark: Mark { line: 2, column: 6 } }",
+        "display": "did not find expected ',' or ']' at line 3 column 1, while parsing a flow sequence at line 2 column 6",
+        "location": [
+          18,
+          3,
+          1
+        ]
+      }
+    },
+    {
+      "input": "a:\n  b: 1\n c: 2\n",
+      "json_value": {
+        "debug": "Error { kind: PARSER, problem: \"did not find expected key\", problem_mark: Mark { line: 3, column: 2 }, context: \"while parsing a block mapping\" }",
+        "display": "did not find expected key at line 3 column 2, while parsing a block mapping",
+        "location": [
+          11,
+          3,
+          2
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error { kind: PARSER, problem: \"did not find expected key\", problem_mark: Mark { line: 3, column: 2 }, context: \"while parsing a block mapping\" }",
+          "display": "did not find expected key at line 3 column 2, while parsing a block mapping",
+          "location": [
+            11,
+            3,
+            2
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error { kind: PARSER, problem: \"did not find expected key\", problem_mark: Mark { line: 3, column: 2 }, context: \"while parsing a block mapping\" }",
+        "display": "did not find expected key at line 3 column 2, while parsing a block mapping",
+        "location": [
+          11,
+          3,
+          2
+        ]
+      }
+    },
+    {
+      "input": "a: *missing\n",
+      "json_value": {
+        "debug": "Error(\"unknown anchor\", line: 1, column: 4)",
+        "display": "unknown anchor at line 1 column 4",
+        "location": [
+          3,
+          1,
+          4
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error(\"unknown anchor\", line: 1, column: 4)",
+          "display": "unknown anchor at line 1 column 4",
+          "location": [
+            3,
+            1,
+            4
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error(\"unknown anchor\", line: 1, column: 4)",
+        "display": "unknown anchor at line 1 column 4",
+        "location": [
+          3,
+          1,
+          4
+        ]
+      }
+    },
+    {
+      "input": "a: &loop [*loop]\n",
+      "json_value": {
+        "debug": "Error(\"recursion limit exceeded\", line: 1, column: 4)",
+        "display": "recursion limit exceeded at line 1 column 4",
+        "location": [
+          3,
+          1,
+          4
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error(\"recursion limit exceeded\", line: 1, column: 4)",
+          "display": "recursion limit exceeded at line 1 column 4",
+          "location": [
+            3,
+            1,
+            4
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error(\"recursion limit exceeded\", line: 1, column: 4)",
+        "display": "recursion limit exceeded at line 1 column 4",
+        "location": [
+          3,
+          1,
+          4
+        ]
+      }
+    },
+    {
+      "input": "a: \"\\q\"\n",
+      "json_value": {
+        "debug": "Error { kind: SCANNER, problem: \"found unknown escape character\", problem_mark: Mark { line: 1, column: 5 }, context: \"while parsing a quoted scalar\", context_mark: Mark { line: 1, column: 4 } }",
+        "display": "found unknown escape character at line 1 column 5, while parsing a quoted scalar at line 1 column 4",
+        "location": [
+          4,
+          1,
+          5
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error { kind: SCANNER, problem: \"found unknown escape character\", problem_mark: Mark { line: 1, column: 5 }, context: \"while parsing a quoted scalar\", context_mark: Mark { line: 1, column: 4 } }",
+          "display": "found unknown escape character at line 1 column 5, while parsing a quoted scalar at line 1 column 4",
+          "location": [
+            4,
+            1,
+            5
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error { kind: SCANNER, problem: \"found unknown escape character\", problem_mark: Mark { line: 1, column: 5 }, context: \"while parsing a quoted scalar\", context_mark: Mark { line: 1, column: 4 } }",
+        "display": "found unknown escape character at line 1 column 5, while parsing a quoted scalar at line 1 column 4",
+        "location": [
+          4,
+          1,
+          5
+        ]
+      }
+    },
+    {
+      "input": "a: !!int nope\n",
+      "json_value": {
+        "debug": "Error(\"a: invalid value: string \\\"nope\\\", expected an integer\", line: 1, column: 4)",
+        "display": "a: invalid value: string \"nope\", expected an integer at line 1 column 4",
+        "location": [
+          3,
+          1,
+          4
+        ]
+      },
+      "stream": [
+        {
+          "debug": "Error(\"a: invalid value: string \\\"nope\\\", expected an integer\", line: 1, column: 4)",
+          "display": "a: invalid value: string \"nope\", expected an integer at line 1 column 4",
+          "location": [
+            3,
+            1,
+            4
+          ]
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error(\"a: invalid value: string \\\"nope\\\", expected an integer\", line: 1, column: 4)",
+        "display": "a: invalid value: string \"nope\", expected an integer at line 1 column 4",
+        "location": [
+          3,
+          1,
+          4
+        ]
+      }
+    },
+    {
+      "input": "a: {<<: 3}\n",
+      "json_value": {
+        "json": {
+          "a": {
+            "<<": 3
+          }
+        },
+        "yaml": "a:\n  <<: 3\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "debug": "Error(\"expected a mapping or list of mappings for merging, but found scalar\")",
+            "display": "expected a mapping or list of mappings for merging, but found scalar",
+            "location": null
+          },
+          "value": "Mapping {\"a\": Mapping {\"<<\": Number(3)}}",
+          "yaml": "a:\n  <<: 3\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "debug": "Error(\"expected a mapping or list of mappings for merging, but found scalar\")",
+          "display": "expected a mapping or list of mappings for merging, but found scalar",
+          "location": null
+        },
+        "value": "Mapping {\"a\": Mapping {\"<<\": Number(3)}}",
+        "yaml": "a:\n  <<: 3\n"
+      }
+    },
+    {
+      "input": "null\n---\n42\n",
+      "json_value": {
+        "debug": "Error(\"deserializing from YAML containing more than one document is not supported\")",
+        "display": "deserializing from YAML containing more than one document is not supported",
+        "location": null
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Null",
+            "yaml": "null\n"
+          },
+          "value": "Null",
+          "yaml": "null\n"
+        },
+        {
+          "merge": {
+            "value": "Number(42)",
+            "yaml": "42\n"
+          },
+          "value": "Number(42)",
+          "yaml": "42\n"
+        }
+      ],
+      "yaml_value": {
+        "debug": "Error(\"deserializing from YAML containing more than one document is not supported\")",
+        "display": "deserializing from YAML containing more than one document is not supported",
+        "location": null
+      }
+    },
+    {
+      "input": "---\na: 1\n...\n",
+      "json_value": {
+        "json": {
+          "a": 1
+        },
+        "yaml": "a: 1\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"a\": Number(1)}",
+            "yaml": "a: 1\n"
+          },
+          "value": "Mapping {\"a\": Number(1)}",
+          "yaml": "a: 1\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"a\": Number(1)}",
+          "yaml": "a: 1\n"
+        },
+        "value": "Mapping {\"a\": Number(1)}",
+        "yaml": "a: 1\n"
+      }
+    },
+    {
+      "input": "",
+      "json_value": {
+        "json": null,
+        "yaml": "null\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Null",
+            "yaml": "null\n"
+          },
+          "value": "Null",
+          "yaml": "null\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Null",
+          "yaml": "null\n"
+        },
+        "value": "Null",
+        "yaml": "null\n"
+      }
+    },
+    {
+      "input": "# comment only\n",
+      "json_value": {
+        "json": null,
+        "yaml": "null\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Null",
+            "yaml": "null\n"
+          },
+          "value": "Null",
+          "yaml": "null\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Null",
+          "yaml": "null\n"
+        },
+        "value": "Null",
+        "yaml": "null\n"
+      }
+    },
+    {
+      "input": "[1, {a: 2}, null, false]\n",
+      "json_value": {
+        "json": [
+          1,
+          {
+            "a": 2
+          },
+          null,
+          false
+        ],
+        "yaml": "- 1\n- a: 2\n- null\n- false\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Sequence [Number(1), Mapping {\"a\": Number(2)}, Null, Bool(false)]",
+            "yaml": "- 1\n- a: 2\n- null\n- false\n"
+          },
+          "value": "Sequence [Number(1), Mapping {\"a\": Number(2)}, Null, Bool(false)]",
+          "yaml": "- 1\n- a: 2\n- null\n- false\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Sequence [Number(1), Mapping {\"a\": Number(2)}, Null, Bool(false)]",
+          "yaml": "- 1\n- a: 2\n- null\n- false\n"
+        },
+        "value": "Sequence [Number(1), Mapping {\"a\": Number(2)}, Null, Bool(false)]",
+        "yaml": "- 1\n- a: 2\n- null\n- false\n"
+      }
+    },
+    {
+      "input": "a:\n  - b: 1\n    c: 2\n",
+      "json_value": {
+        "json": {
+          "a": [
+            {
+              "b": 1,
+              "c": 2
+            }
+          ]
+        },
+        "yaml": "a:\n- b: 1\n  c: 2\n"
+      },
+      "stream": [
+        {
+          "merge": {
+            "value": "Mapping {\"a\": Sequence [Mapping {\"b\": Number(1), \"c\": Number(2)}]}",
+            "yaml": "a:\n- b: 1\n  c: 2\n"
+          },
+          "value": "Mapping {\"a\": Sequence [Mapping {\"b\": Number(1), \"c\": Number(2)}]}",
+          "yaml": "a:\n- b: 1\n  c: 2\n"
+        }
+      ],
+      "yaml_value": {
+        "merge": {
+          "value": "Mapping {\"a\": Sequence [Mapping {\"b\": Number(1), \"c\": Number(2)}]}",
+          "yaml": "a:\n- b: 1\n  c: 2\n"
+        },
+        "value": "Mapping {\"a\": Sequence [Mapping {\"b\": Number(1), \"c\": Number(2)}]}",
+        "yaml": "a:\n- b: 1\n  c: 2\n"
+      }
+    }
+  ],
+  "floats": [
+    "0.0\n",
+    "-0.0\n",
+    ".inf\n",
+    "-.inf\n",
+    ".nan\n",
+    "-1.7976931348623157e308\n",
+    "1.7976931348623157e308\n"
+  ],
+  "invalid_utf8": {
+    "debug": "Error { kind: READER, problem: \"invalid leading UTF-8 octet\", problem_offset: 3 }",
+    "display": "invalid leading UTF-8 octet at position 3",
+    "location": [
+      0,
+      1,
+      1
+    ]
+  },
+  "reader_error": {
+    "debug": "Error(\"YAML fixture read failed\")",
+    "display": "YAML fixture read failed",
+    "location": null
+  },
+  "tagged": [
+    {
+      "roundtrip": "Unit",
+      "yaml": "Unit\n"
+    },
+    {
+      "roundtrip": "Scalar(\"Café\")",
+      "yaml": "!Scalar Café\n"
+    },
+    {
+      "roundtrip": "List([1, -2])",
+      "yaml": "!List\n- 1\n- -2\n"
+    },
+    {
+      "roundtrip": "Record { name: \"日\", n: 3 }",
+      "yaml": "!Record\nname: 日\nn: 3\n"
+    }
+  ]
+}

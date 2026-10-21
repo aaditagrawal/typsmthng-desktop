@@ -1,7 +1,7 @@
 [workspace]
 members = ["native/gtk"]
 resolver = "2"
-exclude = ["third-party/syntect", "third-party/hayagriva", "third-party/biblatex"]
+exclude = ["third-party/syntect", "third-party/hayagriva", "third-party/biblatex", "third-party/serde-yaml-compat"]
 
 [profile.release]
 lto = "thin"
@@ -27,3 +27,6 @@ citationberg = { git = "https://github.com/typst/citationberg", rev = "06a591e2f
 syntect = { path = "third-party/syntect" }
 hayagriva = { path = "third-party/hayagriva" }
 biblatex = { path = "third-party/biblatex" }
+
+# Local 0.9 API adapter; all YAML types and implementation come from yaml_serde.
+serde_yaml = { path = "third-party/serde-yaml-compat" }

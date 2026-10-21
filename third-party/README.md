@@ -1,6 +1,6 @@
 # Dependency maintenance backports
 
-These are complete, checksum-verified crates.io release snapshots, including their
+The Syntect, Hayagriva, and Biblatex directories are complete, checksum-verified crates.io release snapshots, including their
 licenses, assets, examples, and tests. `maintenance.json` records their archive
 URLs and SHA-256 checksums. The adjacent `*-maintenance.patch` files are the
 complete differences from those releases. No package version is changed. Workspace exclusions keep these external
@@ -42,5 +42,14 @@ The maintained replacements are real dependencies in `Cargo.lock`: `pastey`,
 There are no advisory ignores.
 
 Remove these snapshots when compatible upstream releases include the changes.
-`rustybuzz`, `ttf-parser`, and `unsafe-libyaml` remain separate compiler
-dependencies; these backports do not claim to resolve their maintenance notices.
+`rustybuzz` and `ttf-parser` remain separate compiler dependencies; these
+backports do not claim to resolve their maintenance notices.
+
+The application-owned [serde-yaml-compat adapter](serde-yaml-compat/README.md)
+re-exports the maintained upstream `yaml_serde 0.10.7` release and its
+`libyaml-rs 0.3.0` backend for both Typst and Hayagriva. It contains no copied
+parser implementation. The deprecated wrapper and `unsafe-libyaml` packages
+are absent from the effective graph. Its README explains the honest local
+compatibility version, maintenance evidence, unchanged unsafe parser algorithms,
+licenses, and frozen legacy behavior tests. This directory is local adapter
+code, separate from the three release snapshots verified by maintenance.json.

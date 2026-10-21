@@ -1,0 +1,11 @@
+[package]
+name = "serde_yaml"
+version = "0.9.34+typsmthng-compat.1"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Local serde_yaml 0.9 API compatibility adapter over maintained yaml_serde"
+
+[dependencies]
+yaml_serde = "=0.10.7"

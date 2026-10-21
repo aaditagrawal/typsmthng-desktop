@@ -444,3 +444,76 @@ fn invalid_documents_have_matching_diagnostics() {
         }
     }
 }
+
+#[test]
+fn yaml_values_encoding_and_bibliography_match_preview_svg_and_pdf() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    fs::write(root.join("data.yaml"), "title: Café 日本語\nyes: yes\ndate: 2024-02-29\nhex: 0xff\noct: 0o12\nfloat: 1.25e-3\na: &base {x: 1}\nb: {<<: *base, y: 2}\nexplicit: !!str 42\n").unwrap();
+    fs::write(root.join("refs.yaml"), "book:\n  type: Book\n  title: YAML bibliography\n  author: Doe, Jane\n  date: 2024-02-29\n  publisher: Example\n").unwrap();
+    fs::write(root.join("main.typ"), r#"
+#set text(font: "Libertinus Serif")
+#let data = yaml("data.yaml")
+#assert.eq(data, yaml(read("data.yaml", encoding: none)))
+#assert.eq(data.yes, "yes")
+#assert.eq(data.date, "2024-02-29")
+#assert.eq(data.hex, 255)
+#assert.eq(data.oct, 10)
+#assert.eq(data.b.at("<<").x, 1)
+#assert.eq(data.explicit, "42")
+#assert.eq(yaml(bytes("key: a\nkey: b\n")).key, "b")
+#let encoded = yaml.encode((title: "Café", number: 42, values: (none, true, 1.25), date: "2024-02-29"))
+#assert.eq(encoded, "title: Café\nnumber: 42\nvalues:\n- null\n- true\n- 1.25\ndate: 2024-02-29\n")
+#assert.eq(yaml(bytes(encoded)).number, 42)
+#let nonfinite = yaml(bytes("x: .inf\ny: .nan\n"))
+#assert.eq(repr(nonfinite.x), "float.inf")
+#assert.eq(repr(nonfinite.y), "float.nan")
+#assert.eq(yaml(bytes("%YAML 1.1\n---\nyes: yes\n")).yes, "yes")
+#assert.eq(yaml(bytes("%YAML 1.2\n---\nyes: yes\n")).yes, "yes")
+YAML data and serialization. @book
+#bibliography("refs.yaml")
+"#).unwrap();
+    assert_matches_cli(&Project::open(root).unwrap(), &deterministic_options());
+}
+
+#[test]
+fn yaml_errors_preserve_typst_diagnostics_and_locations() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    fs::write(root.join("main.typ"), "").unwrap();
+    let project = Project::open(root).unwrap();
+    let tool = TypstTool::detect().unwrap();
+    for (data, source) in [
+        ("é: ok\nbad: [1, 2\n", "#yaml(\"bad.yaml\")"),
+        ("a: *missing\n", "#yaml(\"bad.yaml\")"),
+        ("a: !!int nope\n", "#yaml(\"bad.yaml\")"),
+        ("tagged: !custom [1, 2]\n", "#yaml(\"bad.yaml\")"),
+        ("null\n---\n42\n", "#yaml(\"bad.yaml\")"),
+        ("? [a, b]\n: 1\n", "#yaml(\"bad.yaml\")"),
+        (
+            "book:\n  title: Missing type\n",
+            "#bibliography(\"bad.yaml\")",
+        ),
+        ("", "#yaml(bytes(\"é: ok\\nbad: [1, 2\\n\"))"),
+        ("", "#yaml.decode(\"a: 1\")"),
+    ] {
+        fs::write(root.join("bad.yaml"), data).unwrap();
+        fs::write(root.join("main.typ"), source).unwrap();
+        let preview = PreviewCompiler::default()
+            .compile(&project, "main.typ", &deterministic_options())
+            .unwrap();
+        let cli = tool
+            .compile_svg_with_options(&project, "main.typ", &deterministic_options())
+            .unwrap();
+        assert!(!preview.success(), "expected YAML error: {data:?} {source}");
+        assert!(!cli.success());
+        assert_eq!(preview.diagnostics.len(), cli.diagnostics.len());
+        for (preview, cli) in preview.diagnostics.iter().zip(&cli.diagnostics) {
+            assert_eq!(preview.severity, cli.severity);
+            assert_eq!(preview.path, cli.path);
+            assert_eq!(preview.line, cli.line);
+            assert_eq!(preview.column, cli.column);
+            assert_eq!(preview.message, cli.message, "{data:?} {source}");
+        }
+    }
+}
