@@ -16,3 +16,8 @@ incremental = false
 debug-assertions = false
 lto = "off"
 codegen-units = 256
+
+[patch.crates-io]
+# Upstream's quick-xml 0.41 migration fixes RUSTSEC-2026-0194/0195 without
+# changing our pinned Typst 0.15.1 compiler or bibliography model.
+citationberg = { git = "https://github.com/typst/citationberg", rev = "06a591e2f237d25e1dfdedac3f3d1494c496c52d" }

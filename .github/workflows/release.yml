@@ -40,11 +40,11 @@ jobs:
       source_sha: ${{ steps.version.outputs.source_sha }}
       rust_toolchain: ${{ steps.version.outputs.rust_toolchain }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ inputs.source_ref || github.ref }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -72,11 +72,11 @@ jobs:
       BUILD_RUN_ID: ${{ github.run_id }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -121,11 +121,11 @@ jobs:
       BUILD_RUN_ID: ${{ needs.candidate.outputs.run_id || github.run_id }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
       - name: Release orchestration from the workflow commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-tools
@@ -133,7 +133,7 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
           enable-cache: false
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: verified-release
           path: artifacts

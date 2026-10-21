@@ -134,7 +134,7 @@ impl UpdateClient {
                 .map_err(|error| BackendError::io(output.path(), error))?;
             digest.update(&buffer[..read]);
         }
-        let actual = format!("{:x}", digest.finalize());
+        let actual = hex::encode(digest.finalize());
         let checksums_url = asset
             .checksums_url
             .as_deref()
