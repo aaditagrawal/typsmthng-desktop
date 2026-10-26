@@ -168,7 +168,11 @@ jobs:
     needs:
       - preflight
       - publish
-    if: vars.COPR_PROJECT != '' && (github.event_name != 'workflow_dispatch' || inputs.publish)
+    # Candidate reuse skips packages, which otherwise skips this downstream job too.
+    if: >-
+      always() && !cancelled() && needs.preflight.result == 'success' &&
+      needs.publish.result == 'success' && vars.COPR_PROJECT != '' &&
+      (github.event_name != 'workflow_dispatch' || inputs.publish)
     uses: ./.github/workflows/copr.yml
     with:
       source_ref: ${{ needs.preflight.outputs.source_sha }}

@@ -19,7 +19,10 @@
 .brand-mark { font-weight: bold; font-size: 20px; padding: 0 4px; }
 .file-tab { padding: 8px 12px; border-bottom: 2px solid @accent_bg_color; }
 .file-tree { background: transparent; }
-.file-row { padding: 4px; }
+.file-tree .file-row { padding: 0; min-height: 0; }
+.file-tree .file-row button { min-height: 20px; min-width: 20px; padding: 2px; margin: 0; }
+.file-tree .file-disclosure { min-width: 16px; padding: 2px; }
+.file-tree .file-actions { border: 0; }
 .file-row:selected { background-color: @accent_bg_color; color: @accent_fg_color; }
 .file-actions { padding: 4px 8px; border-bottom: 1px solid @borders; }
 .preview-controls { padding: 4px 8px; border-bottom: 1px solid @borders; }
@@ -29,6 +32,7 @@
 .page-sheet button { color: #2e3436; }
 .conflict { background-color: alpha(@warning_color, 0.15); padding: 8px 12px; }
 .diagnostics { border-top: 1px solid @borders; }
+.statusbar .diagnostics-toggle { min-height: 0; padding: 0 4px; }
 .diagnostic-error { color: @error_color; }
 .diagnostic-warning { color: @warning_color; }
 .status-language { color: @accent_bg_color; }

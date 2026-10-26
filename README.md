@@ -22,7 +22,8 @@ See the [full screenshot gallery and migration notes](docs/gtk4-migration.md) fo
 
 - Folder-backed projects with safe file creation, rename, duplicate, move, Trash, binary assets, hidden-file control, and external-change detection
 - GtkSourceView editor with Typst syntax, diagnostics, line numbers, wrapping, search, undo, Vim-style modal input, and configurable font size
-- Ctrl+Space semantic completion, hover help, and explicit Typst formatting
+- Ctrl+Space semantic completion, automatic file path suggestions, hover help, and explicit Typst formatting
+- Clipboard image pasting with project-local PNG files and Typst image calls
 - Debounced writes and latest-wins background compilation
 - Multi-page preview with native Typst glyph rendering, display-resolution zoom, compiled heading navigation, image preview, and optional magnifier
 - PDF standards, multipage SVG/PNG ZIP exports, and experimental HTML export
@@ -147,7 +148,11 @@ Speaker notes live next to the deck as `<deck>.notes.md`. Annotation points use 
 - Save, compile, or export PDF: `Ctrl+S`, `Ctrl+Enter`, `Ctrl+Shift+E`
 - Search, settings, or file tree: `Ctrl+K`, `Ctrl+,`, `Ctrl+\`
 - Toggle comments or duplicate selected lines: `Ctrl+/`, `Ctrl+D`
-- Type `$` to open a paired math region, then Space between the delimiters to start a block equation. Typing the closing `$` moves past it. Backspace removes an empty pair.
+- Type `$` to open a paired math region, then Space between the delimiters to start a block equation. With text selected, `$` wraps the selection in math delimiters. Typing the closing `$` moves past it. Backspace removes an empty pair.
+- Paste a clipboard image with `Ctrl+V` or the editor's Paste image menu item. The app saves a uniquely named PNG in an `images` folder beside the edited `.typ` file and inserts its image call.
+- File path suggestions appear while typing image, import, include, and other supported file arguments. Use Up/Down to choose, Enter/Tab to insert, and Escape to dismiss. `Ctrl+Space` still opens completion explicitly.
+- Drag the file tree divider to resize it. Hover over a filename to see its full path, and use Left/Right on a selected folder to collapse or expand it.
+- Compiler errors appear in one scrollable diagnostics panel. The status bar stays on one line; its diagnostic count button hides or reopens the panel.
 - Font ligatures default to on and can be disabled in Settings → Fonts. The selected editor font must include the ligatures.
 - Settings → Equations lets you disable equation backgrounds or choose a CSS color. Clear the color to follow the light or dark theme. Syntax colors remain enabled.
 - Enable centered scrolling in Settings → Editor to keep the cursor line centered while editing. Manual scrolling remains available; the preference defaults to off.

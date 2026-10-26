@@ -238,3 +238,29 @@ dbus-run-session -- xvfb-run -a -s '-screen 0 3840x2400x24' \
   native_preview_clicks_and_diagnostic_idle_timing \
   -- --ignored --test-threads=1
 ```
+
+## Editor input and minimap updates
+
+Ordinary Space and Backspace checks inspect adjacent GTK text iterators before
+reading the full buffer. Math delimiter edits still use Typst's parser when
+needed. Minimap headings retain their buttons across edits and scroll updates;
+only changed labels, positions, and click targets are updated. Project main-file
+discovery and compile-option file reads run on the compilation worker.
+
+The following display tests report timings for the math key handler, minimap
+label updates, and a 160-line math document receiving 64 timed edits while
+autosave and preview are active. The input test checks the final editor and
+saved source and reports GTK heartbeat intervals. Handler and minimap timings
+measure those components; they do not measure physical keystroke-to-frame
+latency. Each GTK test needs its own process.
+
+```sh
+for test in \
+  ui::workspace::tests::native_math_pair_input_and_undo \
+  ui::minimap::tests::native_minimap_reuses_labels_and_tracks_edited_heading_locations \
+  ui::app::tests::native_live_typing_bursts_keep_event_loop_responsive; do
+  dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo \
+    G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng "$test" \
+    -- --exact --ignored --test-threads=1 --nocapture
+done
+```

@@ -437,6 +437,8 @@ pub struct WorkspaceView {
     diagnostics_list: gtk::ListBox,
     diagnostic_locations: Rc<RefCell<Vec<DiagnosticLocation>>>,
     diagnostics_revealer: gtk::Revealer,
+    diagnostics_toggle: gtk::Button,
+    diagnostics_dismissed: Rc<Cell<bool>>,
     conflict_revealer: gtk::Revealer,
     conflict_path: gtk::Label,
     project_label: gtk::Label,
@@ -593,14 +595,15 @@ impl WorkspaceView {
         let main_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         main_paned.set_vexpand(true);
         main_paned.set_hexpand(true);
-        main_paned.set_position(240);
+        main_paned.set_position(300);
+        main_paned.set_wide_handle(true);
         main_paned.set_resize_start_child(false);
         main_paned.set_shrink_start_child(false);
         root.append(&main_paned);
 
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
         sidebar.add_css_class("sidebar");
-        sidebar.set_size_request(170, -1);
+        sidebar.set_size_request(180, -1);
         let sidebar_header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         sidebar_header.set_margin_top(7);
         sidebar_header.set_margin_bottom(7);
@@ -1143,6 +1146,7 @@ impl WorkspaceView {
 
         let diagnostics_revealer = gtk::Revealer::new();
         diagnostics_revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+        let diagnostics_dismissed = Rc::new(Cell::new(false));
         let diagnostics_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         diagnostics_box.add_css_class("diagnostics");
         let diagnostics_head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1163,9 +1167,11 @@ impl WorkspaceView {
         diagnostics_list.set_activate_on_single_click(true);
         let diagnostic_locations = Rc::new(RefCell::new(Vec::<DiagnosticLocation>::new()));
         let diagnostics_scroll = gtk::ScrolledWindow::new();
-        diagnostics_scroll.set_min_content_height(120);
-        diagnostics_scroll.set_max_content_height(210);
+        diagnostics_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        diagnostics_scroll.set_min_content_height(48);
+        diagnostics_scroll.set_max_content_height(160);
         diagnostics_scroll.set_propagate_natural_height(true);
+        diagnostics_scroll.set_vexpand(false);
         diagnostics_scroll.set_child(Some(&diagnostics_list));
         diagnostics_box.append(&diagnostics_scroll);
         diagnostics_revealer.set_child(Some(&diagnostics_box));
@@ -1175,9 +1181,16 @@ impl WorkspaceView {
         status.add_css_class("statusbar");
         let save_label = gtk::Label::new(Some("Ready"));
         save_label.set_halign(gtk::Align::Start);
+        save_label.set_single_line_mode(true);
+        let diagnostics_toggle = gtk::Button::new();
+        diagnostics_toggle.add_css_class("flat");
+        diagnostics_toggle.add_css_class("diagnostics-toggle");
+        diagnostics_toggle.set_tooltip_text(Some("Show or hide diagnostics"));
+        diagnostics_toggle.set_visible(false);
         let compile_label = gtk::Label::new(Some("No compilation"));
         compile_label.set_halign(gtk::Align::Start);
         compile_label.set_hexpand(true);
+        compile_label.set_single_line_mode(true);
         compile_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         let page_label = gtk::Label::new(Some("Rendered: not compiled"));
         page_label.set_tooltip_text(Some("Pages and non-whitespace Unicode characters in the compiled document. Includes generated and repeated text, headers, footers, and footnotes in the full compiled document. Counts laid-out text, excluding whitespace and transparent text."));
@@ -1186,6 +1199,7 @@ impl WorkspaceView {
         vim_status.set_visible(false);
         status.append(&vim_status);
         status.append(&save_label);
+        status.append(&diagnostics_toggle);
         status.append(&compile_label);
         status.append(&page_label);
         status.append(&cursor_label);
@@ -1348,7 +1362,20 @@ impl WorkspaceView {
         }
         diagnostics_close.connect_clicked({
             let diagnostics_revealer = diagnostics_revealer.clone();
-            move |_| diagnostics_revealer.set_reveal_child(false)
+            let dismissed = diagnostics_dismissed.clone();
+            move |_| {
+                dismissed.set(true);
+                diagnostics_revealer.set_reveal_child(false);
+            }
+        });
+        diagnostics_toggle.connect_clicked({
+            let diagnostics_revealer = diagnostics_revealer.clone();
+            let dismissed = diagnostics_dismissed.clone();
+            move |_| {
+                let show = !diagnostics_revealer.reveals_child();
+                dismissed.set(!show);
+                diagnostics_revealer.set_reveal_child(show);
+            }
         });
         keep.connect_clicked({
             let conflict_revealer = conflict_revealer.clone();
@@ -1435,13 +1462,24 @@ impl WorkspaceView {
         file_list.add_controller(internal_drop);
         {
             let callback = callbacks.select_file.clone();
-            let paths = file_paths.clone();
-            file_list.connect_row_activated(move |_, row| {
-                if let Some(path) = paths.borrow().get(row.index() as usize) {
-                    callback(path.clone());
+            let files = file_rows.clone();
+            let expanded = expanded_directories.clone();
+            file_list.connect_row_activated(move |list, row| {
+                let file = files.borrow().get(row.index() as usize).cloned();
+                if let Some(file) = file {
+                    if file.is_directory {
+                        let mut expanded = expanded.borrow_mut();
+                        if !expanded.remove(&file.path) {
+                            expanded.insert(file.path.clone());
+                        }
+                        refresh_file_visibility(list, &files.borrow(), &expanded);
+                    } else {
+                        callback(file.path.clone());
+                    }
                 }
             });
         }
+        install_file_tree_keys(&file_list, &file_rows, &expanded_directories);
         {
             let lens = magnifier.lens.downgrade();
             let dirty = dirty.clone();
@@ -1553,6 +1591,8 @@ impl WorkspaceView {
             diagnostics_list,
             diagnostic_locations,
             diagnostics_revealer,
+            diagnostics_toggle,
+            diagnostics_dismissed,
             conflict_revealer,
             conflict_path,
             project_label,
@@ -1636,11 +1676,19 @@ impl WorkspaceView {
         }
     }
 
+    pub fn set_project_root(&self, root: &Path) {
+        self.editor_tools.set_project_root(root);
+    }
+
     pub fn set_project(&self, name: &str, files: &[FileRow]) {
         self.project_label.set_text(name);
         if self.file_rows.borrow().as_slice() == files {
             return;
         }
+        let selected_path = self
+            .file_list
+            .selected_row()
+            .and_then(|row| self.file_paths.borrow().get(row.index() as usize).cloned());
         while let Some(child) = self.file_list.first_child() {
             self.file_list.remove(&child);
         }
@@ -1669,12 +1717,12 @@ impl WorkspaceView {
             self.file_paths.borrow_mut().push(file.path.clone());
             let row = gtk::ListBoxRow::new();
             row.add_css_class("file-row");
-            row.set_activatable(!file.is_directory);
-            let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            line.set_margin_top(4);
-            line.set_margin_bottom(4);
-            line.set_margin_start(8 + (file.depth as i32 * 12));
-            line.set_margin_end(7);
+            row.set_activatable(true);
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            line.set_margin_top(2);
+            line.set_margin_bottom(2);
+            line.set_margin_start(4 + (file.depth as i32 * 12));
+            line.set_margin_end(4);
             if file.is_directory {
                 let disclosure = gtk::Button::with_label(
                     if self.expanded_directories.borrow().contains(&file.path) {
@@ -1684,29 +1732,31 @@ impl WorkspaceView {
                     },
                 );
                 disclosure.add_css_class("flat");
+                disclosure.add_css_class("file-disclosure");
                 disclosure.set_tooltip_text(Some("Expand or collapse folder"));
                 disclosure.connect_clicked({
                     let path = file.path.clone();
                     let expanded = self.expanded_directories.clone();
                     let rows = self.file_rows.clone();
                     let list = self.file_list.clone();
-                    move |button| {
+                    move |_| {
                         let mut expanded = expanded.borrow_mut();
                         if !expanded.remove(&path) {
                             expanded.insert(path.clone());
                         }
-                        button.set_label(if expanded.contains(&path) {
-                            "▾"
-                        } else {
-                            "▸"
-                        });
                         refresh_file_visibility(&list, &rows.borrow(), &expanded);
                     }
                 });
                 line.append(&disclosure);
+            } else {
+                let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                spacer.set_size_request(20, -1);
+                line.append(&spacer);
             }
             let icon_name = if file.is_directory {
                 "folder-symbolic"
+            } else if file.name.to_ascii_lowercase().ends_with(".pdf") {
+                "x-office-document-symbolic"
             } else if file.is_binary {
                 "image-x-generic-symbolic"
             } else {
@@ -1714,18 +1764,22 @@ impl WorkspaceView {
             };
             line.append(&gtk::Image::from_icon_name(icon_name));
             let name = gtk::Label::new(Some(&file.name));
-            name.set_halign(gtk::Align::Start);
-            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            name.set_halign(gtk::Align::Fill);
+            name.set_xalign(0.0);
+            name.set_single_line_mode(true);
+            name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
             name.set_hexpand(true);
+            name.set_tooltip_text(Some(&file.path));
             if file.is_main {
                 name.add_css_class("document-spine");
-                name.set_tooltip_text(Some("Main Typst file"));
+                name.set_tooltip_text(Some(&format!("{}\nMain Typst file", file.path)));
             }
             line.append(&name);
             let more = gtk::MenuButton::new();
             more.set_icon_name("view-more-symbolic");
             more.add_css_class("flat");
             more.add_css_class("file-actions");
+            more.set_tooltip_text(Some(&format!("Actions for {}", file.name)));
             more.set_create_popup_func({
                 let callbacks = self.callbacks.clone();
                 let file = file.clone();
@@ -1815,11 +1869,18 @@ impl WorkspaceView {
             self.file_list.append(&row);
         }
         refresh_file_visibility(&self.file_list, files, &self.expanded_directories.borrow());
+        let active_path = self.file_label.text();
+        let selected_path = selected_path
+            .as_deref()
+            .filter(|path| files.iter().any(|file| file.path == *path))
+            .unwrap_or(active_path.as_str());
+        self.select_file_row(selected_path);
     }
 
     pub fn show_text_file(&self, path: &str, contents: &str) {
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
+        self.set_diagnostics(&[]);
         self.suppress_changes.set(true);
         self.buffer.begin_irreversible_action();
         self.buffer.set_text(contents);
@@ -1828,6 +1889,7 @@ impl WorkspaceView {
         self.suppress_changes.set(false);
         self.dirty.set(false);
         self.file_label.set_text(path);
+        self.select_file_row(path);
         self.save_label.set_text("Saved");
         self.editor.set_editable(true);
         self.editor.grab_focus();
@@ -1836,6 +1898,7 @@ impl WorkspaceView {
     pub fn show_binary_file(&self, path: &Path) {
         self.editor_tools.set_file(path.to_string_lossy().as_ref());
         self.cancel_pending_compile();
+        self.set_diagnostics(&[]);
         self.file_label.set_text(path.to_string_lossy().as_ref());
         self.editor.set_editable(false);
         self.suppress_changes.set(true);
@@ -1850,6 +1913,7 @@ impl WorkspaceView {
     pub fn show_missing_file(&self, path: &str) {
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
+        self.set_diagnostics(&[]);
         self.file_label.set_text(path);
         self.editor.set_editable(false);
         self.suppress_changes.set(true);
@@ -1863,6 +1927,23 @@ impl WorkspaceView {
 
     pub fn set_current_path(&self, path: &str) {
         self.file_label.set_text(path);
+        self.select_file_row(path);
+    }
+
+    fn select_file_row(&self, path: &str) {
+        let Some(index) = self
+            .file_paths
+            .borrow()
+            .iter()
+            .position(|file| file == path)
+        else {
+            return;
+        };
+        let mut expanded = self.expanded_directories.borrow_mut();
+        expanded.extend(ancestor_directories(path).map(str::to_string));
+        refresh_file_visibility(&self.file_list, &self.file_rows.borrow(), &expanded);
+        self.file_list
+            .select_row(self.file_list.row_at_index(index as i32).as_ref());
     }
 
     pub fn source_text(&self) -> String {
@@ -2034,11 +2115,18 @@ impl WorkspaceView {
     }
 
     pub fn set_compiling(&self) {
-        self.compile_label.set_text("Compiling…");
+        self.set_compile_status("Compiling…");
     }
 
     pub fn set_compile_status(&self, text: &str) {
-        self.compile_label.set_text(text);
+        // Compiler failures can contain hundreds of newline-separated errors.
+        // Keep those available on hover without making the status bar a pane.
+        let summary = text
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
+        self.compile_label.set_text(summary.trim());
+        self.compile_label.set_tooltip_text(Some(text));
     }
 
     pub fn set_preview_files(&self, pages: &[PathBuf]) {
@@ -2396,7 +2484,30 @@ impl WorkspaceView {
             self.diagnostics_list.remove(&child);
         }
         self.diagnostics_revealer
-            .set_reveal_child(!diagnostics.is_empty());
+            .set_reveal_child(!diagnostics.is_empty() && !self.diagnostics_dismissed.get());
+        if diagnostics.is_empty() {
+            self.diagnostics_dismissed.set(false);
+        }
+        let errors = diagnostics
+            .iter()
+            .filter(|row| row.severity == DiagnosticKind::Error)
+            .count();
+        let warnings = diagnostics
+            .iter()
+            .filter(|row| row.severity == DiagnosticKind::Warning)
+            .count();
+        let count = if errors > 0 {
+            format!("{errors} {}", if errors == 1 { "error" } else { "errors" })
+        } else if warnings > 0 {
+            format!(
+                "{warnings} {}",
+                if warnings == 1 { "warning" } else { "warnings" }
+            )
+        } else {
+            format!("{} hints", diagnostics.len())
+        };
+        self.diagnostics_toggle.set_label(&count);
+        self.diagnostics_toggle.set_visible(!diagnostics.is_empty());
         self.diagnostic_locations.borrow_mut().clear();
         for diagnostic in diagnostics {
             self.diagnostic_locations.borrow_mut().push((
@@ -2428,11 +2539,17 @@ impl WorkspaceView {
             };
             let path = gtk::Label::new(Some(&location));
             path.add_css_class("mono");
+            path.set_single_line_mode(true);
+            path.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            path.set_max_width_chars(32);
+            path.set_tooltip_text(Some(&location));
             line.append(&path);
             let message = gtk::Label::new(Some(&diagnostic.message));
             message.set_halign(gtk::Align::Start);
             message.set_hexpand(true);
+            message.set_single_line_mode(true);
             message.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            message.set_tooltip_text(Some(&diagnostic.message));
             line.append(&message);
             row.set_child(Some(&line));
             self.diagnostics_list.append(&row);
@@ -2680,7 +2797,14 @@ fn install_pair_completion(
                 } else {
                     key.to_unicode()
                 };
-                if let Some(character @ ('$' | ' ' | '\u{8}')) = character {
+                // Ordinary spaces and Backspace must not copy the entire
+                // document just to find that there is no empty math pair.
+                let mut before = cursor;
+                let adjacent_math_pair =
+                    cursor.char() == '$' && before.backward_char() && before.char() == '$';
+                if let Some(character @ ('$' | ' ' | '\u{8}')) =
+                    character.filter(|character| *character == '$' || adjacent_math_pair)
+                {
                     let text = buffer_text(&buffer);
                     let byte = typsmthng_gtk::backend::editor::char_to_byte(
                         &text,
@@ -2717,7 +2841,8 @@ fn install_pair_completion(
                 }
                 let mut before = cursor;
                 let mut after = cursor;
-                if before.backward_char() && after.forward_char() {
+                if before.backward_char() && !cursor.is_end() {
+                    after.forward_char();
                     let pair = (before.char(), cursor.char());
                     if matches!(
                         pair,
@@ -2750,6 +2875,13 @@ fn install_pair_completion(
                 '{' => '}',
                 '\'' => '\'',
                 '"' => '"',
+                '$' if buffer.has_selection()
+                    && buffer
+                        .language()
+                        .is_some_and(|language| language.id() == "typst") =>
+                {
+                    '$'
+                }
                 _ => return glib::Propagation::Proceed,
             };
             let start_offset = buffer
@@ -2783,11 +2915,109 @@ fn install_pair_completion(
     editor.add_controller(keys);
 }
 
+fn install_file_tree_keys(
+    list: &gtk::ListBox,
+    files: &Rc<RefCell<Vec<FileRow>>>,
+    expanded: &Rc<RefCell<HashSet<String>>>,
+) {
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed({
+        let list = list.downgrade();
+        let files = files.clone();
+        let expanded = expanded.clone();
+        move |_, key, _, modifiers| {
+            if !modifiers.is_empty() {
+                return glib::Propagation::Proceed;
+            }
+            let Some(list) = list.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let Some(selected) = list.selected_row() else {
+                return glib::Propagation::Proceed;
+            };
+            let files = files.borrow();
+            let Some(file) = files.get(selected.index() as usize) else {
+                return glib::Propagation::Proceed;
+            };
+            let mut expanded = expanded.borrow_mut();
+            match key {
+                gtk::gdk::Key::Right if file.is_directory => {
+                    if !expanded.insert(file.path.clone()) {
+                        if let Some(child) = list.row_at_index(selected.index() + 1).filter(|row| {
+                            files.get(row.index() as usize).is_some_and(|child| {
+                                child.path.starts_with(&format!("{}/", file.path))
+                            })
+                        }) {
+                            list.select_row(Some(&child));
+                            child.grab_focus();
+                        }
+                    }
+                }
+                gtk::gdk::Key::Left => {
+                    if !file.is_directory || !expanded.remove(&file.path) {
+                        if let Some((parent, _)) = file.path.rsplit_once('/') {
+                            if let Some(index) = files.iter().position(|file| file.path == parent) {
+                                if let Some(row) = list.row_at_index(index as i32) {
+                                    list.select_row(Some(&row));
+                                    row.grab_focus();
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => return glib::Propagation::Proceed,
+            }
+            refresh_file_visibility(&list, &files, &expanded);
+            glib::Propagation::Stop
+        }
+    });
+    list.add_controller(keys);
+}
+
 fn refresh_file_visibility(list: &gtk::ListBox, files: &[FileRow], expanded: &HashSet<String>) {
+    let selected_path = list.selected_row().and_then(|row| {
+        files
+            .get(row.index() as usize)
+            .map(|file| file.path.clone())
+    });
     for (index, file) in files.iter().enumerate() {
         let visible = ancestor_directories(&file.path).all(|parent| expanded.contains(parent));
         if let Some(row) = list.row_at_index(index as i32) {
             row.set_visible(visible);
+            if file.is_directory {
+                if let Some(disclosure) = row
+                    .child()
+                    .and_then(|line| line.first_child())
+                    .and_then(|child| child.downcast::<gtk::Button>().ok())
+                {
+                    disclosure.set_label(if expanded.contains(&file.path) {
+                        "▾"
+                    } else {
+                        "▸"
+                    });
+                }
+            }
+        }
+    }
+    if let Some(path) = selected_path {
+        let selected_is_visible = files
+            .iter()
+            .position(|file| file.path == path)
+            .and_then(|index| list.row_at_index(index as i32))
+            .is_some_and(|row| row.is_visible());
+        if !selected_is_visible {
+            let parent = path.rmatch_indices('/').find_map(|(end, _)| {
+                files
+                    .iter()
+                    .position(|file| file.path == path[..end])
+                    .and_then(|index| list.row_at_index(index as i32))
+                    .filter(|row| row.is_visible())
+            });
+            if let Some(parent) = parent {
+                list.select_row(Some(&parent));
+                parent.grab_focus();
+            }
         }
     }
 }
@@ -4306,6 +4536,31 @@ mod tests {
             buffer.place_cursor(&buffer.end_iter());
             assert!(!press(gtk::gdk::Key::dollar), "{text}");
         }
+        for reverse in [false, true] {
+            buffer.begin_irreversible_action();
+            buffer.set_text("before é🙂 x^2 + y^2 after");
+            buffer.end_irreversible_action();
+            let (start, end) = (buffer.iter_at_offset(7), buffer.iter_at_offset(19));
+            if reverse {
+                buffer.select_range(&start, &end);
+            } else {
+                buffer.select_range(&end, &start);
+            }
+            assert!(press(gtk::gdk::Key::dollar));
+            assert_eq!(buffer_text(&buffer), "before $é🙂 x^2 + y^2$ after");
+            let (start, end) = buffer.selection_bounds().unwrap();
+            assert_eq!(buffer.text(&start, &end, true), "é🙂 x^2 + y^2");
+            buffer.undo();
+            assert_eq!(buffer_text(&buffer), "before é🙂 x^2 + y^2 after");
+            assert!(!buffer.can_undo(), "wrapping selection takes one undo step");
+        }
+        buffer.set_text("()");
+        buffer.place_cursor(&buffer.iter_at_offset(1));
+        assert!(
+            press(gtk::gdk::Key::BackSpace),
+            "ordinary pair deletion still works"
+        );
+        assert_eq!(buffer_text(&buffer), "");
         editor.set_editable(false);
         buffer.set_text("");
         assert!(!press(gtk::gdk::Key::dollar));
@@ -4318,6 +4573,43 @@ mod tests {
                 &gtk::gdk::ModifierType::CONTROL_MASK,
             ]
         ));
+        // Compare the removed full-document check with the actual current key
+        // handler. These measure key dispatch only, not compilation or drawing.
+        for lines in [160, 1600] {
+            let text = format!(
+                "{}ordinary typing",
+                "The allowed values are $l in bb(Z)$ with flux $Phi$ and energy $E_l(Phi)$.\n"
+                    .repeat(lines)
+            );
+            buffer.set_text(&text);
+            buffer.place_cursor(&buffer.end_iter());
+            let iterations = 200_u32;
+            let legacy = std::time::Instant::now();
+            for _ in 0..iterations {
+                let text = buffer_text(&buffer);
+                let cursor = typsmthng_gtk::backend::editor::char_to_byte(
+                    &text,
+                    buffer.cursor_position() as usize,
+                )
+                .unwrap();
+                std::hint::black_box(typsmthng_gtk::backend::editor::math_edit(
+                    &text, cursor, ' ',
+                ));
+            }
+            let legacy = legacy.elapsed();
+            let current = std::time::Instant::now();
+            for _ in 0..iterations {
+                assert!(!press(gtk::gdk::Key::space));
+                assert!(!press(gtk::gdk::Key::BackSpace));
+            }
+            let current = current.elapsed();
+            eprintln!("{lines} math-heavy lines: legacy full-buffer math check {:.2} us/key; current Space/Backspace handler {:.2} us/key", legacy.as_secs_f64() * 1_000_000.0 / f64::from(iterations), current.as_secs_f64() * 1_000_000.0 / f64::from(iterations * 2));
+            assert_eq!(
+                buffer_text(&buffer),
+                text,
+                "ordinary key checks do not change the buffer"
+            );
+        }
     }
 
     #[test]
@@ -5481,6 +5773,7 @@ mod tests {
         use super::*;
         use typsmthng_gtk::backend::{preview::PreviewCompiler, CompileOptions, Project};
         adw::init().unwrap();
+        super::super::install_css();
         let application = gtk::Application::builder()
             .application_id("dev.typsmthng.PreviewTest")
             .build();
@@ -5537,6 +5830,113 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
         };
+        let mut files = [
+            ("hw1", true),
+            ("hw1/main.typ", false),
+            ("1 - Spin Algebra and Quantum Mechanics.pdf", false),
+            ("main.typ", false),
+        ]
+        .map(|(path, is_directory)| FileRow {
+            path: path.into(),
+            name: path.rsplit('/').next().unwrap().into(),
+            depth: usize::from(path.contains('/')),
+            is_directory,
+            is_binary: path.ends_with(".pdf"),
+            is_main: path == "main.typ",
+        })
+        .to_vec();
+        workspace.set_project("Homework", &files);
+        workspace.show_text_file("hw1/main.typ", "draft");
+        drive(Duration::from_millis(150));
+        let folder = workspace.file_list.row_at_index(0).unwrap();
+        let child = workspace.file_list.row_at_index(1).unwrap();
+        let reference = workspace.file_list.row_at_index(2).unwrap();
+        assert!(folder.height() <= 36, "folder rows should stay compact");
+        assert!(reference.height() <= 36, "file rows should stay compact");
+        let reference_name = reference
+            .child()
+            .unwrap()
+            .first_child()
+            .unwrap()
+            .next_sibling()
+            .unwrap()
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        assert_eq!(
+            reference_name.ellipsize(),
+            gtk::pango::EllipsizeMode::Middle
+        );
+        assert_eq!(
+            reference_name.tooltip_text().as_deref(),
+            Some(files[2].path.as_str())
+        );
+        assert_eq!(workspace.file_list.selected_row(), Some(child.clone()));
+        workspace
+            .file_list
+            .emit_by_name::<()>("row-activated", &[&folder]);
+        assert!(
+            !child.is_visible(),
+            "folder row clicks should collapse children"
+        );
+        assert_eq!(
+            workspace.file_list.selected_row(),
+            Some(folder.clone()),
+            "collapsing the active file's folder should select its visible parent"
+        );
+        workspace.set_current_path("hw1/main.typ");
+        assert!(
+            child.is_visible(),
+            "opening a nested file should reveal its ancestors"
+        );
+        let keys = workspace
+            .file_list
+            .observe_controllers()
+            .into_iter()
+            .filter_map(Result::ok)
+            .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+            .unwrap();
+        let press = |key| {
+            keys.emit_by_name::<bool>(
+                "key-pressed",
+                &[&key, &0_u32, &gtk::gdk::ModifierType::empty()],
+            )
+        };
+        assert!(press(gtk::gdk::Key::Left));
+        assert_eq!(workspace.file_list.selected_row(), Some(folder.clone()));
+        assert!(folder.has_focus(), "Left should focus the parent folder");
+        assert!(press(gtk::gdk::Key::Left));
+        assert!(!child.is_visible());
+        assert!(press(gtk::gdk::Key::Right));
+        assert!(child.is_visible());
+        assert!(press(gtk::gdk::Key::Right));
+        assert_eq!(workspace.file_list.selected_row(), Some(child));
+        files.push(FileRow {
+            path: "new.typ".into(),
+            name: "new.typ".into(),
+            depth: 0,
+            is_directory: false,
+            is_binary: false,
+            is_main: false,
+        });
+        workspace.set_project("Homework", &files);
+        assert_eq!(
+            workspace.file_list.selected_row().unwrap().index(),
+            1,
+            "refreshing project files must retain the active file selection"
+        );
+        let folder = workspace.file_list.row_at_index(0).unwrap();
+        workspace
+            .file_list
+            .emit_by_name::<()>("row-activated", &[&folder]);
+        files.pop();
+        workspace.set_project("Homework", &files);
+        assert_eq!(workspace.file_list.selected_row().unwrap().index(), 0);
+        assert!(
+            !workspace.file_list.row_at_index(1).unwrap().is_visible(),
+            "refreshing files must preserve a deliberately collapsed active folder"
+        );
         let dir = tempfile::tempdir().unwrap();
         let source = format!(
             "#set page(width: 240pt, height: 180pt, margin: 20pt)\n{}$ integral_0^1 x dif x $",
@@ -5733,6 +6133,89 @@ mod tests {
         workspace.set_diagnostics(&errors);
         drive(Duration::from_millis(950));
         assert!(workspace.diagnostics_revealer.reveals_child());
+        let many_errors = (0..60)
+            .map(|index| DiagnosticRow {
+                path: format!("{}homework.typ", "long-directory-name/".repeat(30)),
+                message: format!(
+                    "Unclosed delimiter {index}: {}\nadditional compiler context",
+                    "context".repeat(200)
+                ),
+                ..errors[0].clone()
+            })
+            .collect::<Vec<_>>();
+        let error_output = format!(
+            "Compile error: unfinished expression\n{}",
+            "more errors\n".repeat(60)
+        );
+        workspace.set_compile_status(&error_output);
+        workspace.set_diagnostics(&many_errors);
+        drive(Duration::from_millis(350));
+        assert_eq!(
+            workspace.compile_label.text(),
+            "Compile error: unfinished expression"
+        );
+        assert_eq!(
+            workspace.compile_label.tooltip_text().as_deref(),
+            Some(error_output.as_str())
+        );
+        assert!(
+            workspace.compile_label.parent().unwrap().height() <= 40,
+            "raw multiline error output must never expand the status bar"
+        );
+        assert!(
+            workspace.diagnostics_revealer.height() <= 210,
+            "many diagnostics must scroll in a bounded panel"
+        );
+        assert_eq!(
+            workspace.diagnostics_toggle.label().as_deref(),
+            Some("60 errors")
+        );
+        if let Some(artifacts) = std::env::var_os("TYPSMTHNG_BAR_ARTIFACT_DIR") {
+            let artifacts = PathBuf::from(artifacts);
+            std::fs::create_dir_all(&artifacts).unwrap();
+            let snapshot = gtk::Snapshot::new();
+            gtk::WidgetPaintable::new(Some(&window)).snapshot(
+                &snapshot,
+                f64::from(window.width()),
+                f64::from(window.height()),
+            );
+            window
+                .renderer()
+                .unwrap()
+                .render_texture(snapshot.to_node().unwrap(), None)
+                .save_to_png(artifacts.join("files-and-diagnostics.png"))
+                .unwrap();
+        }
+        let close = workspace
+            .diagnostics_revealer
+            .child()
+            .unwrap()
+            .first_child()
+            .unwrap()
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        close.emit_clicked();
+        workspace.set_diagnostics(&many_errors);
+        drive(Duration::from_millis(350));
+        assert!(
+            !workspace.diagnostics_revealer.reveals_child(),
+            "recompilation must respect a dismissed diagnostics panel"
+        );
+        workspace.diagnostics_toggle.emit_clicked();
+        assert!(
+            workspace.diagnostics_revealer.reveals_child(),
+            "the compact status button must reopen diagnostics"
+        );
+        workspace.set_diagnostics(&[]);
+        assert!(!workspace.diagnostics_toggle.is_visible());
+        workspace.set_diagnostics(&errors);
+        drive(Duration::from_millis(50));
+        assert!(
+            workspace.diagnostics_revealer.reveals_child(),
+            "new errors after a successful compile should be visible"
+        );
         workspace.cancel_pending_compile();
         if let Some(artifacts) = std::env::var_os("TYPSMTHNG_FIT_TEXT_ARTIFACT_DIR") {
             let artifacts = PathBuf::from(artifacts);

@@ -53,6 +53,9 @@ submission. Keep it in repository secrets, rather than the source repository.
 Once configured, the verified GitHub release workflow submits the same immutable
 source commit to COPR after publication and waits for the COPR build result. If
 `COPR_PROJECT` is unset, GitHub releases proceed without a COPR submission.
+COPR submission also runs when the release reuses an existing verified candidate
+and skips the package build. Failed, cancelled, and verification-only release runs
+do not submit packages.
 
 You can also run the **Fedora COPR** workflow manually with a source tag or commit.
 Leave `submit` off to download a source RPM artifact for review, or enable it to

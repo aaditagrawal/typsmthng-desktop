@@ -92,6 +92,10 @@ jobs:
           done
       - name: Math delimiter keyboard editing and undo
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::workspace::tests::native_math_pair_input_and_undo -- --exact --ignored --test-threads=1
+      - name: Minimap label reuse and edited heading navigation
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::minimap::tests::native_minimap_reuses_labels_and_tracks_edited_heading_locations -- --exact --ignored --test-threads=1
+      - name: Live typing with autosave and preview
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::app::tests::native_live_typing_bursts_keep_event_loop_responsive -- --exact --ignored --test-threads=1
       - name: Equation background preferences and ligature shaping
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::equation_style::tests::native_equation_background_settings_preserve_token_styles -- --exact --ignored --test-threads=1
       - name: Typst syntax highlighting grammar and schemes
@@ -100,6 +104,10 @@ jobs:
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
       - name: Semantic completion keyboard and stale response checks
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_completion_inserts_snippet_once_and_discards_stale_reply -- --exact --ignored --test-threads=1
+      - name: Automatic file path completion
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_automatic_path_completion_uses_project_files_and_replaces_strings -- --exact --ignored --test-threads=1
+      - name: Clipboard images, undo, and stale paste cancellation
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_clipboard_images_preserve_text_undo_and_cancel_stale_pastes -- --exact --ignored --test-threads=1
       - name: Explicit formatting undo, cursor, scroll and stale responses
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_formatting_preserves_selection_scroll_and_single_undo -- --exact --ignored --test-threads=1
       - name: Clippy

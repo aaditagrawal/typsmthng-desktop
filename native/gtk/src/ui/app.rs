@@ -961,6 +961,11 @@ impl AppController {
                     })
                     .collect::<Vec<_>>();
                 let name = project.name();
+                self.workspace
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .set_project_root(project.root());
                 self.compile_generation
                     .set(self.compile_generation.get().wrapping_add(1));
                 self.compiled_main.replace(None);
@@ -1213,13 +1218,6 @@ impl AppController {
         let Some(project) = self.project.borrow().clone() else {
             return;
         };
-        let main = match project.resolve_main_file(self.current_file.borrow().as_deref()) {
-            Ok(main) => main,
-            Err(error) => {
-                workspace.set_compile_status(&format!("Compile error: {error}"));
-                return;
-            }
-        };
         // Preview reads the editor buffer without writing it to disk. Saving
         // has its own timer and may be disabled or delayed independently.
         let current_source = self
@@ -1240,50 +1238,58 @@ impl AppController {
             workspace.set_compile_status("Compilation queued…");
             return;
         }
-        let mut options = match self.compile_options() {
-            Ok(options) => options,
-            Err(error) => {
-                workspace.set_compile_status(&format!("Compile error: {error}"));
-                return;
-            }
-        };
         self.compile_in_flight.set(true);
         workspace.set_compiling();
         let cancellation = Arc::new(AtomicBool::new(false));
         self.compile_cancellation
             .replace(Some(cancellation.clone()));
-        options.cancellation = Some(cancellation);
-        if self.settings.borrow().google_fonts {
-            if let Some(path) = GoogleFontCache::default().cached_directory() {
-                options.font_paths.push(path);
-            }
+        let settings = self.settings.borrow().clone();
+        if settings.google_fonts {
             self.prepare_project_fonts(project.clone(), source.clone());
         }
         let revision = workspace.revision();
         let compiler = self.preview_compiler.clone();
-        let notes_layout = self.settings.borrow().presentation_notes_layout.clone();
+        let locale_paper = super::locale_page_size();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn({
-            let main = main.clone();
+            let current = self.current_file.borrow().clone();
             move || {
                 let mut source_map = None;
-                let result = compiler
-                    .compile_with_source(&project, &main, current_source, &options)
-                    .and_then(|output| {
-                        let output = CompileOutput {
-                            artifact: output.artifact.map(|preview| {
-                                source_map = Some(preview.source_map);
-                                preview.pages
-                            }),
-                            diagnostics: output.diagnostics,
-                            stdout: output.stdout,
-                            stderr: output.stderr,
-                            elapsed: output.elapsed,
-                        };
-                        let output = prepare_preview(output, &notes_layout)?;
-                        Ok((output, Vec::new()))
-                    })
-                    .map_err(|error| error.to_string());
+                let mut main = current.clone().unwrap_or_else(|| "main.typ".into());
+                // Main-file discovery walks the project, and page settings
+                // read source/metadata. Both belong with compilation rather
+                // than blocking GTK on every debounced edit.
+                let result = (|| {
+                    main = project.resolve_main_file(current.as_deref())?;
+                    let mut options = compile_options_for_project(
+                        Some(&project),
+                        Some(&main),
+                        &settings,
+                        locale_paper,
+                    )?;
+                    options.cancellation = Some(cancellation);
+                    if settings.google_fonts {
+                        if let Some(path) = GoogleFontCache::default().cached_directory() {
+                            options.font_paths.push(path);
+                        }
+                    }
+                    compiler.compile_with_source(&project, &main, current_source, &options)
+                })()
+                .and_then(|output| {
+                    let output = CompileOutput {
+                        artifact: output.artifact.map(|preview| {
+                            source_map = Some(preview.source_map);
+                            preview.pages
+                        }),
+                        diagnostics: output.diagnostics,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                        elapsed: output.elapsed,
+                    };
+                    let output = prepare_preview(output, &settings.presentation_notes_layout)?;
+                    Ok((output, Vec::new()))
+                })
+                .map_err(|error| error.to_string());
                 let _ = sender.send(CompileFinished {
                     generation,
                     revision,
@@ -1331,42 +1337,18 @@ impl AppController {
     }
 
     fn compile_options(&self) -> Result<CompileOptions, BackendError> {
-        let settings = self.settings.borrow();
-        let owns_layout = self.project.borrow().as_ref().is_some_and(|project| {
-            project_layout_locked(project)
-                || project
-                    .resolve_main_file(self.current_file.borrow().as_deref())
-                    .ok()
-                    .and_then(|main| project.read_file(main).ok())
-                    .and_then(|file| match file.content {
-                        FileContent::Text(source) => Some(source),
-                        FileContent::Binary(_) => None,
-                    })
-                    .is_some_and(|source| {
-                        source
-                            .lines()
-                            .any(|line| line.trim_start().starts_with("#set page("))
-                    })
+        let project = self.project.borrow();
+        let main = project.as_ref().and_then(|project| {
+            project
+                .resolve_main_file(self.current_file.borrow().as_deref())
+                .ok()
         });
-        let page_preamble = if owns_layout {
-            None
-        } else {
-            let locale = super::locale_page_size();
-            match effective_page_size(&settings.page_size, locale) {
-                // Typst already defaults to A4; an implicit A4 needs no preamble.
-                "a4" if settings.page_size == "auto" => None,
-                "presentation-16-9" => {
-                    Some("#set page(width: 13.333in, height: 7.5in)".to_string())
-                }
-                paper => Some(format!("#set page(paper: \"{paper}\")")),
-            }
-        };
-        CompileOptions {
-            ignore_system_fonts: !settings.system_fonts,
-            page_preamble,
-            ..CompileOptions::default()
-        }
-        .resolved()
+        compile_options_for_project(
+            project.as_ref(),
+            main.as_deref(),
+            &self.settings.borrow(),
+            super::locale_page_size(),
+        )
     }
 
     fn apply_compile_result(&self, finished: CompileFinished) {
@@ -2448,6 +2430,7 @@ impl AppController {
             })
             .collect::<Vec<_>>();
         if let Some(workspace) = self.workspace.borrow().as_ref() {
+            workspace.set_project_root(project.root());
             workspace.set_project(&project.name(), &rows);
         }
         if let Some(store) = &self.state_store {
@@ -3864,6 +3847,43 @@ fn write_template_metadata(
         .map(|_| ())
 }
 
+fn compile_options_for_project(
+    project: Option<&Project>,
+    main: Option<&str>,
+    settings: &UiSettings,
+    locale_paper: &str,
+) -> Result<CompileOptions, BackendError> {
+    let owns_layout = project.is_some_and(|project| {
+        project_layout_locked(project)
+            || main
+                .and_then(|main| project.read_file(main).ok())
+                .and_then(|file| match file.content {
+                    FileContent::Text(source) => Some(source),
+                    FileContent::Binary(_) => None,
+                })
+                .is_some_and(|source| {
+                    source
+                        .lines()
+                        .any(|line| line.trim_start().starts_with("#set page("))
+                })
+    });
+    let page_preamble = if owns_layout {
+        None
+    } else {
+        match effective_page_size(&settings.page_size, locale_paper) {
+            "a4" if settings.page_size == "auto" => None,
+            "presentation-16-9" => Some("#set page(width: 13.333in, height: 7.5in)".to_string()),
+            paper => Some(format!("#set page(paper: \"{paper}\")")),
+        }
+    };
+    CompileOptions {
+        ignore_system_fonts: !settings.system_fonts,
+        page_preamble,
+        ..CompileOptions::default()
+    }
+    .resolved()
+}
+
 fn project_layout_locked(project: &Project) -> bool {
     project
         .read_file(".typsmthng/template.json")
@@ -3888,6 +3908,148 @@ mod tests {
     use typsmthng_gtk::backend::Project;
 
     use super::{project_layout_locked, write_template_metadata};
+
+    #[test]
+    fn background_compile_options_preserve_project_layout_without_gtk() {
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "background options").unwrap();
+        let settings = super::UiSettings {
+            page_size: "us-letter".into(),
+            ..Default::default()
+        };
+        let check = |project: Project, settings: super::UiSettings| {
+            std::thread::spawn(move || {
+                let main = project.resolve_main_file(None).unwrap();
+                super::compile_options_for_project(Some(&project), Some(&main), &settings, "a4")
+                    .unwrap()
+                    .page_preamble
+            })
+            .join()
+            .unwrap()
+        };
+        assert_eq!(
+            check(project.clone(), settings.clone()).as_deref(),
+            Some("#set page(paper: \"us-letter\")")
+        );
+        project
+            .write_text_atomic("main.typ", "#set page(width: 100pt, height: 200pt)\nBody")
+            .unwrap();
+        assert_eq!(check(project.clone(), settings.clone()), None);
+        project.write_text_atomic("main.typ", "Body").unwrap();
+        write_template_metadata(
+            &project,
+            "universe",
+            "@preview/demo:1.0.0",
+            "main.typ",
+            true,
+        )
+        .unwrap();
+        assert_eq!(check(project, settings), None);
+    }
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    fn native_live_typing_bursts_keep_event_loop_responsive() {
+        use adw::prelude::*;
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+        use std::time::{Duration, Instant};
+        adw::init().unwrap();
+        let app: gtk::Application = adw::Application::builder()
+            .application_id("dev.typsmthng.TypingTest")
+            .build()
+            .upcast();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let directory = tempdir().unwrap();
+        let project = Project::create(directory.path(), "typing homework").unwrap();
+        let mut source = include_str!("../../tests/fixtures/homework/main.typ").to_string();
+        while source.lines().count() < 160 {
+            source.push_str("// Homework notes, equations, and references.\n");
+        }
+        project.write_text_atomic("main.typ", &source).unwrap();
+        let controller = super::AppController::build(
+            &app,
+            super::LaunchOptions {
+                smoke_test: true,
+                startup_path: Some(project.root().to_path_buf()),
+                ..Default::default()
+            },
+        );
+        let pump_until = |ready: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !ready() && Instant::now() < deadline {
+                glib::MainContext::default().iteration(false);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(ready(), "typing regression timed out");
+        };
+        pump_until(&|| !controller.compile_in_flight.get());
+        let workspace = controller.workspace.borrow().as_ref().unwrap().clone();
+        let buffer = workspace.editor.buffer();
+        buffer.place_cursor(&buffer.end_iter());
+        let edits = Rc::new(Cell::new(0));
+        let durations = Rc::new(RefCell::new(Vec::new()));
+        let mut tick = 0;
+        glib::timeout_add_local(Duration::from_millis(25), {
+            let edits = edits.clone();
+            let durations = durations.clone();
+            move || {
+                let phase = tick % 26;
+                tick += 1;
+                // Four bursts, with idle pauses that also exercise timed
+                // saves and live compilation while the input loop is active.
+                if phase >= 16 {
+                    return glib::ControlFlow::Continue;
+                }
+                let began = Instant::now();
+                buffer.insert_at_cursor("café λ ");
+                durations.borrow_mut().push(began.elapsed());
+                edits.set(edits.get() + 1);
+                if edits.get() == 64 {
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            }
+        });
+        let gaps = Rc::new(RefCell::new(Vec::new()));
+        let heartbeat = glib::timeout_add_local(Duration::from_millis(5), {
+            let gaps = gaps.clone();
+            let mut previous = Instant::now();
+            move || {
+                gaps.borrow_mut().push(previous.elapsed());
+                previous = Instant::now();
+                glib::ControlFlow::Continue
+            }
+        });
+        pump_until(&|| edits.get() == 64);
+        workspace.request_compile();
+        pump_until(&|| {
+            !controller.compile_in_flight.get()
+                && controller.pending_compile_source.borrow().is_none()
+                && !workspace.is_dirty()
+        });
+        heartbeat.remove();
+        let mut durations = durations.borrow_mut();
+        durations.sort_unstable();
+        let mut gaps = gaps.borrow_mut();
+        gaps.sort_unstable();
+        assert!(!gaps.is_empty(), "GTK must deliver heartbeats while typing");
+        assert_eq!(
+            workspace.source_text(),
+            format!("{source}{}", "café λ ".repeat(64))
+        );
+        assert_eq!(
+            fs::read_to_string(project.root().join("main.typ")).unwrap(),
+            workspace.source_text()
+        );
+        println!(
+            "160-line math homework, 64 edits at 25ms with 250ms pauses: insert median={:?} max={:?}; 5ms heartbeat median={:?} max={:?}",
+            durations[durations.len() / 2], durations.last().unwrap(),
+            gaps[gaps.len() / 2], gaps.last().unwrap()
+        );
+        controller.window.close();
+    }
 
     #[test]
     #[ignore = "requires a display; run under Xvfb"]

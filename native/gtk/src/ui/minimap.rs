@@ -103,6 +103,11 @@ pub struct HeadingMinimap {
     root: gtk::Overlay,
 }
 
+struct HeadingLabel {
+    button: gtk::Button,
+    line: Rc<Cell<i32>>,
+}
+
 impl HeadingMinimap {
     pub fn new(editor: &sourceview5::View) -> Self {
         let map = sourceview5::Map::new();
@@ -113,7 +118,7 @@ impl HeadingMinimap {
         root.set_child(Some(&map));
         // Each label is its own overlay child: an overlay only receives input
         // inside its allocation, so the rest of the map stays draggable.
-        let labels = Rc::new(RefCell::new(Vec::<gtk::Button>::new()));
+        let labels = Rc::new(RefCell::new(Vec::<HeadingLabel>::new()));
 
         let headings = Rc::new(RefCell::new(Vec::<OutlineHeading>::new()));
         let buffer = editor.buffer();
@@ -216,13 +221,10 @@ impl HeadingMinimap {
 fn relabel(
     map: &sourceview5::Map,
     root: &gtk::Overlay,
-    labels: &mut Vec<gtk::Button>,
+    labels: &mut Vec<HeadingLabel>,
     headings: &[OutlineHeading],
     editor: &sourceview5::View,
 ) {
-    for label in labels.drain(..) {
-        root.remove_overlay(&label);
-    }
     let buffer = map.buffer();
     let positions = headings
         .iter()
@@ -242,45 +244,173 @@ fn relabel(
             (y, heading.level)
         })
         .collect::<Vec<_>>();
-    for index in place_labels(&positions, LABEL_HEIGHT, f64::from(map.height())) {
+    let visible = place_labels(&positions, LABEL_HEIGHT, f64::from(map.height()));
+    while labels.len() > visible.len() {
+        root.remove_overlay(&labels.pop().unwrap().button);
+    }
+    for (slot, index) in visible.into_iter().enumerate() {
         let heading = &headings[index];
-        let button = gtk::Button::with_label(&heading.title);
-        button.add_css_class("flat");
-        button.add_css_class("minimap-heading");
-        button.add_css_class(if heading.level == 1 {
-            "minimap-heading-1"
+        if slot == labels.len() {
+            let button = gtk::Button::new();
+            button.add_css_class("flat");
+            button.add_css_class("minimap-heading");
+            button.set_halign(gtk::Align::Fill);
+            button.set_valign(gtk::Align::Start);
+            button.set_margin_end(4);
+            button.set_size_request(-1, LABEL_HEIGHT as i32);
+            let line = Rc::new(Cell::new(heading.line as i32));
+            button.connect_clicked({
+                let line = line.clone();
+                let editor = editor.downgrade();
+                move |_| {
+                    let Some(editor) = editor.upgrade() else {
+                        return;
+                    };
+                    let buffer = editor.buffer();
+                    if let Some(mut target) = buffer.iter_at_line(line.get()) {
+                        buffer.place_cursor(&target);
+                        editor.scroll_to_iter(&mut target, 0.0, true, 0.0, 0.1);
+                        editor.grab_focus();
+                    }
+                }
+            });
+            root.add_overlay(&button);
+            labels.push(HeadingLabel { button, line });
+        }
+        let label = &labels[slot];
+        let button = &label.button;
+        label.line.set(heading.line as i32);
+        // The map's adjustment changes while GTK lays out each edit. Keep
+        // existing labels, and avoid triggering another layout for unchanged
+        // text/geometry on those notifications.
+        if button.label().as_deref() != Some(heading.title.as_str()) {
+            button.set_label(&heading.title);
+            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                label.set_xalign(0.0);
+            }
+        }
+        let (class, other) = if heading.level == 1 {
+            ("minimap-heading-1", "minimap-heading-2")
         } else {
-            "minimap-heading-2"
-        });
-        if let Some(label) = button.child().and_downcast::<gtk::Label>() {
-            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            label.set_xalign(0.0);
+            ("minimap-heading-2", "minimap-heading-1")
+        };
+        if !button.has_css_class(class) {
+            button.remove_css_class(other);
+            button.add_css_class(class);
         }
         let indent = if heading.level == 1 { 4 } else { 12 };
-        button.set_halign(gtk::Align::Fill);
-        button.set_valign(gtk::Align::Start);
-        button.set_margin_start(indent);
-        button.set_margin_end(4);
-        button.set_margin_top(positions[index].0.max(0.0).round() as i32);
-        button.set_size_request(-1, LABEL_HEIGHT as i32);
-        let line = heading.line as i32;
-        let editor = editor.clone();
-        button.connect_clicked(move |_| {
-            let buffer = editor.buffer();
-            if let Some(mut target) = buffer.iter_at_line(line) {
-                buffer.place_cursor(&target);
-                editor.scroll_to_iter(&mut target, 0.0, true, 0.0, 0.1);
-                editor.grab_focus();
-            }
-        });
-        root.add_overlay(&button);
-        labels.push(button);
+        if button.margin_start() != indent {
+            button.set_margin_start(indent);
+        }
+        let top = positions[index].0.max(0.0).round() as i32;
+        if button.margin_top() != top {
+            button.set_margin_top(top);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    fn native_minimap_reuses_labels_and_tracks_edited_heading_locations() {
+        gtk::init().unwrap();
+        sourceview5::init();
+        let buffer = sourceview5::Buffer::new(None);
+        let source = (0..160)
+            .map(|line| {
+                if line % 20 == 0 {
+                    format!("= Problem {line}\n")
+                } else {
+                    "Some text and $x^2$ in the document.\n".into()
+                }
+            })
+            .collect::<String>();
+        buffer.set_text(&source);
+        let editor = sourceview5::View::with_buffer(&buffer);
+        let map = sourceview5::Map::new();
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&map));
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let scroll = gtk::ScrolledWindow::new();
+        scroll.set_hexpand(true);
+        scroll.set_child(Some(&editor));
+        // Match the workspace: ScrolledWindow supplies the adjustment before
+        // GtkSourceMap connects its scroll handlers to the editor.
+        map.set_view(&editor);
+        row.append(&scroll);
+        row.append(&overlay);
+        let window = gtk::Window::builder()
+            .default_width(900)
+            .default_height(700)
+            .child(&row)
+            .build();
+        window.present();
+        let deadline = std::time::Instant::now() + Duration::from_millis(200);
+        while std::time::Instant::now() < deadline {
+            while glib::MainContext::default().pending() {
+                glib::MainContext::default().iteration(false);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut headings = outline_headings(&source);
+        let mut labels = Vec::new();
+        relabel(&map, &overlay, &mut labels, &headings, &editor);
+        assert!(labels.len() >= 2);
+        let original = labels
+            .iter()
+            .map(|label| label.button.clone())
+            .collect::<Vec<_>>();
+        for _ in 0..20 {
+            relabel(&map, &overlay, &mut labels, &headings, &editor);
+        }
+        assert!(labels
+            .iter()
+            .zip(&original)
+            .all(|(label, button)| label.button == *button));
+        headings[0].title = "Updated heading".into();
+        headings[0].line = 1;
+        headings[0].level = 2;
+        relabel(&map, &overlay, &mut labels, &headings, &editor);
+        assert_eq!(labels[0].button, original[0]);
+        assert_eq!(labels[0].button.label().as_deref(), Some("Updated heading"));
+        assert!(labels[0].button.has_css_class("minimap-heading-2"));
+        labels[0].button.emit_clicked();
+        assert_eq!(buffer.iter_at_mark(&buffer.get_insert()).line(), 1);
+
+        // Compare the old remove/recreate workload with the same label update
+        // after reuse. These timings cover only minimap widget work, not Typst
+        // compilation, a physical key event, or a rendered frame.
+        const REPEATS: u32 = 200;
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            for label in labels.drain(..) {
+                overlay.remove_overlay(&label.button);
+            }
+            relabel(&map, &overlay, &mut labels, &headings, &editor);
+        }
+        let recreate = started.elapsed();
+        let started = std::time::Instant::now();
+        for _ in 0..REPEATS {
+            relabel(&map, &overlay, &mut labels, &headings, &editor);
+        }
+        let reuse = started.elapsed();
+        println!(
+            "minimap {REPEATS} relabels, {} visible headings: recreate={recreate:?}, reuse={reuse:?}",
+            labels.len()
+        );
+        headings.truncate(1);
+        relabel(&map, &overlay, &mut labels, &headings, &editor);
+        assert_eq!(labels.len(), 1);
+        headings.clear();
+        relabel(&map, &overlay, &mut labels, &headings, &editor);
+        assert!(labels.is_empty());
+        map.set_property("view", None::<sourceview5::View>);
+        window.destroy();
+    }
 
     #[test]
     fn outline_keeps_top_levels_and_skips_raw_and_comments() {

@@ -1,6 +1,8 @@
 //! Editor-only requests and UTF-8/snippet handling shared with the native UI.
-use super::{BackendError, Result};
+use super::{BackendError, Project, Result};
 use std::ops::Range;
+use std::path::Path;
+use std::sync::OnceLock;
 use typst::syntax::{LinkedNode, Side, Source};
 
 #[derive(Debug, Clone)]
@@ -138,6 +140,80 @@ pub fn byte_to_char(text: &str, offset: usize) -> Option<usize> {
     text.get(..offset).map(|prefix| prefix.chars().count())
 }
 
+/// A cheap trigger only. Typst's semantic completer checks the actual syntax and
+/// supplies safe, project-relative paths on its background worker.
+pub fn may_complete_path(line_before_cursor: &str) -> bool {
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(
+                r#"(?:^|[^\p{L}\p{N}_-])(?:(?:image|read|csv|json|yaml|xml|bibliography|cbor|plugin|pdf\.attach)\s*\(\s*(?:source\s*:\s*)?|(?:import|include)\s+)(?:"[^"\n]*)?$"#,
+            )
+            .expect("valid path-completion trigger")
+        })
+        .is_match(line_before_cursor)
+}
+
+/// Save a clipboard PNG beside the edited source in an images directory. Each
+/// attempted name uses create_new, so neither another paste nor an existing
+/// asset can be overwritten. Project access rejects escaping paths/symlinks.
+pub fn save_pasted_image(project: &Project, source: &str, png: &[u8]) -> Result<String> {
+    let (source, _) = super::paths::safe_existing_path(project.root(), source)?;
+    if !source.ends_with(".typ") || !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(BackendError::Process(
+            "Clipboard image is not a PNG for a Typst source".into(),
+        ));
+    }
+    let parent = Path::new(&source).parent().unwrap_or_else(|| Path::new(""));
+    for index in 1..10_000 {
+        let name = if index == 1 {
+            "pasted-image.png".to_owned()
+        } else {
+            format!("pasted-image-{index}.png")
+        };
+        let relative = format!("images/{name}");
+        match project.create_binary_file(parent.join(&relative), png) {
+            Ok(_) => return Ok(relative),
+            Err(BackendError::AlreadyExists(_)) => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(BackendError::Process(
+        "Too many pasted images in this folder".into(),
+    ))
+}
+
+/// Markup needs a hash to enter code; an existing function argument does not.
+pub fn pasted_image_source(text: &str, cursor: usize, relative: &str) -> String {
+    let source = Source::detached(text);
+    let root = LinkedNode::new(source.root());
+    let leaf = root.leaf_at(cursor, Side::Before);
+    if leaf.as_ref().is_some_and(|leaf| {
+        leaf.kind() == typst::syntax::SyntaxKind::Str
+            && cursor > leaf.offset()
+            && cursor < leaf.range().end
+    }) {
+        return relative.to_owned();
+    }
+    let insert = format!("image(\"{relative}\")");
+    // Completion's mode_after intentionally stays in code immediately after a
+    // #function() so users can add a field access. A new pasted expression at
+    // that same position is markup, so inspect the proposed insertion itself.
+    let mut candidate = text.to_owned();
+    if !candidate.is_char_boundary(cursor) {
+        return format!("#{insert}");
+    }
+    candidate.insert_str(cursor, &insert);
+    let candidate = Source::detached(candidate);
+    let code = LinkedNode::new(candidate.root())
+        .leaf_at(cursor + 1, Side::After)
+        .is_some_and(|leaf| {
+            leaf.kind() == typst::syntax::SyntaxKind::Ident
+                && leaf.mode_after() == Some(typst::syntax::SyntaxMode::Code)
+        });
+    format!("{}{insert}", if code { "" } else { "#" })
+}
+
 /// One atomic math-delimiter edit, in UTF-8 byte offsets.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MathEdit {
@@ -258,6 +334,86 @@ pub fn flatten_snippet(snippet: &str) -> (String, Option<Range<usize>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_completion_triggers_only_in_path_arguments() {
+        for text in [
+            "#image(",
+            "#image(\"",
+            "#image(\"images/plot",
+            "#image(source: \"images/",
+            "#figure(image(\"../",
+            "#image(\n  \"",
+            "#import \"chapters/",
+            "#include ",
+            "#include \"../",
+            "#bibliography(\"refs",
+        ] {
+            assert!(may_complete_path(text), "{text}");
+        }
+        for text in [
+            "ordinary prose",
+            "#text(\"hello",
+            "#fooimage(\"",
+            "#image(\"done.png\", width: ",
+            "#import \"done.typ\": ",
+        ] {
+            assert!(!may_complete_path(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn clipboard_assets_preserve_existing_files_and_use_source_relative_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = Project::create(directory.path(), "Clipboard").unwrap();
+        project
+            .create_text_file("chapters/draft.typ", "Draft")
+            .unwrap();
+        let png = hex::decode("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c636000020000050001a5f645400000000049454e44ae426082").unwrap();
+        let first = save_pasted_image(&project, "chapters/draft.typ", &png).unwrap();
+        let second = save_pasted_image(&project, "chapters/draft.typ", &png).unwrap();
+        assert_eq!(first, "images/pasted-image.png");
+        assert_eq!(second, "images/pasted-image-2.png");
+        for relative in [&first, &second] {
+            assert_eq!(
+                std::fs::read(project.root().join("chapters").join(relative)).unwrap(),
+                png
+            );
+        }
+        assert_eq!(
+            project.read_file("chapters/draft.typ").unwrap().content,
+            super::super::FileContent::Text("Draft".into())
+        );
+        assert!(save_pasted_image(&project, "../outside.typ", &png).is_err());
+        assert!(save_pasted_image(&project, "main.typ", b"not an image").is_err());
+        assert_eq!(
+            pasted_image_source("hello ", 6, &first),
+            "#image(\"images/pasted-image.png\")"
+        );
+        assert_eq!(
+            pasted_image_source("#figure()", 8, &first),
+            "image(\"images/pasted-image.png\")"
+        );
+        assert_eq!(
+            pasted_image_source("#image()", 8, &first),
+            "#image(\"images/pasted-image.png\")"
+        );
+        assert_eq!(
+            pasted_image_source("#image(\"\")", 8, &first),
+            "images/pasted-image.png"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clipboard_assets_reject_an_images_directory_outside_the_project() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = Project::create(directory.path(), "Clipboard").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.root().join("images")).unwrap();
+        assert!(save_pasted_image(&project, "main.typ", b"\x89PNG\r\n\x1a\n").is_err());
+        assert_eq!(outside.path().read_dir().unwrap().count(), 0);
+    }
     #[test]
     fn math_delimiters_respect_typst_context() {
         for text in ["", "é🙂 ", "#text[inside ", "$x$ after "] {
