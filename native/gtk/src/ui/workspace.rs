@@ -835,6 +835,21 @@ impl WorkspaceView {
                 )
             })
         };
+        let preview_center_requested = Rc::new(Cell::new(false));
+        let preview_centering = Rc::new(Cell::new(false));
+        let preview_horizontal_value = Rc::new(Cell::new(preview_scroll.hadjustment().value()));
+        preview_scroll.hadjustment().connect_value_changed({
+            let requested = preview_center_requested.clone();
+            let centering = preview_centering.clone();
+            let previous = preview_horizontal_value.clone();
+            move |adjustment| {
+                if previous.replace(adjustment.value()) != adjustment.value() && !centering.get() {
+                    // A user pan cancels the whole layout request, including
+                    // scrollbar geometry changes that arrive on later frames.
+                    requested.set(false);
+                }
+            }
+        });
         let resize_preview: Rc<dyn Fn()> = {
             let lens = magnifier.lens.downgrade();
             let previous_geometry = Cell::new(None);
@@ -844,6 +859,7 @@ impl WorkspaceView {
             let zoom_menu = zoom_menu.clone();
             let displayed_scale = displayed_scale.clone();
             let content_column = content_column.clone();
+            let center_requested = preview_center_requested.clone();
             Rc::new(move || {
                 let viewport_width = preview_scroll.width();
                 if previous_geometry.replace(Some((zoom.get(), viewport_width)))
@@ -864,6 +880,7 @@ impl WorkspaceView {
                     if picture.widget.width_request() != size.width
                         || picture.widget.height_request() != size.height
                     {
+                        center_requested.set(zoom.get() == PreviewZoom::FitText);
                         picture.widget.set_size_request(size.width, size.height);
                     }
                     picture.widget.set_content_fit(gtk::ContentFit::Contain);
@@ -881,7 +898,13 @@ impl WorkspaceView {
         preview_scroll.hadjustment().connect_changed({
             let zoom = zoom.clone();
             let previous = Cell::new(None);
+            let previous_value = preview_horizontal_value.clone();
+            let requested = preview_center_requested.clone();
+            let centering = preview_centering.clone();
             move |adjustment| {
+                // configure() clamps the value before emitting changed, then
+                // value-changed. Layout clamping is not a manual pan.
+                previous_value.set(adjustment.value());
                 let geometry = (
                     adjustment.lower(),
                     adjustment.upper(),
@@ -889,21 +912,21 @@ impl WorkspaceView {
                 );
                 if previous.replace(Some(geometry)) != Some(geometry)
                     && zoom.get() == PreviewZoom::FitText
+                    && requested.get()
                 {
                     // GTK configures adjustments while allocating the viewport.
                     // Defer until that allocation ends so its child transform
                     // receives the new offset on the next frame.
-                    let value = adjustment.value();
                     let adjustment = adjustment.downgrade();
                     let zoom = zoom.clone();
+                    let requested = requested.clone();
+                    let centering = centering.clone();
                     glib::idle_add_local_once(move || {
-                        if zoom.get() == PreviewZoom::FitText {
+                        if zoom.get() == PreviewZoom::FitText && requested.get() {
                             if let Some(adjustment) = adjustment.upgrade() {
-                                // A pan after layout takes priority over an
-                                // automatic centering request still in the queue.
-                                if adjustment.value() == value {
-                                    center_preview_horizontally(&adjustment);
-                                }
+                                centering.set(true);
+                                center_preview_horizontally(&adjustment);
+                                centering.set(false);
                             }
                         }
                     });
@@ -923,6 +946,8 @@ impl WorkspaceView {
             let preview_pages = preview_pages.clone();
             let badge = preview_badge.clone();
             let displayed_scale = displayed_scale.clone();
+            let center_requested = preview_center_requested.clone();
+            let centering = preview_centering.clone();
             Rc::new(move |next, pointer| {
                 if let Some(lens) = lens.upgrade() {
                     super::controls::clear_lens(&lens);
@@ -949,6 +974,7 @@ impl WorkspaceView {
                     }
                 };
                 zoom.set(next);
+                center_requested.set(next == PreviewZoom::FitText);
                 resize();
                 badge.show(&format_scale(displayed_scale()));
                 if schedule {
@@ -956,15 +982,31 @@ impl WorkspaceView {
                     let pictures = pictures.clone();
                     let preview_scroll = preview_scroll.clone();
                     let zoom = zoom.clone();
+                    let center_requested = center_requested.clone();
+                    let centering = centering.clone();
                     let allocated_once = Cell::new(false);
                     preview_pages.add_tick_callback(move |_, _| {
                         if !allocated_once.replace(true) {
                             return glib::ControlFlow::Continue;
                         }
                         if let Some(anchor) = pending_anchor.borrow_mut().take() {
-                            restore_preview_anchor(&pictures.borrow(), &preview_scroll, &anchor);
                             if zoom.get() == PreviewZoom::FitText {
-                                center_preview_horizontally(&preview_scroll.hadjustment());
+                                if center_requested.get() {
+                                    centering.set(true);
+                                    restore_preview_anchor(
+                                        &pictures.borrow(),
+                                        &preview_scroll,
+                                        &anchor,
+                                    );
+                                    center_preview_horizontally(&preview_scroll.hadjustment());
+                                    centering.set(false);
+                                }
+                            } else {
+                                restore_preview_anchor(
+                                    &pictures.borrow(),
+                                    &preview_scroll,
+                                    &anchor,
+                                );
                             }
                         }
                         glib::ControlFlow::Break
@@ -4978,6 +5020,17 @@ mod tests {
         assert!(image.paintable().is_none());
         workspace.magnifier.toggle.set_active(true);
         workspace.content_column.set(Some((40.0, 160.0)));
+        let preview_controls = workspace.compiled_headings.parent().unwrap();
+        let zoom_menu =
+            std::iter::successors(preview_controls.first_child(), |child| child.next_sibling())
+                .filter_map(|child| child.downcast::<gtk::MenuButton>().ok())
+                .find(|button| button.has_css_class("zoom-level"))
+                .unwrap();
+        let choices = zoom_menu.popover().unwrap().child().unwrap();
+        let fit_text = std::iter::successors(choices.first_child(), |child| child.next_sibling())
+            .filter_map(|child| child.downcast::<gtk::Button>().ok())
+            .find(|button| button.label().as_deref() == Some("Fit text width"))
+            .unwrap();
         for zoom in [
             PreviewZoom::Scale(1.5),
             PreviewZoom::FitText,
@@ -5031,6 +5084,11 @@ mod tests {
                     horizontal.value(), horizontal.upper(), horizontal.page_size(), picture.width_request()
                 );
                 horizontal.set_value(0.0);
+                // GTK can finish configuring scrollbar bounds after the user
+                // has already panned. Those late changes must not re-arm centering.
+                let upper = horizontal.upper();
+                horizontal.set_upper(upper + 1.0);
+                horizontal.set_upper(upper);
                 drive(30);
                 assert_eq!(
                     horizontal.value(),
@@ -5045,8 +5103,27 @@ mod tests {
                 horizontal.set_value(end);
                 drive(30);
                 assert!((horizontal.value() - end).abs() < 1.0);
-                center_preview_horizontally(&horizontal);
-                drive(30);
+                // Choosing Fit text again must re-center even though the page
+                // dimensions have not changed since the manual pan.
+                fit_text.emit_clicked();
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    drive(10);
+                    let bounds = picture.compute_bounds(&workspace.preview_scroll).unwrap();
+                    if ((horizontal.value() - end / 2.0).abs() < 1.0
+                        && (bounds.x() + bounds.width() / 2.0
+                            - horizontal.page_size() as f32 / 2.0)
+                            .abs()
+                            < 1.0)
+                        || Instant::now() >= deadline
+                    {
+                        break;
+                    }
+                }
+                assert!(
+                    (horizontal.value() - end / 2.0).abs() < 1.0,
+                    "an explicit Fit text selection must re-center the page"
+                );
             } else {
                 drive(150);
             }
