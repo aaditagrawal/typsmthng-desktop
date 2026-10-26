@@ -893,12 +893,17 @@ impl WorkspaceView {
                     // GTK configures adjustments while allocating the viewport.
                     // Defer until that allocation ends so its child transform
                     // receives the new offset on the next frame.
+                    let value = adjustment.value();
                     let adjustment = adjustment.downgrade();
                     let zoom = zoom.clone();
                     glib::idle_add_local_once(move || {
                         if zoom.get() == PreviewZoom::FitText {
                             if let Some(adjustment) = adjustment.upgrade() {
-                                center_preview_horizontally(&adjustment);
+                                // A pan after layout takes priority over an
+                                // automatic centering request still in the queue.
+                                if adjustment.value() == value {
+                                    center_preview_horizontally(&adjustment);
+                                }
                             }
                         }
                     });
