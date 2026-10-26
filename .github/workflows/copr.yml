@@ -29,7 +29,8 @@ concurrency:
 jobs:
   srpm:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The previous Fedora build took three hours, excluding its queue time.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7.0.1
         with:
