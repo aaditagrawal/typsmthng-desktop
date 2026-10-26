@@ -285,6 +285,21 @@ impl StateStore {
         self.update_metadata(|metadata| metadata.selected_home_workspace_id = id)
     }
 
+    pub fn mark_release_notes_seen(&self, version: &str) -> Result<AppMetadata> {
+        let version = semver::Version::parse(version).map_err(|error| {
+            BackendError::Process(format!("Invalid application version: {error}"))
+        })?;
+        self.update_metadata(|metadata| {
+            let previous = metadata
+                .last_seen_version
+                .as_deref()
+                .and_then(|previous| semver::Version::parse(previous).ok());
+            if previous.is_none_or(|previous| version > previous) {
+                metadata.last_seen_version = Some(version.to_string());
+            }
+        })
+    }
+
     fn update_metadata(&self, update: impl FnOnce(&mut AppMetadata)) -> Result<AppMetadata> {
         let mut metadata = self.load_metadata()?;
         update(&mut metadata);
@@ -392,6 +407,33 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn changelog_acknowledgment_survives_restart_and_preserves_metadata() {
+        let directory = tempdir().unwrap();
+        let store = StateStore::new(directory.path());
+        fs::write(
+            store.metadata_path(),
+            r#"{"version":1,"windowState":{"width":1000,"height":700},"recentProjects":[]}"#,
+        )
+        .unwrap();
+        assert!(store.load_metadata().unwrap().last_seen_version.is_none());
+        store.mark_release_notes_seen("0.1.11").unwrap();
+        let reopened = StateStore::new(directory.path());
+        let metadata = reopened.load_metadata().unwrap();
+        assert_eq!(metadata.last_seen_version.as_deref(), Some("0.1.11"));
+        assert_eq!(metadata.window_state.width, 1000);
+        reopened.mark_release_notes_seen("0.1.10").unwrap();
+        assert_eq!(
+            reopened
+                .load_metadata()
+                .unwrap()
+                .last_seen_version
+                .as_deref(),
+            Some("0.1.11")
+        );
+        assert!(reopened.mark_release_notes_seen("not a version").is_err());
+    }
 
     #[test]
     fn settings_round_trip_and_preserve_unknown_fields() {

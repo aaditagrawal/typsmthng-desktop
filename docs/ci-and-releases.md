@@ -33,7 +33,13 @@ flowchart LR
     Verify --> Publish[Publish GitHub release]
 ```
 
-Prepare the final package version and `releases/vVERSION.md` before merging.
+Prepare the final package version and an entry in `changelog/VERSION/` before merging.
+Every PR and main push must add a new entry for that version. CI rejects reused
+entries and changes targeting a version already released before the base commit.
+The Rust build bundles these versioned entries alongside historical
+`releases/v*.md` notes. Release publication renders the same entries into its
+GitHub release body. See [changelog entries](../changelog/README.md) for the add
+and preview commands. The preflight fails when the selected source lacks notes.
 Tag the same commit after its candidate succeeds. A release waits up to 45 minutes
 for an active matching candidate. Missing, failed, expired, or incompatible
 candidates trigger the same reusable package build as a fallback.

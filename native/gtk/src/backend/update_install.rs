@@ -116,16 +116,24 @@ pub fn handoff(job: &InstallJob) -> io::Result<()> {
     serde_json::to_writer(&mut input, job)?;
     input.write_all(b"\n")?;
     input.flush()?;
-    let mut reply = String::new();
-    io::BufReader::new(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| failure("No updater output"))?,
-    )
-    .read_line(&mut reply)?;
-    if reply.trim() != "ready" {
+    let output = child
+        .stdout
+        .take()
+        .ok_or_else(|| failure("No updater output"))?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reply = String::new();
+        let result = io::BufReader::new(output)
+            .read_line(&mut reply)
+            .map(|_| reply);
+        let _ = sender.send(result);
+    });
+    let ready = receiver
+        .recv_timeout(std::time::Duration::from_secs(15))
+        .is_ok_and(|reply| reply.is_ok_and(|reply| reply.trim() == "ready"));
+    if !ready {
         let _ = child.kill();
+        let _ = child.wait();
         return Err(failure(format!(
             "Updater did not start. See {}",
             directory.join("install.log").display()

@@ -1,0 +1,4 @@
+- Check GitHub for updates from the header on the home screen or in the editor.
+- Review release notes before downloading. See download progress and retry failed checks or downloads. Downloads are verified before installation.
+- Save your work and restart to install verified updates. Package-managed installations open the system software updater.
+- Read the installed version's changelog on its first launch, including missed releases when upgrading across versions. The notes work offline and can be reopened from What's new.

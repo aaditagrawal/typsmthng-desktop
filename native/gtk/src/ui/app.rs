@@ -8,6 +8,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use super::updates::{UpdateDialog, UpdatePhase};
 use adw::prelude::*;
 use typsmthng_gtk::backend::app_fonts;
 use typsmthng_gtk::backend::{
@@ -100,7 +101,11 @@ struct AppController {
     window: gtk::ApplicationWindow,
     stack: gtk::Stack,
     update_button: gtk::Button,
-    update_busy: Cell<bool>,
+    update_phase: Cell<UpdatePhase>,
+    update_progress: Cell<(u64, Option<u64>)>,
+    update_error: RefCell<Option<String>>,
+    update_dialog: RefCell<Option<UpdateDialog>>,
+    changelog_dialog: RefCell<Option<adw::Dialog>>,
     available_update: RefCell<Option<UpdateStatus>>,
     downloaded_update: RefCell<Option<(tempfile::TempDir, PathBuf, String)>>,
     state_store: Option<StateStore>,
@@ -218,10 +223,17 @@ impl AppController {
             .sync_create()
             .build();
         header.set_title_widget(Some(&title));
-        let update_button = gtk::Button::with_label("Update available");
-        update_button.add_css_class("suggested-action");
-        update_button.set_visible(false);
+        let update_button = gtk::Button::with_label("Check for updates");
+        update_button.set_tooltip_text(Some("Check GitHub for a newer stable release"));
         header.pack_end(&update_button);
+        let menu = gio::Menu::new();
+        menu.append(Some("Check for updates"), Some("app.check-updates"));
+        menu.append(Some("What's new"), Some("app.whats-new"));
+        let app_menu = gtk::MenuButton::new();
+        app_menu.set_icon_name("open-menu-symbolic");
+        app_menu.set_tooltip_text(Some("Application menu"));
+        app_menu.set_menu_model(Some(&menu));
+        header.pack_end(&app_menu);
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&stack));
         native_window.set_content(Some(&toolbar));
@@ -232,7 +244,11 @@ impl AppController {
             window,
             stack,
             update_button,
-            update_busy: Cell::new(false),
+            update_phase: Cell::new(UpdatePhase::Idle),
+            update_progress: Cell::new((0, None)),
+            update_error: RefCell::new(None),
+            update_dialog: RefCell::new(None),
+            changelog_dialog: RefCell::new(None),
             available_update: RefCell::new(None),
             downloaded_update: RefCell::new(None),
             state_store,
@@ -310,6 +326,14 @@ impl AppController {
         controller.apply_theme(settings.theme);
         controller.apply_ui_font(&settings);
         if !smoke {
+            if startup_errors.is_empty() {
+                let weak = Rc::downgrade(&controller);
+                glib::idle_add_local_once(move || {
+                    if let Some(this) = weak.upgrade() {
+                        this.show_unseen_changelog();
+                    }
+                });
+            }
             controller.restore_downloaded_fonts(&settings);
         }
         adw::StyleManager::default().connect_dark_notify({
@@ -462,6 +486,8 @@ impl AppController {
             match std::env::var("TYPSMTHNG_SMOKE_VIEW").as_deref() {
                 Ok("settings") => controller.show_settings(),
                 Ok("guide") => controller.show_guide(),
+                Ok("updates") => controller.present_update_dialog(),
+                Ok("changelog") => controller.show_changelog(),
                 Ok("font-picker") => controller.show_font_picker_smoke(),
                 Ok("export") => controller.choose_document_export(),
                 Ok("templates") => controller.create_from_template(),
@@ -759,6 +785,8 @@ impl AppController {
             }
         });
         self.add_action("settings", &["<Primary>comma"], Self::show_settings);
+        self.add_action("check-updates", &[], Self::check_update);
+        self.add_action("whats-new", &[], Self::show_changelog);
         self.add_action("sidebar", &["<Primary>backslash"], |this| {
             if let Some(workspace) = this.workspace.borrow().as_ref() {
                 workspace.toggle_sidebar();
@@ -812,6 +840,9 @@ impl AppController {
             let weak = Rc::downgrade(self);
             move |_| {
                 if let Some(this) = weak.upgrade() {
+                    if this.update_phase.get() == UpdatePhase::Installing {
+                        return glib::Propagation::Stop;
+                    }
                     if this
                         .workspace
                         .borrow()
@@ -2185,19 +2216,242 @@ impl AppController {
         }
     }
 
+    fn show_changelog(&self) {
+        let notes =
+            typsmthng_gtk::backend::release_notes::unseen_releases(None, env!("CARGO_PKG_VERSION"));
+        self.present_changelog(&notes);
+    }
+
+    fn show_unseen_changelog(&self) {
+        let Some(store) = &self.state_store else {
+            return;
+        };
+        let Ok(metadata) = store.load_metadata() else {
+            return;
+        };
+        let notes = typsmthng_gtk::backend::release_notes::unseen_releases(
+            metadata.last_seen_version.as_deref(),
+            env!("CARGO_PKG_VERSION"),
+        );
+        if !notes.is_empty() {
+            self.present_changelog(&notes);
+        }
+    }
+
+    fn present_changelog(&self, notes: &[typsmthng_gtk::backend::release_notes::ReleaseNotes]) {
+        let existing = self.changelog_dialog.borrow().clone();
+        if let Some(dialog) = existing {
+            dialog.present(Some(&self.window));
+            return;
+        }
+        if notes.is_empty() {
+            return;
+        }
+        let dialog = super::updates::changelog_dialog(notes);
+        let weak = self.weak();
+        dialog.connect_closed(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.changelog_dialog.replace(None);
+                if let Some(store) = &this.state_store {
+                    if let Err(error) = store.mark_release_notes_seen(env!("CARGO_PKG_VERSION")) {
+                        this.show_error("Could not remember the changelog", &error.to_string());
+                    }
+                }
+            }
+        });
+        self.changelog_dialog.replace(Some(dialog.clone()));
+        dialog.present(Some(&self.window));
+    }
+
+    fn present_update_dialog(&self) {
+        let existing = self
+            .update_dialog
+            .borrow()
+            .as_ref()
+            .map(|view| view.dialog.clone());
+        if let Some(dialog) = existing {
+            dialog.present(Some(&self.window));
+            return;
+        }
+        let weak = self.weak();
+        let view = UpdateDialog::new(move || {
+            if let Some(this) = weak.upgrade() {
+                this.activate_update_primary();
+            }
+        });
+        let weak = self.weak();
+        view.dialog.connect_closed(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.update_dialog.replace(None);
+            }
+        });
+        let dialog = view.dialog.clone();
+        self.update_dialog.replace(Some(view));
+        self.refresh_update_controls();
+        dialog.present(Some(&self.window));
+    }
+
+    fn refresh_update_controls(&self) {
+        let phase = self.update_phase.get();
+        let (received, total) = self.update_progress.get();
+        let header = if phase == UpdatePhase::Downloading {
+            total.filter(|total| *total > 0).map_or_else(
+                || format!("Downloading… {:.1} MB", received as f64 / 1_048_576.0),
+                |total| {
+                    format!(
+                        "Downloading… {}%",
+                        (received.saturating_mul(100) / total).min(100)
+                    )
+                },
+            )
+        } else {
+            phase.header_label().to_string()
+        };
+        self.update_button.set_label(&header);
+        self.update_button.set_visible(true);
+        self.update_button
+            .set_sensitive(phase != UpdatePhase::Installing);
+        if matches!(
+            phase,
+            UpdatePhase::Available
+                | UpdatePhase::Ready
+                | UpdatePhase::DownloadFailed
+                | UpdatePhase::InstallFailed
+        ) {
+            self.update_button.add_css_class("suggested-action");
+        } else {
+            self.update_button.remove_css_class("suggested-action");
+        }
+        let updates = self.available_update.borrow();
+        let available = updates.as_ref().and_then(|status| match status {
+            UpdateStatus::Available {
+                latest,
+                release_notes,
+                release_url,
+                asset,
+                ..
+            } => Some((latest, release_notes, release_url, asset)),
+            _ => None,
+        });
+        self.update_button
+            .set_tooltip_text(Some(&available.map_or_else(
+                || {
+                    format!(
+                        "Installed version {}. Check GitHub for updates.",
+                        env!("CARGO_PKG_VERSION")
+                    )
+                },
+                |(latest, _, _, _)| {
+                    format!(
+                        "Version {latest} is available. Review the changes and update typsmthng."
+                    )
+                },
+            )));
+        let dialogs = self.update_dialog.borrow();
+        let Some(view) = dialogs.as_ref() else {
+            return;
+        };
+        let current = env!("CARGO_PKG_VERSION");
+        let summary = match phase {
+            UpdatePhase::Checking => format!("Checking GitHub for a newer stable release. Installed version: {current}."),
+            UpdatePhase::Current => format!("You're up to date. No newer stable release is available. Installed version: {current}."),
+            UpdatePhase::Ready | UpdatePhase::InstallFailed => "The update is verified and ready. Restart to save your work and install it.".into(),
+            UpdatePhase::Installing => "Preparing the updater. typsmthng will restart when it is ready.".into(),
+            UpdatePhase::Downloading => if total.is_some_and(|total| total > 0 && received >= total) { "Verifying the downloaded update…".into() } else { "Downloading the update. You can keep working while it downloads.".into() },
+            UpdatePhase::Available | UpdatePhase::DownloadFailed => available.map_or_else(|| "No compatible installer is available.".into(), |(latest, _, _, asset)| {
+                let mut message = format!("Version {latest} is available. You're using {current}.");
+                if asset.is_none() {
+                    message.push_str(if managed_install() { "\n\nThis installation updates through your system software manager. GitHub may publish a version before it reaches your package repository." } else { "\n\nNo compatible installer was published. View the release for installation options." });
+                    if managed_install() { message.push_str(&format!("\n\n{}", package_update_hint())); }
+                }
+                message
+            }),
+            UpdatePhase::CheckFailed => "Could not check GitHub for updates. Check your connection and try again.".into(),
+            UpdatePhase::Idle => format!("Installed version: {current}. Check GitHub for a newer stable release."),
+        };
+        let message = self
+            .update_error
+            .borrow()
+            .as_ref()
+            .map_or_else(|| summary.clone(), |error| format!("{summary}\n\n{error}"));
+        view.status.set_text(&message);
+        let was_sensitive = view.primary.is_sensitive();
+        view.primary.set_sensitive(!phase.busy());
+        if !was_sensitive
+            && !phase.busy()
+            && view.dialog.is_mapped()
+            && view
+                .dialog
+                .focus()
+                .is_none_or(|focus| focus == view.primary.clone().upcast::<gtk::Widget>())
+        {
+            view.primary.grab_focus();
+        }
+        view.primary.set_label(match phase {
+            UpdatePhase::Available | UpdatePhase::DownloadFailed => {
+                if available.is_some_and(|(_, _, _, asset)| asset.is_some()) {
+                    if phase == UpdatePhase::DownloadFailed {
+                        "Retry download"
+                    } else {
+                        "Download update"
+                    }
+                } else if managed_install() {
+                    "Open Software Updates"
+                } else {
+                    "View release"
+                }
+            }
+            UpdatePhase::Ready | UpdatePhase::InstallFailed => "Restart to update",
+            UpdatePhase::Downloading => "Downloading…",
+            UpdatePhase::Installing => "Preparing restart…",
+            UpdatePhase::Checking => "Checking…",
+            UpdatePhase::CheckFailed => "Retry check",
+            _ => "Check again",
+        });
+        view.progress.set_visible(matches!(
+            phase,
+            UpdatePhase::Downloading | UpdatePhase::Installing
+        ));
+        if phase == UpdatePhase::Downloading {
+            if let Some(total) = total.filter(|total| *total > 0) {
+                view.progress
+                    .set_fraction((received as f64 / total as f64).min(1.0));
+            } else {
+                view.progress.pulse();
+            }
+            view.progress.set_text(Some(&header));
+        } else if phase == UpdatePhase::Installing {
+            view.progress.pulse();
+        }
+        if let Some((_, notes, url, _)) = available {
+            view.set_notes(if notes.trim().is_empty() {
+                "Release notes have not been provided for this version."
+            } else {
+                notes
+            });
+            view.release_link.set_uri(&safe_release_url(url));
+        } else {
+            view.set_notes("");
+        }
+    }
+
     fn check_update(&self) {
         self.check_update_with_feedback(true);
     }
 
     fn check_update_with_feedback(&self, announce_current: bool) {
-        if self.downloaded_update.borrow().is_some() || self.update_busy.replace(true) {
+        if self.downloaded_update.borrow().is_some() || self.update_phase.get().busy() {
+            if announce_current {
+                self.present_update_dialog();
+            }
             return;
         }
+        self.update_phase.set(UpdatePhase::Checking);
+        self.update_error.replace(None);
+        self.refresh_update_controls();
         if announce_current {
-            self.update_button.set_label("Checking for updates…");
-            self.update_button.set_visible(true);
+            self.present_update_dialog();
         }
-        self.update_button.set_sensitive(false);
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let _ = sender.send(UpdateClient::default().check(env!("CARGO_PKG_VERSION")));
@@ -2212,51 +2466,49 @@ impl AppController {
                 }
             };
             if let Some(this) = weak.upgrade() {
-                this.update_busy.set(false);
-                this.update_button.set_sensitive(true);
                 match result {
                     Ok(status @ UpdateStatus::Available { .. }) => {
-                        if let UpdateStatus::Available { latest, asset, .. } = &status {
-                            this.update_button.set_tooltip_text(Some(&if asset.is_some() {
-                                format!("Download typsmthng {latest}")
-                            } else { format!("typsmthng {latest} is available. Update through your package manager.") }));
-                        }
                         this.available_update.replace(Some(status));
-                        this.update_button.set_label("Update available");
-                        this.update_button.set_visible(true);
+                        this.update_phase.set(UpdatePhase::Available);
                     }
-                    Ok(UpdateStatus::UpToDate { current }) => {
+                    Ok(UpdateStatus::UpToDate { .. }) => {
                         this.available_update.replace(None);
-                        this.update_button.set_visible(false);
-                        if announce_current {
-                            let dialog = adw::AlertDialog::builder()
-                                .heading(format!("typsmthng {current} is current"))
-                                .body("No newer stable release is available.")
-                                .build();
-                            dialog.add_response("close", "Close");
-                            dialog.present(Some(&this.window));
-                        }
+                        this.update_phase.set(UpdatePhase::Current);
                     }
                     Err(error) => {
-                        this.update_button.set_label("Update available");
-                        this.update_button
-                            .set_visible(this.available_update.borrow().is_some());
-                        if announce_current {
-                            this.show_error("Update check failed", &error.to_string());
-                        }
+                        this.update_error.replace(Some(error.to_string()));
+                        this.update_phase.set(UpdatePhase::CheckFailed);
                     }
                 }
+                this.refresh_update_controls();
             }
             glib::ControlFlow::Break
         });
     }
 
     fn activate_update(&self) {
-        if self.update_busy.get() {
-            return;
+        match self.update_phase.get() {
+            UpdatePhase::Idle | UpdatePhase::Current | UpdatePhase::CheckFailed => {
+                self.check_update()
+            }
+            UpdatePhase::Ready | UpdatePhase::InstallFailed => self.install_downloaded_update(),
+            _ => self.present_update_dialog(),
         }
-        if self.downloaded_update.borrow().is_some() {
-            self.install_downloaded_update();
+    }
+
+    fn activate_update_primary(&self) {
+        match self.update_phase.get() {
+            UpdatePhase::Available | UpdatePhase::DownloadFailed => self.begin_update_download(),
+            UpdatePhase::Ready | UpdatePhase::InstallFailed => self.install_downloaded_update(),
+            UpdatePhase::Idle | UpdatePhase::Current | UpdatePhase::CheckFailed => {
+                self.check_update()
+            }
+            _ => {}
+        }
+    }
+
+    fn begin_update_download(&self) {
+        if self.update_phase.get().busy() {
             return;
         }
         let Some(UpdateStatus::Available {
@@ -2266,30 +2518,35 @@ impl AppController {
             return;
         };
         let Some(asset) = asset else {
-            let dialog = adw::AlertDialog::builder().heading("Update available")
-                .body("This installation is managed by your package manager. Use it to update typsmthng, or view the release for installation instructions.").build();
-            dialog.add_response("close", "Later");
-            dialog.add_response("notes", "View release");
-            dialog.connect_response(None, move |_, response| {
-                if response == "notes" {
-                    let _ = gio::AppInfo::launch_default_for_uri(
-                        &release_url,
-                        None::<&gio::AppLaunchContext>,
-                    );
-                }
-            });
-            dialog.present(Some(&self.window));
+            let result = if managed_install() {
+                open_system_updates()
+            } else {
+                gio::AppInfo::launch_default_for_uri(
+                    &safe_release_url(&release_url),
+                    None::<&gio::AppLaunchContext>,
+                )
+                .map_err(|error| error.to_string())
+            };
+            if let Err(error) = result {
+                self.update_error.replace(Some(error));
+                self.refresh_update_controls();
+            }
             return;
         };
         if let Err(error) = typsmthng_gtk::backend::update_install::installed_target() {
-            self.show_error("Cannot update this installation", &error.to_string());
+            self.update_error.replace(Some(error.to_string()));
+            self.update_phase.set(UpdatePhase::DownloadFailed);
+            self.refresh_update_controls();
             return;
         }
-        self.update_busy.set(true);
-        self.update_button.set_label("Downloading…");
-        self.update_button.set_sensitive(false);
+        self.update_phase.set(UpdatePhase::Downloading);
+        self.update_error.replace(None);
+        self.update_progress.set((0, None));
+        self.refresh_update_controls();
         let progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let total = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_progress = progress.clone();
+        let worker_total = total.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| -> Result<_, String> {
@@ -2305,8 +2562,9 @@ impl AppController {
                     .download_with_progress(
                         &asset,
                         directory.path().join(&asset.name),
-                        |bytes, _| {
+                        |bytes, total| {
                             worker_progress.store(bytes, Ordering::Relaxed);
+                            worker_total.store(total.unwrap_or(0), Ordering::Relaxed);
                         },
                     )
                     .map_err(|error| error.to_string())?;
@@ -2324,36 +2582,40 @@ impl AppController {
             let result = match receiver.try_recv() {
                 Ok(result) => result,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    let mib = progress.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
-                    this.update_button
-                        .set_label(&format!("Downloading… {mib:.1} MB"));
+                    this.update_progress.set((
+                        progress.load(Ordering::Relaxed),
+                        match total.load(Ordering::Relaxed) {
+                            0 => None,
+                            total => Some(total),
+                        },
+                    ));
+                    this.refresh_update_controls();
                     return glib::ControlFlow::Continue;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     Err("Update worker stopped".into())
                 }
             };
-            this.update_busy.set(false);
-            this.update_button.set_sensitive(true);
             match result {
                 Ok(downloaded) => {
                     this.downloaded_update.replace(Some(downloaded));
-                    this.update_button.set_label("Restart to update");
-                    this.update_button.set_tooltip_text(Some(
-                        "Save your work, install the downloaded update, and restart typsmthng",
-                    ));
+                    this.update_phase.set(UpdatePhase::Ready);
                 }
                 Err(error) => {
-                    this.update_button.set_label("Retry update");
-                    this.show_error("Update download failed", &error);
+                    this.update_phase.set(UpdatePhase::DownloadFailed);
+                    this.update_error.replace(Some(error));
                 }
             }
+            this.refresh_update_controls();
             glib::ControlFlow::Break
         });
     }
 
     fn install_downloaded_update(&self) {
         use typsmthng_gtk::backend::update_install::{handoff, installed_target, InstallJob};
+        if self.update_phase.get().busy() {
+            return;
+        }
         if self
             .workspace
             .borrow()
@@ -2373,7 +2635,9 @@ impl AppController {
         let target = match installed_target() {
             Ok(target) => target,
             Err(error) => {
-                self.show_error("Update failed", &error.to_string());
+                self.update_error.replace(Some(error.to_string()));
+                self.update_phase.set(UpdatePhase::InstallFailed);
+                self.refresh_update_controls();
                 return;
             }
         };
@@ -2386,14 +2650,7 @@ impl AppController {
             target,
             sha256: sha256.clone(),
         };
-        if let Err(error) = handoff(&job) {
-            self.show_error("Could not start updater", &error.to_string());
-            return;
-        }
         drop(downloaded);
-        if let Some((directory, _, _)) = self.downloaded_update.borrow_mut().take() {
-            let _ = directory.keep(); // The helper owns these files after the app exits.
-        }
         if let Some(store) = &self.state_store {
             let _ = store.save_window_state(BackendWindowState {
                 width: self.window.width(),
@@ -2401,7 +2658,47 @@ impl AppController {
                 maximized: self.window.is_maximized(),
             });
         }
-        self.application.quit();
+        self.update_phase.set(UpdatePhase::Installing);
+        self.update_error.replace(None);
+        self.refresh_update_controls();
+        // Saving happens before this short handshake. Keep edits disabled until
+        // it succeeds or fails so no new unsaved input can be lost on restart.
+        self.window.set_sensitive(false);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(handoff(&job));
+        });
+        let weak = self.weak();
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let result = match receiver.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    this.refresh_update_controls();
+                    return glib::ControlFlow::Continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(std::io::Error::other("Updater worker stopped"))
+                }
+            };
+            this.window.set_sensitive(true);
+            match result {
+                Ok(()) => {
+                    if let Some((directory, _, _)) = this.downloaded_update.borrow_mut().take() {
+                        let _ = directory.keep();
+                    }
+                    this.application.quit();
+                }
+                Err(error) => {
+                    this.update_phase.set(UpdatePhase::InstallFailed);
+                    this.update_error.replace(Some(error.to_string()));
+                    this.refresh_update_controls();
+                }
+            }
+            glib::ControlFlow::Break
+        });
     }
 
     fn refresh_project_files(&self) {
@@ -3581,6 +3878,76 @@ impl AppController {
     }
 }
 
+fn managed_install() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("APPIMAGE").is_none_or(|value| value.is_empty())
+}
+
+fn package_update_hint() -> &'static str {
+    if std::env::var_os("FLATPAK_ID").is_some() || Path::new("/.flatpak-info").is_file() {
+        "You can also run: flatpak update dev.typsmthng.Typsmthng"
+    } else if glib::find_program_in_path("dnf").is_some() {
+        "You can also run: sudo dnf upgrade --refresh typsmthng"
+    } else if glib::find_program_in_path("apt").is_some() {
+        "You can also run: sudo apt update && sudo apt install --only-upgrade typsmthng"
+    } else {
+        "Use your package manager to update typsmthng."
+    }
+}
+
+fn open_system_updates() -> Result<(), String> {
+    if std::env::var_os("FLATPAK_ID").is_none() && !Path::new("/.flatpak-info").is_file() {
+        let gnome = ("gnome-software", &["--mode=updates"][..]);
+        let kde = ("plasma-discover", &["--mode", "update"][..]);
+        let programs = if std::env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("kde")
+        {
+            [kde, gnome]
+        } else {
+            [gnome, kde]
+        };
+        for (name, args) in programs {
+            if let Some(program) = glib::find_program_in_path(name) {
+                let arguments = std::iter::once(program.as_os_str())
+                    .chain(args.iter().map(std::ffi::OsStr::new))
+                    .collect::<Vec<_>>();
+                gio::Subprocess::newv(&arguments, gio::SubprocessFlags::NONE)
+                    .map_err(|error| error.to_string())?;
+                return Ok(());
+            }
+        }
+    }
+    gio::AppInfo::launch_default_for_uri(
+        "appstream://dev.typsmthng.Typsmthng",
+        None::<&gio::AppLaunchContext>,
+    )
+    .map_err(|error| {
+        format!(
+            "Could not open the system software manager: {error}. {}",
+            package_update_hint()
+        )
+    })
+}
+
+fn safe_release_url(candidate: &str) -> String {
+    url::Url::parse(candidate)
+        .ok()
+        .filter(|url| {
+            url.scheme() == "https"
+                && url.host_str() == Some("github.com")
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url
+                    .path()
+                    .starts_with("/aaditagrawal/typsmthng-desktop/releases/")
+        })
+        .map_or_else(
+            || "https://github.com/aaditagrawal/typsmthng-desktop/releases".into(),
+            |url| url.to_string(),
+        )
+}
+
 fn find_css_widget(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     if widget.has_css_class(class) {
         return Some(widget.clone());
@@ -4162,6 +4529,7 @@ mod tests {
         use sha2::Digest;
         let checksum = hex::encode(sha2::Sha256::digest(body));
         let metadata = serde_json::json!({"tag_name": "v99.0.0", "html_url": base,
+        "body": "- Review release notes before updating.\n- Render <b>literal text</b> safely.",
         "assets": [
             {"name": "typsmthng-linux-x64.AppImage", "browser_download_url": format!("{base}/app")},
             {"name": "SHA256SUMS", "browser_download_url": format!("{base}/sums")}
@@ -4169,7 +4537,7 @@ mod tests {
         .to_string();
         let server = std::thread::spawn(move || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-            while server_requests.load(Ordering::SeqCst) < 3 && std::time::Instant::now() < deadline
+            while server_requests.load(Ordering::SeqCst) < 5 && std::time::Instant::now() < deadline
             {
                 let Ok((mut socket, _)) = listener.accept() else {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -4182,7 +4550,11 @@ mod tests {
                 let count = socket.read(&mut request).unwrap();
                 let request = String::from_utf8_lossy(&request[..count]);
                 let response = if request.starts_with("GET /app ") {
-                    body.to_vec()
+                    if server_requests.load(Ordering::SeqCst) == 1 {
+                        b"corrupt first download".to_vec()
+                    } else {
+                        body.to_vec()
+                    }
                 } else if request.starts_with("GET /sums ") {
                     format!("{checksum}  typsmthng-linux-x64.AppImage\n").into_bytes()
                 } else {
@@ -4225,7 +4597,7 @@ mod tests {
             }
             assert!(condition(), "update UI timed out");
         };
-        pump_until(&|| !controller.update_busy.get());
+        pump_until(&|| !controller.update_phase.get().busy());
         assert_eq!(
             requests.load(Ordering::SeqCst),
             1,
@@ -4237,8 +4609,38 @@ mod tests {
             Some("Update available")
         );
         controller.update_button.emit_clicked();
-        pump_until(&|| controller.downloaded_update.borrow().is_some());
+        assert!(controller.update_dialog.borrow().is_some());
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            1,
+            "reviewing release notes must not download the installer"
+        );
+        controller
+            .update_dialog
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .primary
+            .emit_clicked();
+        controller.check_update_with_feedback(false);
+        pump_until(&|| controller.update_phase.get() == super::UpdatePhase::DownloadFailed);
         assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert!(controller.downloaded_update.borrow().is_none());
+        assert!(controller
+            .update_error
+            .borrow()
+            .as_deref()
+            .unwrap()
+            .contains("checksum mismatch"));
+        controller
+            .update_dialog
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .primary
+            .emit_clicked();
+        pump_until(&|| controller.downloaded_update.borrow().is_some());
+        assert_eq!(requests.load(Ordering::SeqCst), 5);
         assert_eq!(
             controller.update_button.label().as_deref(),
             Some("Restart to update")
@@ -4248,10 +4650,324 @@ mod tests {
             b"",
             "download installed without restart click"
         );
+        controller.check_update_with_feedback(false);
+        controller.check_update_with_feedback(true);
+        assert_eq!(controller.update_phase.get(), super::UpdatePhase::Ready);
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            5,
+            "checking again must preserve a verified update"
+        );
         server.join().unwrap();
         controller.window.close();
         std::env::remove_var("APPIMAGE");
         std::env::remove_var("TYPSMTHNG_UPDATE_API_URL");
+    }
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    #[cfg(target_os = "linux")]
+    fn native_changelog_acknowledgment_and_manual_reopen() {
+        use adw::prelude::*;
+        let isolated = tempdir().unwrap();
+        let previous_environment = [
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "TYPSMTHNG_UPDATE_API_URL",
+        ]
+        .map(|key| (key, std::env::var_os(key)));
+        std::env::set_var("XDG_DATA_HOME", isolated.path().join("data"));
+        std::env::set_var("XDG_CACHE_HOME", isolated.path().join("cache"));
+        std::env::set_var("TYPSMTHNG_UPDATE_API_URL", "http://127.0.0.1:1/offline");
+        adw::init().unwrap();
+        let app: gtk::Application = adw::Application::builder()
+            .application_id("dev.typsmthng.ChangelogTest")
+            .build()
+            .upcast();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let controller = super::AppController::build(&app, super::LaunchOptions::default());
+        let store = controller.state_store.as_ref().unwrap();
+        let pump = |ready: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !ready() && std::time::Instant::now() < deadline {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(ready(), "changelog lifecycle timed out");
+        };
+        pump(&|| controller.changelog_dialog.borrow().is_some());
+        let first = controller
+            .changelog_dialog
+            .borrow()
+            .clone()
+            .expect("first launch changelog");
+        pump(&|| {
+            first
+                .default_widget()
+                .is_some_and(|button| button.has_focus())
+        });
+        assert!(
+            store.load_metadata().unwrap().last_seen_version.is_none(),
+            "display alone must not acknowledge unread notes"
+        );
+        controller.show_unseen_changelog();
+        assert_eq!(controller.changelog_dialog.borrow().as_ref(), Some(&first));
+        first
+            .default_widget()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .emit_clicked();
+        pump(&|| controller.changelog_dialog.borrow().is_none());
+        assert_eq!(
+            store.load_metadata().unwrap().last_seen_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        controller.show_unseen_changelog();
+        assert!(
+            controller.changelog_dialog.borrow().is_none(),
+            "same version should not show again"
+        );
+        app.activate_action("whats-new", None);
+        let manual = controller
+            .changelog_dialog
+            .borrow()
+            .clone()
+            .expect("manual changelog action");
+        pump(&|| {
+            manual
+                .default_widget()
+                .is_some_and(|button| button.has_focus())
+        });
+        manual.close();
+        pump(&|| controller.changelog_dialog.borrow().is_none());
+        let mut metadata = store.load_metadata().unwrap();
+        metadata.last_seen_version = Some("0.1.8".into());
+        store.save_metadata(&metadata).unwrap();
+        controller.show_unseen_changelog();
+        let missed = controller.changelog_dialog.borrow().clone().unwrap();
+        pump(&|| {
+            missed
+                .default_widget()
+                .is_some_and(|button| button.has_focus())
+        });
+        fn labels(widget: &gtk::Widget, text: &mut Vec<String>) {
+            if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+                text.push(label.text().into());
+                assert!(!label.uses_markup());
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                labels(&widget, text);
+                child = widget.next_sibling();
+            }
+        }
+        let mut text = Vec::new();
+        labels(missed.child().unwrap().upcast_ref(), &mut text);
+        for version in ["Version 0.1.9", "Version 0.1.10", "Version 0.1.11"] {
+            assert!(
+                text.iter().any(|line| line == version),
+                "missing skipped release {version}"
+            );
+        }
+        missed.close();
+        pump(&|| controller.changelog_dialog.borrow().is_none());
+        controller.window.close();
+        for (key, value) in previous_environment {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a display; run one exact filter under Xvfb"]
+    #[cfg(target_os = "linux")]
+    fn native_update_check_errors_are_retryable_and_current_button_stays_visible() {
+        use adw::prelude::*;
+        use std::io::{Read, Write};
+        use std::{
+            sync::{atomic::Ordering, Arc},
+            time::Duration,
+        };
+        adw::init().unwrap();
+        let previous_appimage = std::env::var_os("APPIMAGE");
+        std::env::remove_var("APPIMAGE");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_requests = requests.clone();
+        let worker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            for (index, status) in ["503 Service Unavailable", "200 OK", "200 OK"]
+                .into_iter()
+                .enumerate()
+            {
+                let mut socket = loop {
+                    if let Ok((socket, _)) = listener.accept() {
+                        break socket;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "missing retry request"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                assert!(socket.read(&mut request).unwrap() > 0);
+                worker_requests.fetch_add(1, Ordering::SeqCst);
+                let body = serde_json::json!({"tag_name": if index == 2 { "v99.0.0".to_string() } else { format!("v{}", env!("CARGO_PKG_VERSION")) }, "html_url": "https://github.com/aaditagrawal/typsmthng-desktop/releases", "body": "- A new managed update.", "assets": [{"name": "typsmthng-linux-x64.AppImage", "browser_download_url": "https://example.invalid/not-requested"}]}).to_string();
+                write!(
+                    socket,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        std::env::set_var("TYPSMTHNG_UPDATE_API_URL", endpoint);
+        let app: gtk::Application = adw::Application::builder()
+            .application_id("dev.typsmthng.UpdateRetryTest")
+            .build()
+            .upcast();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let controller = super::AppController::build(
+            &app,
+            super::LaunchOptions {
+                smoke_test: true,
+                ..Default::default()
+            },
+        );
+        assert!(controller.update_button.is_visible());
+        assert_eq!(
+            controller.update_button.label().as_deref(),
+            Some("Check for updates")
+        );
+        let pump = || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while controller.update_phase.get().busy() && std::time::Instant::now() < deadline {
+                while glib::MainContext::default().pending() {
+                    glib::MainContext::default().iteration(false);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(!controller.update_phase.get().busy());
+        };
+        controller.update_button.emit_clicked();
+        pump();
+        assert_eq!(
+            controller.update_phase.get(),
+            super::UpdatePhase::CheckFailed
+        );
+        assert!(controller.update_error.borrow().is_some());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        controller.update_button.emit_clicked();
+        pump();
+        assert_eq!(controller.update_phase.get(), super::UpdatePhase::Current);
+        assert!(controller.update_button.is_visible());
+        assert_eq!(
+            controller.update_button.label().as_deref(),
+            Some("Check for updates")
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        controller.update_button.emit_clicked();
+        pump();
+        assert_eq!(controller.update_phase.get(), super::UpdatePhase::Available);
+        assert!(matches!(
+            controller.available_update.borrow().as_ref(),
+            Some(typsmthng_gtk::backend::UpdateStatus::Available { asset: None, .. })
+        ));
+        assert_eq!(
+            controller
+                .update_dialog
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .primary
+                .label()
+                .as_deref(),
+            Some("Open Software Updates")
+        );
+        assert!(controller.downloaded_update.borrow().is_none());
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        worker.join().unwrap();
+        controller.window.close();
+        std::env::remove_var("TYPSMTHNG_UPDATE_API_URL");
+        if let Some(previous) = previous_appimage {
+            std::env::set_var("APPIMAGE", previous);
+        }
+    }
+
+    #[test]
+    #[ignore = "changes process environment; run one exact filter"]
+    #[cfg(target_os = "linux")]
+    fn system_update_handoff_uses_the_desktop_software_manager() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempdir().unwrap();
+        let marker = directory.path().join("arguments");
+        for name in ["gnome-software", "plasma-discover"] {
+            let path = directory.path().join(name);
+            fs::write(
+                &path,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TYPSMTHNG_UPDATE_TEST_MARKER\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let previous = [
+            "PATH",
+            "XDG_CURRENT_DESKTOP",
+            "FLATPAK_ID",
+            "TYPSMTHNG_UPDATE_TEST_MARKER",
+        ]
+        .map(|key| (key, std::env::var_os(key)));
+        std::env::set_var("PATH", directory.path());
+        std::env::remove_var("FLATPAK_ID");
+        std::env::set_var("TYPSMTHNG_UPDATE_TEST_MARKER", &marker);
+        for (desktop, expected) in [("GNOME", "--mode=updates\n"), ("KDE", "--mode\nupdate\n")] {
+            std::env::set_var("XDG_CURRENT_DESKTOP", desktop);
+            let _ = fs::remove_file(&marker);
+            super::open_system_updates().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while fs::read_to_string(&marker).ok().as_deref() != Some(expected)
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(fs::read_to_string(&marker).unwrap(), expected);
+        }
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    #[test]
+    fn release_links_cannot_open_other_uri_schemes_or_repositories() {
+        let fallback = "https://github.com/aaditagrawal/typsmthng-desktop/releases";
+        for candidate in [
+            "javascript:alert(1)",
+            "file:///tmp/app",
+            "https://example.com/update",
+            "https://github.com/another/app/releases/tag/v1",
+        ] {
+            assert_eq!(super::safe_release_url(candidate), fallback);
+        }
+        assert_eq!(
+            super::safe_release_url(&format!("{fallback}/tag/v0.1.11")),
+            format!("{fallback}/tag/v0.1.11")
+        );
     }
 
     #[test]

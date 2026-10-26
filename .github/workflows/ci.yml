@@ -10,6 +10,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changelog:
+    name: Changelog entries
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          enable-cache: false
+      - name: Check entries and prevent reuse of a published version
+        env:
+          CHANGELOG_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          uv run --no-project packaging/release/changelog.py check --base "$CHANGELOG_BASE"
+          uv run --no-project packaging/release/test_changelog.py
+
   typst-compatibility:
     runs-on: ubuntu-24.04
     steps:
@@ -102,6 +119,12 @@ jobs:
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --manifest-path native/gtk/Cargo.toml --test typst_highlighting -- --ignored --test-threads=1
       - name: Click-triggered native updates
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo cargo test --locked --bin typsmthng native_update_button_downloads_only_after_click -- --ignored --test-threads=1
+      - name: Update check retry and persistent controls
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::app::tests::native_update_check_errors_are_retryable_and_current_button_stays_visible -- --exact --ignored --test-threads=1
+      - name: First-launch changelog and acknowledgment
+        run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::app::tests::native_changelog_acknowledgment_and_manual_reopen -- --exact --ignored --test-threads=1
+      - name: System software updater handoff
+        run: cargo test --locked --bin typsmthng ui::app::tests::system_update_handoff_uses_the_desktop_software_manager -- --exact --ignored --test-threads=1
       - name: Semantic completion keyboard and stale response checks
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::editor_tools::tests::native_completion_inserts_snippet_once_and_discards_stale_reply -- --exact --ignored --test-threads=1
       - name: Automatic file path completion
@@ -126,6 +149,16 @@ jobs:
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 20s target/debug/typsmthng --smoke-test
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 30s target/debug/typsmthng --presentation-smoke-test native/gtk/tests/fixtures/demo
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings timeout 30s target/debug/typsmthng --interaction-smoke-test
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings GDK_DEBUG=no-portals uv run --no-project packaging/test-in-app-update.py --app target/debug/typsmthng
+
+      - name: Update UI failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: in-app-update-diagnostics
+          path: build/in-app-update-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Native document export options
         run: dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::app::tests::native_export_dialog_keeps_default_pdf_and_scopes_profiles -- --exact --ignored --test-threads=1

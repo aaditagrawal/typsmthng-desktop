@@ -108,6 +108,7 @@ pub struct AppMetadata {
     pub selected_home_workspace_id: Option<String>,
     #[serde(default)]
     pub window_state: WindowState,
+    pub last_seen_version: Option<String>,
 }
 
 const fn metadata_version() -> u32 {
@@ -124,6 +125,7 @@ impl Default for AppMetadata {
             project_workspace_assignments: BTreeMap::new(),
             selected_home_workspace_id: None,
             window_state: WindowState::default(),
+            last_seen_version: None,
         }
     }
 }

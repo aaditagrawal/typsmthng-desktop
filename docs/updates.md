@@ -1,9 +1,13 @@
 # Application updates
 
-The native header follows T3 Code's explicit update flow. Stable release metadata
-is checked two seconds after startup and every six hours. An available release
-shows **Update available** without opening a dialog or fetching the installer.
-Clicking downloads into a private update cache, with progress in the button.
+The header always offers **Check for updates** on the home screen and in the
+editor. The application menu also offers that action and **What's new**.
+The native flow follows T3 Code's separate check, download, and restart actions.
+Stable GitHub release metadata is checked two seconds after startup and every
+six hours. Background checks fetch metadata only. **Update available** opens a
+dialog with release notes; **Download update** starts the verified download.
+Checks, progress, and retry controls remain available in the app. Downloads use
+a private update cache, with progress in the dialog and header.
 After SHA-256 verification, **Restart to update** saves the current document and
 ends any presentation. Failed saves keep the application open. Closing normally
 does not install a downloaded update.
@@ -23,8 +27,10 @@ before installing. The helper and job files live outside the installed app.
 - Windows: copy the helper and its runtime DLLs out of the installation, wait for
   exit, run the per-user NSIS installer silently against the existing directory,
   then relaunch. NSIS owns replacement and its failure behavior.
-- DEB, RPM and Flatpak: the update button explains that updates belong to the
-  package manager and links to the release. It never overwrites a managed install.
+- DEB, RPM and Flatpak: **Open Software Updates** opens GNOME Software, KDE
+  Discover, or the system AppStream handler. The dialog also shows the package
+  manager command and links to the GitHub release. Repository updates can arrive
+  after GitHub publication. Managed installs retain package-manager ownership.
 
 Downloads have connection and overall timeouts, a 512 MiB limit, and must match
 SHA256SUMS from the release. These checks provide integrity through the HTTPS
@@ -33,8 +39,24 @@ never publish the partial artifact. Install errors are written beside the
 artifact and shown when the app next opens. Cache directories older than seven
 days are reclaimed on startup.
 
-The updater first ships with the release containing this change. Older installed
-versions need to install that release using their existing installer flow.
+The updater handshake runs outside the GTK thread and times out if its helper
+does not acknowledge readiness. Failed handoffs keep the verified download so
+the restart can be retried.
+
+## First launch after an update
+
+The app bundles the changelog at build time, so it can display it without internet
+access and after package-manager or manual upgrades. It compares the installed
+version with `lastSeenVersion` in the user's app state. The changelog shows once
+for a new installation or newer version. Skipped upgrades include all intervening
+release notes. Dismissing the dialog records the acknowledgment; same-version
+launches and downgrades do not repeat it. **What's new** reopens the current
+version's notes at any time.
+
+Each PR adds a new `changelog/VERSION/description.md` entry. Cargo fails if the
+current version has no notes, CI checks entries against the PR base, and the
+release workflow renders those same entries for GitHub publication. Historical
+`releases/v*.md` notes remain supported. See [changelog entries](../changelog/README.md).
 
 ## Validation
 
@@ -56,3 +78,13 @@ The release workflow runs the packaged helper on disposable Windows and macOS
 installations. It checks that the helper waits for parent exit, replaces an old
 binary, and relaunches the updated app. Windows also tests installation paths with
 spaces and preservation of unrelated files. Publishing requires these checks.
+
+Linux CI also drives the actual GTK buttons and Enter key against a private fake
+AppImage installation. It checks metadata-only discovery, verified download,
+parent exit, file replacement, and relaunch through the real helper. It never
+modifies an installed copy:
+
+```sh
+dbus-run-session -- xvfb-run -a env GTK_A11Y=none GSK_RENDERER=cairo \
+  uv run --no-project packaging/test-in-app-update.py --app target/debug/typsmthng
+```

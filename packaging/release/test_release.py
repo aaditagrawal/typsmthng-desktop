@@ -176,6 +176,8 @@ class OlderSourceRef(unittest.TestCase):
             (source / "native/gtk").mkdir(parents=True)
             (source / "native/gtk/Cargo.toml").write_text('[package]\nname = "test"\nversion = "0.2.0-rc.1+build.2"\n')
             (source / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.93.1"\n')
+            (source / "releases").mkdir()
+            (source / "releases/v0.2.0-rc.1+build.2.md").write_text("# v0.2.0-rc.1+build.2\n\n- A verified change.\n")
             subprocess.run(["git", "init", "--quiet", str(source)], check=True)
             subprocess.run(["git", "-C", str(source), "add", "."], check=True)
             subprocess.run(["git", "-C", str(source), "-c", "user.name=Release Tests",

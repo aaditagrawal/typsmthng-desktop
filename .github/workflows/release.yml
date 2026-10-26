@@ -150,7 +150,8 @@ jobs:
         run: |-
           uv run --no-project .release-tools/packaging/release/tag.py --version "$VERSION" --source-sha "$SOURCE_SHA"
           title="v$VERSION"
-          notes="releases/v$VERSION.md"
+          notes="$RUNNER_TEMP/typsmthng-v$VERSION.md"
+          uv run --no-project .release-tools/packaging/release/changelog.py --root "$PWD" render --version "$VERSION" --output "$notes"
           test -f "$notes"
           if [[ "$SIGNING" == unsigned ]]; then
             printf '\nmacOS builds are unsigned (ad-hoc signed) and are not notarized by Apple.\n' >> "$notes"

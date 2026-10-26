@@ -2,11 +2,12 @@
 """Resolve the checked-out source into immutable release workflow outputs."""
 
 import os
-from pathlib import Path
 import re
 import subprocess
 import tomllib
+from pathlib import Path
 
+from changelog import render
 
 version = os.environ.get("RAW_VERSION", "").removeprefix("v")
 manifest = tomllib.loads(Path("native/gtk/Cargo.toml").read_text())["package"]["version"]
@@ -15,6 +16,7 @@ if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.
     raise SystemExit("Invalid release version")
 if version != manifest:
     raise SystemExit(f"Cargo version {manifest} != {version}")
+render(Path.cwd(), version)
 signing = os.environ.get("REQUESTED_SIGNING") or "unsigned"
 if signing not in {"unsigned", "signed"}:
     raise SystemExit("Invalid macOS signing mode")

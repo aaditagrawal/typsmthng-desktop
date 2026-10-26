@@ -37,7 +37,8 @@ See the [full screenshot gallery and migration notes](docs/gtk4-migration.md) fo
 - Built-in starters plus live Typst Universe template search and initialization
 - System-font control and cached Google Fonts resolution for families declared in Typst source
 - Drag-and-drop file import and safe ZIP/Overleaf project import
-- Stable-channel update checks with native installer download and launch
+- In-app GitHub update checks, release-note review, verified downloads, and restart-to-install
+- Offline changelogs on the first launch of each new version, with missed releases included
 - Single-window presentation and presenter view with a separate audience window
 - Slide navigation, overview, editable sidecar and inline metadata notes, automatic double-width rendered-note splitting, timer, wall clock, laser pointer, pen, highlighter, eraser, per-slide annotations, and black or white screen
 - Positional folder and `.typ` arguments for file-manager and terminal launches

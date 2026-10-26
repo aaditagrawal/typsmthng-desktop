@@ -28,6 +28,7 @@ pub enum UpdateStatus {
         current: Version,
         latest: Version,
         release_url: String,
+        release_notes: String,
         asset: Option<ReleaseAsset>,
     },
 }
@@ -45,6 +46,8 @@ struct GithubRelease {
     #[serde(default)]
     prerelease: bool,
     html_url: String,
+    #[serde(default)]
+    body: Option<String>,
     #[serde(default)]
     assets: Vec<GithubAsset>,
 }
@@ -99,6 +102,10 @@ impl UpdateClient {
             return Err(BackendError::Network("invalid release asset name".into()));
         }
         let destination = destination.as_ref();
+        let checksums_url = asset
+            .checksums_url
+            .as_deref()
+            .ok_or_else(|| BackendError::Network("release does not publish SHA256SUMS".into()))?;
         let parent = destination.parent().unwrap_or_else(|| Path::new("."));
         let mut response = http_agent(900)
             .get(&asset.download_url)
@@ -135,10 +142,6 @@ impl UpdateClient {
             digest.update(&buffer[..read]);
         }
         let actual = hex::encode(digest.finalize());
-        let checksums_url = asset
-            .checksums_url
-            .as_deref()
-            .ok_or_else(|| BackendError::Network("release does not publish SHA256SUMS".into()))?;
         let mut checksums_response = http_agent(30)
             .get(checksums_url)
             .header("Accept", "application/octet-stream")
@@ -208,6 +211,7 @@ fn status_from_release(current: Version, release: GithubRelease) -> Result<Updat
         current,
         latest,
         release_url: release.html_url,
+        release_notes: release.body.unwrap_or_default(),
         asset: choose_asset(release.assets),
     })
 }
@@ -239,6 +243,9 @@ fn choose_asset_with_suffix(
         .filter(|asset| {
             let name = asset.name.to_ascii_lowercase();
             if !name.ends_with(suffix) {
+                return false;
+            }
+            if suffix == ".exe" && (name.contains("console") || name.contains("updater")) {
                 return false;
             }
             if cfg!(target_os = "macos") {
@@ -284,6 +291,7 @@ mod tests {
             draft: false,
             prerelease: false,
             html_url: "https://example.test/release".to_string(),
+            body: Some("- A useful change".into()),
             assets: assets
                 .iter()
                 .map(|name| GithubAsset {
@@ -299,12 +307,27 @@ mod tests {
         let status = status_from_release(Version::new(1, 2, 3), release("v1.3.0", &[])).unwrap();
         assert!(matches!(
             status,
-            UpdateStatus::Available { latest, .. } if latest == Version::new(1, 3, 0)
+            UpdateStatus::Available { latest, release_notes, .. } if latest == Version::new(1, 3, 0) && release_notes == "- A useful change"
         ));
         assert!(matches!(
             status_from_release(Version::new(1, 3, 0), release("1.3.0", &[])).unwrap(),
             UpdateStatus::UpToDate { .. }
         ));
+    }
+
+    #[test]
+    fn missing_checksums_fail_before_any_installer_request() {
+        let asset = ReleaseAsset {
+            name: "app.exe".into(),
+            download_url: "http://127.0.0.1:1/must-not-be-requested".into(),
+            checksums_url: None,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let error = UpdateClient::default()
+            .download_with_progress(&asset, directory.path().join("app.exe"), |_, _| {})
+            .unwrap_err();
+        assert!(error.to_string().contains("SHA256SUMS"));
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     }
 
     #[test]

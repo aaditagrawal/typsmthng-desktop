@@ -16,6 +16,7 @@ pub mod paths;
 pub mod persistence;
 pub mod preview;
 pub mod project;
+pub mod release_notes;
 pub mod rendered_preview;
 pub mod typst;
 pub mod universe;
