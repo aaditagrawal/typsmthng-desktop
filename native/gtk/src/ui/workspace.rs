@@ -35,6 +35,7 @@ type SetPreviewZoom = Rc<dyn Fn(PreviewZoom, Option<(f64, f64)>)>;
 type DiagnosticLocation = (String, Option<usize>, Option<usize>);
 
 const DEFAULT_PREVIEW_WIDTH: f64 = 560.0;
+const DEFAULT_SIDEBAR_WIDTH: i32 = 300;
 const DEFAULT_PREVIEW_ASPECT: f64 = 16.0 / 9.0;
 const PREVIEW_HORIZONTAL_INSET: i32 = 64;
 /// Page width assumed for SVGs without a usable viewBox (560 px at 100%).
@@ -155,8 +156,22 @@ fn restore_preview_anchor(
 }
 
 fn center_preview_horizontally(adjustment: &gtk::Adjustment) {
+    #[cfg(test)]
+    trace_preview(format_args!(
+        "center value={} upper={} page={}",
+        adjustment.value(),
+        adjustment.upper(),
+        adjustment.page_size()
+    ));
     let end = (adjustment.upper() - adjustment.page_size()).max(adjustment.lower());
     adjustment.set_value((adjustment.lower() + end) / 2.0);
+}
+
+#[cfg(test)]
+fn trace_preview(message: std::fmt::Arguments<'_>) {
+    if std::env::var_os("TYPSMTHNG_TRACE_PREVIEW").is_some() {
+        eprintln!("preview trace: {message}");
+    }
 }
 
 /// Wait for layout after a pane reveal or zoom, then use the same centered
@@ -595,7 +610,7 @@ impl WorkspaceView {
         let main_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         main_paned.set_vexpand(true);
         main_paned.set_hexpand(true);
-        main_paned.set_position(300);
+        main_paned.set_position(DEFAULT_SIDEBAR_WIDTH);
         main_paned.set_wide_handle(true);
         main_paned.set_resize_start_child(false);
         main_paned.set_shrink_start_child(false);
@@ -671,7 +686,15 @@ impl WorkspaceView {
                 } else if restore_sidebar.replace(false) {
                     sidebar.set_visible(true);
                 }
-                work_paned.set_position((width - if sidebar.is_visible() { 240 } else { 0 }) / 2);
+                work_paned.set_position(
+                    (width
+                        - if sidebar.is_visible() {
+                            DEFAULT_SIDEBAR_WIDTH
+                        } else {
+                            0
+                        })
+                        / 2,
+                );
             }
         });
 
@@ -843,6 +866,14 @@ impl WorkspaceView {
             let centering = preview_centering.clone();
             let previous = preview_horizontal_value.clone();
             move |adjustment| {
+                #[cfg(test)]
+                trace_preview(format_args!(
+                    "value-changed value={} previous={} internal={} requested={}",
+                    adjustment.value(),
+                    previous.get(),
+                    centering.get(),
+                    requested.get()
+                ));
                 if previous.replace(adjustment.value()) != adjustment.value() && !centering.get() {
                     // A user pan cancels the whole layout request, including
                     // scrollbar geometry changes that arrive on later frames.
@@ -862,9 +893,13 @@ impl WorkspaceView {
             let center_requested = preview_center_requested.clone();
             Rc::new(move || {
                 let viewport_width = preview_scroll.width();
-                if previous_geometry.replace(Some((zoom.get(), viewport_width)))
-                    != Some((zoom.get(), viewport_width))
-                {
+                let previous = previous_geometry.replace(Some((zoom.get(), viewport_width)));
+                // Follow layout while Fit text is active, until the user pans.
+                // Later viewport refits must preserve that cancellation.
+                if previous.map(|(mode, _)| mode) != Some(zoom.get()) {
+                    center_requested.set(zoom.get() == PreviewZoom::FitText);
+                }
+                if previous != Some((zoom.get(), viewport_width)) {
                     if let Some(lens) = lens.upgrade() {
                         super::controls::clear_lens(&lens);
                     }
@@ -880,7 +915,17 @@ impl WorkspaceView {
                     if picture.widget.width_request() != size.width
                         || picture.widget.height_request() != size.height
                     {
-                        center_requested.set(zoom.get() == PreviewZoom::FitText);
+                        #[cfg(test)]
+                        trace_preview(format_args!(
+                            "resize zoom={:?} viewport={} old={}x{} new={}x{} request={}",
+                            zoom.get(),
+                            viewport_width,
+                            picture.widget.width_request(),
+                            picture.widget.height_request(),
+                            size.width,
+                            size.height,
+                            center_requested.get()
+                        ));
                         picture.widget.set_size_request(size.width, size.height);
                     }
                     picture.widget.set_content_fit(gtk::ContentFit::Contain);
@@ -902,6 +947,15 @@ impl WorkspaceView {
             let requested = preview_center_requested.clone();
             let centering = preview_centering.clone();
             move |adjustment| {
+                #[cfg(test)]
+                trace_preview(format_args!(
+                    "changed value={} previous={} upper={} page={} requested={}",
+                    adjustment.value(),
+                    previous_value.get(),
+                    adjustment.upper(),
+                    adjustment.page_size(),
+                    requested.get()
+                ));
                 // configure() clamps the value before emitting changed, then
                 // value-changed. Layout clamping is not a manual pan.
                 previous_value.set(adjustment.value());
@@ -922,6 +976,12 @@ impl WorkspaceView {
                     let requested = requested.clone();
                     let centering = centering.clone();
                     glib::idle_add_local_once(move || {
+                        #[cfg(test)]
+                        trace_preview(format_args!(
+                            "idle center zoom={:?} requested={}",
+                            zoom.get(),
+                            requested.get()
+                        ));
                         if zoom.get() == PreviewZoom::FitText && requested.get() {
                             if let Some(adjustment) = adjustment.upgrade() {
                                 centering.set(true);
@@ -5084,11 +5144,19 @@ mod tests {
                     horizontal.value(), horizontal.upper(), horizontal.page_size(), picture.width_request()
                 );
                 horizontal.set_value(0.0);
+                trace_preview(format_args!(
+                    "TEST pan returned value={}",
+                    horizontal.value()
+                ));
                 // GTK can finish configuring scrollbar bounds after the user
                 // has already panned. Those late changes must not re-arm centering.
                 let upper = horizontal.upper();
                 horizontal.set_upper(upper + 1.0);
                 horizontal.set_upper(upper);
+                // A viewport refit can also arrive after the pan. Keep the
+                // manual offset until Fit text is explicitly selected again.
+                workspace.content_column.set(Some((40.0, 161.0)));
+                (workspace.resize_preview)();
                 drive(30);
                 assert_eq!(
                     horizontal.value(),
@@ -5100,9 +5168,11 @@ mod tests {
                     left.x() > centered.x(),
                     "panning must expose the original margin"
                 );
+                let end = horizontal.upper() - horizontal.page_size();
                 horizontal.set_value(end);
                 drive(30);
-                assert!((horizontal.value() - end).abs() < 1.0);
+                let clamped_end = end.min(horizontal.upper() - horizontal.page_size());
+                assert!((horizontal.value() - clamped_end).abs() < 1.0);
                 // Choosing Fit text again must re-center even though the page
                 // dimensions have not changed since the manual pan.
                 fit_text.emit_clicked();
@@ -5110,6 +5180,7 @@ mod tests {
                 loop {
                     drive(10);
                     let bounds = picture.compute_bounds(&workspace.preview_scroll).unwrap();
+                    let end = horizontal.upper() - horizontal.page_size();
                     if ((horizontal.value() - end / 2.0).abs() < 1.0
                         && (bounds.x() + bounds.width() / 2.0
                             - horizontal.page_size() as f32 / 2.0)
@@ -5120,6 +5191,7 @@ mod tests {
                         break;
                     }
                 }
+                let end = horizontal.upper() - horizontal.page_size();
                 assert!(
                     (horizontal.value() - end / 2.0).abs() < 1.0,
                     "an explicit Fit text selection must re-center the page"
@@ -5571,7 +5643,10 @@ mod tests {
             .downcast::<gtk::Button>()
             .unwrap();
         generated.emit_clicked();
-        drive(Duration::from_millis(100));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while workspace.preview_scroll.vadjustment().value() <= 500.0 && Instant::now() < deadline {
+            drive(Duration::from_millis(10));
+        }
         assert!(
             workspace.preview_scroll.vadjustment().value() > 500.0,
             "compiled heading should reveal the third page"

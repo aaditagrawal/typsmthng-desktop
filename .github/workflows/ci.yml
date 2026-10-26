@@ -83,7 +83,7 @@ jobs:
       - name: Centered scrolling and cached preview magnifier
         run: |
           for scale in 1 2; do
-            dbus-run-session -- xvfb-run -a -s "-screen 0 3200x2000x24" env GTK_A11Y=none GSK_RENDERER=cairo GDK_SCALE="$scale" G_DEBUG=fatal-warnings cargo test --locked --bin typsmthng ui::workspace::tests::native_centered_scrolling_and_cached_preview_magnifier -- --exact --ignored --test-threads=1
+            dbus-run-session -- xvfb-run -a -s "-screen 0 3200x2000x24" env GTK_A11Y=none GSK_RENDERER=cairo GDK_SCALE="$scale" G_DEBUG=fatal-warnings TYPSMTHNG_TRACE_PREVIEW=1 cargo test --locked --bin typsmthng ui::workspace::tests::native_centered_scrolling_and_cached_preview_magnifier -- --exact --ignored --test-threads=1
           done
       - name: Preview rendering, quality changes, and display scale
         run: |
