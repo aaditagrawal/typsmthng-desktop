@@ -459,6 +459,8 @@ pub struct WorkspaceView {
     project_label: gtk::Label,
     file_label: gtk::Label,
     save_label: gtk::Label,
+    save_toast_overlay: adw::ToastOverlay,
+    save_toast: adw::Toast,
     compile_label: gtk::Label,
     page_label: gtk::Label,
     settings: Rc<RefCell<UiSettings>>,
@@ -614,7 +616,14 @@ impl WorkspaceView {
         main_paned.set_wide_handle(true);
         main_paned.set_resize_start_child(false);
         main_paned.set_shrink_start_child(false);
-        root.append(&main_paned);
+        let save_toast_overlay = adw::ToastOverlay::new();
+        save_toast_overlay.set_vexpand(true);
+        save_toast_overlay.set_child(Some(&main_paned));
+        let save_toast = adw::Toast::builder()
+            .title("Document saved")
+            .timeout(2)
+            .build();
+        root.append(&save_toast_overlay);
 
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
         sidebar.add_css_class("sidebar");
@@ -1705,6 +1714,8 @@ impl WorkspaceView {
             project_label,
             file_label,
             save_label,
+            save_toast_overlay,
+            save_toast,
             compile_label,
             page_label,
             settings,
@@ -1985,6 +1996,7 @@ impl WorkspaceView {
     }
 
     pub fn show_text_file(&self, path: &str, contents: &str) {
+        self.save_toast.dismiss();
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
@@ -2003,6 +2015,7 @@ impl WorkspaceView {
     }
 
     pub fn show_binary_file(&self, path: &Path) {
+        self.save_toast.dismiss();
         self.editor_tools.set_file(path.to_string_lossy().as_ref());
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
@@ -2018,6 +2031,7 @@ impl WorkspaceView {
     }
 
     pub fn show_missing_file(&self, path: &str) {
+        self.save_toast.dismiss();
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
@@ -2071,7 +2085,13 @@ impl WorkspaceView {
     pub fn request_save(&self) {
         cancel_timer(&self.pending_save);
         if self.editor.is_editable() {
-            (self.callbacks.save)(self.source_text());
+            if (self.callbacks.save)(self.source_text()) {
+                // Reusing the toast resets its timeout instead of queuing
+                // confirmations when the save shortcut is pressed repeatedly.
+                self.save_toast_overlay.add_toast(self.save_toast.clone());
+            } else {
+                self.save_toast.dismiss();
+            }
         }
     }
 
@@ -4561,6 +4581,89 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "Unsaved changes");
         workspace.mark_saved();
         assert!(!workspace.is_dirty());
+
+        fn confirmation_visible(widget: &gtk::Widget) -> bool {
+            if widget
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == "Document saved" && label.is_mapped())
+            {
+                return true;
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if confirmation_visible(&widget) {
+                    return true;
+                }
+                child = widget.next_sibling();
+            }
+            false
+        }
+
+        workspace.save_toast.dismiss();
+        window.set_default_size(1000, 750);
+        window.set_child(Some(&workspace.root));
+        window.present();
+        workspace.editor.grab_focus();
+        drive(100);
+        let confirmed = || confirmation_visible(workspace.root.upcast_ref());
+        assert!(!confirmed());
+
+        // Autosave stays quiet. A manual save confirms even an unchanged buffer.
+        settings.auto_save = true;
+        settings.auto_compile = false;
+        workspace.apply_settings(settings.clone());
+        workspace.buffer.insert_at_cursor(" autosaved");
+        drive(80);
+        workspace.mark_saved();
+        assert!(!confirmed());
+        let saved_source = workspace.source_text();
+        if let Some(directory) = std::env::var_os("TYPSMTHNG_SNAPSHOT_DIR") {
+            std::env::set_var(
+                "TYPSMTHNG_SNAPSHOT_DIR",
+                PathBuf::from(&directory).join("before"),
+            );
+            drive(100);
+            super::super::smoke::capture_windows(&application);
+            std::env::set_var("TYPSMTHNG_SNAPSHOT_DIR", directory);
+        }
+        workspace.request_save();
+        drive(200);
+        assert!(confirmed());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved_source);
+        assert!(workspace.editor.has_focus());
+        super::super::smoke::capture_windows(&application);
+
+        // Repeated shortcuts refresh the same toast without stacking messages.
+        drive(1000);
+        workspace.request_save();
+        drive(1200);
+        assert!(confirmed());
+        drive(1200);
+        assert!(!confirmed());
+
+        // Failed saves preserve the dirty buffer and never show success.
+        settings.auto_save = false;
+        workspace.apply_settings(settings);
+        workspace.buffer.insert_at_cursor(" failed");
+        fail_save.set(true);
+        workspace.request_save();
+        drive(100);
+        assert!(!confirmed());
+        assert!(workspace.is_dirty());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved_source);
+        fail_save.set(false);
+        workspace.request_save();
+        drive(200);
+        assert!(confirmed());
+
+        // Changing files clears old confirmations; read-only files cannot save.
+        workspace.show_missing_file("main.typ");
+        drive(400);
+        let save_count = saves.borrow().len();
+        workspace.request_save();
+        drive(100);
+        assert!(!confirmed());
+        assert_eq!(saves.borrow().len(), save_count);
         workspace.cancel_pending_compile();
         window.destroy();
     }
