@@ -1,0 +1,1 @@
+- See a brief confirmation after Ctrl+S or Cmd+S saves a document, including when autosave has already saved it.
