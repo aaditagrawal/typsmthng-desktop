@@ -460,7 +460,7 @@ pub struct WorkspaceView {
     file_label: gtk::Label,
     save_label: gtk::Label,
     save_toast_overlay: adw::ToastOverlay,
-    save_toast: adw::Toast,
+    save_toast: Rc<RefCell<Option<adw::Toast>>>,
     compile_label: gtk::Label,
     page_label: gtk::Label,
     settings: Rc<RefCell<UiSettings>>,
@@ -619,10 +619,7 @@ impl WorkspaceView {
         let save_toast_overlay = adw::ToastOverlay::new();
         save_toast_overlay.set_vexpand(true);
         save_toast_overlay.set_child(Some(&main_paned));
-        let save_toast = adw::Toast::builder()
-            .title("Document saved")
-            .timeout(2)
-            .build();
+        let save_toast = Rc::new(RefCell::new(None));
         root.append(&save_toast_overlay);
 
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1996,7 +1993,7 @@ impl WorkspaceView {
     }
 
     pub fn show_text_file(&self, path: &str, contents: &str) {
-        self.save_toast.dismiss();
+        self.dismiss_save_confirmation();
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
@@ -2015,7 +2012,7 @@ impl WorkspaceView {
     }
 
     pub fn show_binary_file(&self, path: &Path) {
-        self.save_toast.dismiss();
+        self.dismiss_save_confirmation();
         self.editor_tools.set_file(path.to_string_lossy().as_ref());
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
@@ -2031,7 +2028,7 @@ impl WorkspaceView {
     }
 
     pub fn show_missing_file(&self, path: &str) {
-        self.save_toast.dismiss();
+        self.dismiss_save_confirmation();
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
@@ -2086,12 +2083,37 @@ impl WorkspaceView {
         cancel_timer(&self.pending_save);
         if self.editor.is_editable() {
             if (self.callbacks.save)(self.source_text()) {
-                // Reusing the toast resets its timeout instead of queuing
-                // confirmations when the save shortcut is pressed repeatedly.
-                self.save_toast_overlay.add_toast(self.save_toast.clone());
+                // Only reuse an active toast. A dismissed toast can still
+                // belong to the overlay while its hide animation runs.
+                let active = self.save_toast.borrow().clone();
+                let toast = active.unwrap_or_else(|| {
+                    let toast = adw::Toast::builder()
+                        .title("Document saved")
+                        .timeout(2)
+                        .build();
+                    let current = Rc::downgrade(&self.save_toast);
+                    toast.connect_dismissed(move |dismissed| {
+                        if let Some(current) = current.upgrade() {
+                            let mut current = current.borrow_mut();
+                            if current.as_ref() == Some(dismissed) {
+                                current.take();
+                            }
+                        }
+                    });
+                    *self.save_toast.borrow_mut() = Some(toast.clone());
+                    toast
+                });
+                self.save_toast_overlay.add_toast(toast);
             } else {
-                self.save_toast.dismiss();
+                self.dismiss_save_confirmation();
             }
+        }
+    }
+
+    fn dismiss_save_confirmation(&self) {
+        let toast = self.save_toast.borrow_mut().take();
+        if let Some(toast) = toast {
+            toast.dismiss();
         }
     }
 
@@ -4346,6 +4368,9 @@ mod tests {
     fn native_autosave_timers_preferences_navigation_and_failures() {
         use super::*;
         adw::init().unwrap();
+        gtk::Settings::default()
+            .unwrap()
+            .set_gtk_enable_animations(true);
         super::super::install_css();
         let application = gtk::Application::builder()
             .application_id("dev.typsmthng.AutosaveTest")
@@ -4599,7 +4624,7 @@ mod tests {
             false
         }
 
-        workspace.save_toast.dismiss();
+        workspace.dismiss_save_confirmation();
         window.set_default_size(1000, 750);
         window.set_child(Some(&workspace.root));
         window.present();
@@ -4633,6 +4658,19 @@ mod tests {
         assert!(workspace.editor.has_focus());
         super::super::smoke::capture_windows(&application);
 
+        // Saving immediately after a file change overlaps the hide animation.
+        workspace.show_text_file("main.typ", &saved_source);
+        workspace.request_save();
+        drive(200);
+        assert!(confirmed());
+
+        // The close button dismisses the toast without a workspace callback.
+        let toast = workspace.save_toast.borrow().clone().unwrap();
+        toast.dismiss();
+        workspace.request_save();
+        drive(200);
+        assert!(confirmed());
+
         // Repeated shortcuts refresh the same toast without stacking messages.
         drive(1000);
         workspace.request_save();
@@ -4651,6 +4689,14 @@ mod tests {
         assert!(!confirmed());
         assert!(workspace.is_dirty());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), saved_source);
+        fail_save.set(false);
+        workspace.request_save();
+        drive(200);
+        assert!(confirmed());
+
+        // A failed save and an immediate retry also overlap toast dismissal.
+        fail_save.set(true);
+        workspace.request_save();
         fail_save.set(false);
         workspace.request_save();
         drive(200);
