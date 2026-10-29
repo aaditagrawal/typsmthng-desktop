@@ -1,0 +1,1 @@
+- Updated the libraries used for downloads, ZIP exports and file watching.
