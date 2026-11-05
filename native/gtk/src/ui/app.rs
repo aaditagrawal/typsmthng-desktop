@@ -390,8 +390,8 @@ impl AppController {
         }
 
         if !smoke {
-            if let Some(cache) = directories::ProjectDirs::from("dev", "typsmthng", "typsmthng") {
-                if let Ok(entries) = std::fs::read_dir(cache.cache_dir().join("updates")) {
+            if let Some(cache) = typsmthng_gtk::backend::platform_paths::update_cache_dir() {
+                if let Ok(entries) = std::fs::read_dir(cache) {
                     for entry in entries.flatten() {
                         let error_path = entry.path().join("install-error.txt");
                         if let Ok(error) = std::fs::read_to_string(&error_path) {
@@ -2550,9 +2550,9 @@ impl AppController {
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| -> Result<_, String> {
-                let cache = directories::ProjectDirs::from("dev", "typsmthng", "typsmthng")
+                let cache = typsmthng_gtk::backend::platform_paths::update_cache_dir()
                     .ok_or_else(|| "Cannot locate update cache".to_string())?;
-                let root = cache.cache_dir().join("updates");
+                let root = cache;
                 std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
                 let directory = tempfile::Builder::new()
                     .prefix("update-")
