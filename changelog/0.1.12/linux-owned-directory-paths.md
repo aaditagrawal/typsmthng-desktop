@@ -1,0 +1,1 @@
+- Keep Linux application state, font caches, and update downloads in their existing locations while simplifying directory discovery.

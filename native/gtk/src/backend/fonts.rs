@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use directories::BaseDirs;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
@@ -55,8 +54,7 @@ type FontRevision = Vec<(OsString, u64, Option<SystemTime>)>;
 
 impl Default for GoogleFontCache {
     fn default() -> Self {
-        let directory = BaseDirs::new()
-            .map(|base| base.cache_dir().join("dev.typsmthng.desktop/google-fonts"))
+        let directory = crate::backend::platform_paths::google_font_cache_dir()
             .unwrap_or_else(|| std::env::temp_dir().join("typsmthng-google-fonts"));
         Self { directory }
     }
