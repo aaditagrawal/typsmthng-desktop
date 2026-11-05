@@ -23,7 +23,6 @@ required-features = ["desktop"]
 
 [dependencies]
 hex = "0.4.3"
-directories = "6.0.0"
 gio = { version = "0.22.10", optional = true }
 glib = { version = "0.22.10", optional = true }
 gtk = { package = "gtk4", version = "0.11.5", features = ["v4_12"], optional = true }
@@ -53,6 +52,9 @@ typstyle-core = "=0.15.2"
 # Glyph ids for the font faces Typst exposes; same version Typst links.
 ttf-parser = "0.25.1"
 typst-kit = { version = "=0.15.1", features = ["datetime", "embedded-fonts", "scan-fonts", "system-files", "emit-diagnostics"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+directories = "6.0.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

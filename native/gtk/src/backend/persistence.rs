@@ -4,7 +4,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use directories::BaseDirs;
 use tempfile::NamedTempFile;
 
 use crate::backend::error::{BackendError, Result};
@@ -24,21 +23,9 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn discover() -> Result<Self> {
-        let base = BaseDirs::new().ok_or_else(|| {
+        let app_data = crate::backend::platform_paths::data_dir().ok_or_else(|| {
             BackendError::Process("could not determine the user data directory".into())
         })?;
-        let app_data = if cfg!(target_os = "macos") {
-            base.home_dir().join("Library/Application Support")
-        } else if cfg!(target_os = "windows") {
-            std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| base.home_dir().join("AppData/Local"))
-        } else {
-            std::env::var_os("XDG_DATA_HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| base.home_dir().join(".local/share"))
-        };
         Ok(Self::new(app_data.join(APP_IDENTIFIER).join(CHANNEL)))
     }
 

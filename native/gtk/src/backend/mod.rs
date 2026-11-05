@@ -14,6 +14,7 @@ pub mod model;
 pub mod notes;
 pub mod paths;
 pub mod persistence;
+pub mod platform_paths;
 pub mod preview;
 pub mod project;
 pub mod release_notes;
