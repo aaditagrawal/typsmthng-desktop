@@ -28,7 +28,7 @@ pub fn hash_file(path: &Path) -> io::Result<String> {
         }
         digest.update(&buffer[..size]);
     }
-    Ok(hex::encode(digest.finalize()))
+    Ok(crate::encoding::encode_hex(digest.finalize()))
 }
 
 pub fn installed_target() -> io::Result<PathBuf> {

@@ -141,7 +141,7 @@ impl UpdateClient {
                 .map_err(|error| BackendError::io(output.path(), error))?;
             digest.update(&buffer[..read]);
         }
-        let actual = hex::encode(digest.finalize());
+        let actual = crate::encoding::encode_hex(digest.finalize());
         let mut checksums_response = http_agent(30)
             .get(checksums_url)
             .header("Accept", "application/octet-stream")
