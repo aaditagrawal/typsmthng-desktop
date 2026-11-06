@@ -20,7 +20,9 @@ DEFAULT_BASE = "0f6130447b42a2eca8e2d3bdbb3a95c81c5413a2"
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, cwd=ROOT, text=True, **kwargs)
+    return subprocess.run(
+        args, check=True, cwd=ROOT, text=True, encoding="utf-8", **kwargs
+    )
 
 
 MAIN = r"""
@@ -119,7 +121,7 @@ fn main() {
             black_box(candidate_error::BackendError::from(black_box(notify::Error::generic("failed"))));
             black_box(candidate_error::BackendError::from(black_box(zip::result::ZipError::FileNotFound)));
         });
-    let path = std::env::temp_dir().join(format!("typsmthng-desktop-owned-hash-benchmark-{}", std::process::id()));
+    let path = std::path::PathBuf::from(std::env::args_os().nth(2).unwrap()).join("hash-fixture");
     for size in [0, 32, 64 * 1024, 4 * 1024 * 1024] {
         std::fs::write(&path, vec![0xa5; size]).unwrap();
         assert_eq!(baseline_update_install::hash_file(&path).unwrap(), candidate_update_install::hash_file(&path).unwrap());
@@ -168,14 +170,16 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 """
-        (project / "Cargo.toml").write_text(manifest)
-        (project / "Cargo.lock").write_text(base_source("Cargo.lock"))
+        (project / "Cargo.toml").write_text(manifest, encoding="utf-8")
+        (project / "Cargo.lock").write_text(base_source("Cargo.lock"), encoding="utf-8")
         for name in ["error", "update_install"]:
             relative = f"native/gtk/src/backend/{name}.rs"
-            (source / f"baseline_{name}.rs").write_text(base_source(relative))
+            (source / f"baseline_{name}.rs").write_text(
+                base_source(relative), encoding="utf-8"
+            )
             shutil.copyfile(ROOT / relative, source / f"candidate_{name}.rs")
         shutil.copyfile(ROOT / "native/gtk/src/encoding.rs", source / "encoding.rs")
-        (source / "main.rs").write_text(MAIN)
+        (source / "main.rs").write_text(MAIN, encoding="utf-8")
         env = os.environ.copy()
         env["CARGO_BUILD_JOBS"] = "2"
         # Keep the isolated crate out of the application's build artifacts.
@@ -193,7 +197,6 @@ strip = "symbols"
         )
         if args.check_only:
             return
-        run("cargo", "build", *cargo[1:], "--offline", "--release", env=env)
         print(
             json.dumps(
                 {
@@ -214,12 +217,18 @@ strip = "symbols"
             ),
             flush=True,
         )
-        executable = (
-            Path(env["CARGO_TARGET_DIR"]) / "release/typsmthng-utility-benchmark"
+        # Let Cargo select the fresh executable, including any configured target.
+        run(
+            "cargo",
+            "run",
+            *cargo[1:],
+            "--offline",
+            "--release",
+            "--",
+            str(args.samples),
+            temporary,
+            env=env,
         )
-        if os.name == "nt":
-            executable = executable.with_suffix(".exe")
-        run(str(executable), str(args.samples), env=env)
 
 
 if __name__ == "__main__":
