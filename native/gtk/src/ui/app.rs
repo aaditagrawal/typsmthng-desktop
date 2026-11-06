@@ -4527,7 +4527,7 @@ mod tests {
         let server_requests = requests.clone();
         let body = b"example update";
         use sha2::Digest;
-        let checksum = hex::encode(sha2::Sha256::digest(body));
+        let checksum = typsmthng_gtk::encoding::encode_hex(sha2::Sha256::digest(body));
         let metadata = serde_json::json!({"tag_name": "v99.0.0", "html_url": base,
         "body": "- Review release notes before updating.\n- Render <b>literal text</b> safely.",
         "assets": [

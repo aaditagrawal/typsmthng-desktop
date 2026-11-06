@@ -369,22 +369,22 @@ mod tests {
         project
             .create_text_file("chapters/draft.typ", "Draft")
             .unwrap();
-        let png = hex::decode("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c636000020000050001a5f645400000000049454e44ae426082").unwrap();
-        let first = save_pasted_image(&project, "chapters/draft.typ", &png).unwrap();
-        let second = save_pasted_image(&project, "chapters/draft.typ", &png).unwrap();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x01\0\0\0\x01\x08\x06\0\0\0\x1f\x15\xc4\x89\0\0\0\x0bIDATx\x9cc`\0\x02\0\0\x05\0\x01\xa5\xf6E@\0\0\0\0IEND\xaeB`\x82";
+        let first = save_pasted_image(&project, "chapters/draft.typ", png).unwrap();
+        let second = save_pasted_image(&project, "chapters/draft.typ", png).unwrap();
         assert_eq!(first, "images/pasted-image.png");
         assert_eq!(second, "images/pasted-image-2.png");
         for relative in [&first, &second] {
             assert_eq!(
                 std::fs::read(project.root().join("chapters").join(relative)).unwrap(),
-                png
+                png.as_slice()
             );
         }
         assert_eq!(
             project.read_file("chapters/draft.typ").unwrap().content,
             super::super::FileContent::Text("Draft".into())
         );
-        assert!(save_pasted_image(&project, "../outside.typ", &png).is_err());
+        assert!(save_pasted_image(&project, "../outside.typ", png).is_err());
         assert!(save_pasted_image(&project, "main.typ", b"not an image").is_err());
         assert_eq!(
             pasted_image_source("hello ", 6, &first),

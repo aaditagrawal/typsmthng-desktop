@@ -5,3 +5,4 @@
 //! project and compiler behavior without GTK development libraries.
 
 pub mod backend;
+pub mod encoding;

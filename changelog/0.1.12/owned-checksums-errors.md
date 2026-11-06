@@ -1,0 +1,1 @@
+- Keep update checksums, cached font filenames, and error messages compatible while removing redundant utility libraries.

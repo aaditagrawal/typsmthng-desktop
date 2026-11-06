@@ -1,3 +1,5 @@
+mod encoding;
+
 #[allow(dead_code)]
 #[path = "backend/update_install.rs"]
 mod update_install;
