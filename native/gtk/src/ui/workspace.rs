@@ -11,7 +11,6 @@ use adw::prelude::*;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use sourceview5::prelude::*;
-use url::Url;
 
 use super::editor_tools::{EditorCallback, EditorTools};
 use super::font_picker::{FontPicker, FontPickerKind};
@@ -1887,7 +1886,7 @@ impl WorkspaceView {
             name.set_tooltip_text(Some(&file.path));
             if file.is_main {
                 name.add_css_class("document-spine");
-                name.set_tooltip_text(Some(&format!("{}\nMain Typst file", file.path)));
+                name.set_tooltip_text(Some(&format!("{}\nPreview entry file", file.path)));
             }
             line.append(&name);
             let more = gtk::MenuButton::new();
@@ -1997,6 +1996,7 @@ impl WorkspaceView {
         self.editor_tools.set_file(path);
         self.cancel_pending_compile();
         self.set_diagnostics(&[]);
+        self.set_source_map(None);
         self.suppress_changes.set(true);
         self.buffer.begin_irreversible_action();
         self.buffer.set_text(contents);
@@ -2323,10 +2323,6 @@ impl WorkspaceView {
                 (FALLBACK_PAGE_WIDTH, DEFAULT_PREVIEW_ASPECT),
                 |(width, height)| (width, width / height),
             );
-            let links = svg
-                .as_deref()
-                .map(extract_external_links)
-                .unwrap_or_default();
             let sheet = gtk::Box::new(gtk::Orientation::Vertical, 8);
             sheet.add_css_class("page-sheet");
             if source.is_some() {
@@ -2406,6 +2402,22 @@ impl WorkspaceView {
                         ) else {
                             return;
                         };
+                        if let Some(uri) = map.external_link(index, x, y) {
+                            gtk::UriLauncher::new(&uri).launch(
+                                picture.root().and_downcast::<gtk::Window>().as_ref(),
+                                None::<&gio::Cancellable>,
+                                {
+                                    let status = status.clone();
+                                    move |result| {
+                                        if let Err(error) = result {
+                                            status
+                                                .set_text(&format!("Could not open link: {error}"));
+                                        }
+                                    }
+                                },
+                            );
+                            return;
+                        }
                         if let Some(location) = map.jump(index, x, y) {
                             // Jumping to source from a preview-only layout needs the editor.
                             if !editor_pane.is_visible() {
@@ -2435,26 +2447,6 @@ impl WorkspaceView {
                 picture.add_controller(edit);
             }
             sheet.append(&picture);
-            if !links.is_empty() {
-                let links_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-                links_box.set_margin_start(8);
-                links_box.set_margin_end(8);
-                let heading = gtk::Label::new(Some(if links.len() == 1 {
-                    "LINK ON THIS PAGE"
-                } else {
-                    "LINKS ON THIS PAGE"
-                }));
-                heading.add_css_class("eyebrow");
-                heading.set_halign(gtk::Align::Start);
-                links_box.append(&heading);
-                for uri in links {
-                    let link = gtk::LinkButton::with_label(&uri, &external_link_label(&uri));
-                    link.set_halign(gtk::Align::Start);
-                    link.set_tooltip_text(Some(&uri));
-                    links_box.append(&link);
-                }
-                sheet.append(&links_box);
-            }
             self.preview_pictures.borrow_mut().push(PreviewPicture {
                 sheet: sheet.clone(),
                 widget: picture,
@@ -3296,56 +3288,6 @@ fn svg_page_size(svg: &str) -> Option<(f64, f64)> {
         .ok()?;
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
         .then_some((width, height))
-}
-
-fn extract_external_links(svg: &str) -> Vec<String> {
-    static HREF: OnceLock<Regex> = OnceLock::new();
-    let href = HREF.get_or_init(|| {
-        Regex::new(r#"(?i)(?:\bhref|xlink:href)\s*=\s*(?:[\"]([^\"]*)[\"]|[']([^']*)['])"#)
-            .expect("valid SVG link regex")
-    });
-    let mut seen = HashSet::new();
-    href.captures_iter(svg)
-        .filter_map(|captures| captures.get(1).or_else(|| captures.get(2)))
-        .map(|value| decode_xml_attribute(value.as_str()))
-        .filter(|value| {
-            Url::parse(value).is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "mailto"))
-        })
-        .filter(|value| seen.insert(value.clone()))
-        .collect()
-}
-
-fn decode_xml_attribute(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-}
-
-fn external_link_label(uri: &str) -> String {
-    let Ok(url) = Url::parse(uri) else {
-        return uri.to_string();
-    };
-    let label = if url.scheme() == "mailto" {
-        format!("Email {}", url.path())
-    } else {
-        let host = url.host_str().unwrap_or_default();
-        let path = url.path().trim_end_matches('/');
-        if path.is_empty() {
-            format!("Open {host}")
-        } else {
-            format!("Open {host}{path}")
-        }
-    };
-    let mut characters = label.chars();
-    let shortened = characters.by_ref().take(72).collect::<String>();
-    if characters.next().is_some() {
-        format!("{shortened}…")
-    } else {
-        shortened
-    }
 }
 
 /// Account for GtkPicture's centered `Contain` sizing and cropped slide widths.
@@ -4358,9 +4300,9 @@ fn build_search_dialog(
 #[cfg(test)]
 mod tests {
     use super::{
-        document_match_offsets, document_regex, extract_external_links, preview_dimensions,
-        preview_identity, preview_point, reusable_preview_pages, should_uncomment_lines,
-        svg_aspect_ratio, PreviewZoom,
+        document_match_offsets, document_regex, preview_dimensions, preview_identity,
+        preview_point, reusable_preview_pages, should_uncomment_lines, svg_aspect_ratio,
+        PreviewZoom,
     };
 
     #[test]
@@ -6009,24 +5951,6 @@ mod tests {
         assert_eq!(
             svg_aspect_ratio(r#"<svg width="600pt" height="800pt"></svg>"#),
             Some(0.75)
-        );
-    }
-
-    #[test]
-    fn preview_links_are_external_safe_and_deduplicated() {
-        let svg = r##"<svg>
-          <a href="#local">local</a>
-          <a href="https://example.com/docs?a=1&amp;b=2">docs</a>
-          <a xlink:href='mailto:hello@example.com'>mail</a>
-          <a href="javascript:alert(1)">unsafe</a>
-          <a href="https://example.com/docs?a=1&amp;b=2">duplicate</a>
-        </svg>"##;
-        assert_eq!(
-            extract_external_links(svg),
-            vec![
-                "https://example.com/docs?a=1&b=2".to_string(),
-                "mailto:hello@example.com".to_string(),
-            ]
         );
     }
 

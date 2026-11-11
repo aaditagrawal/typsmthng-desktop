@@ -399,6 +399,15 @@ impl Project {
 
     pub fn resolve_main_file(&self, current: Option<&str>) -> Result<String> {
         let files = self.entries(true)?;
+        if let Some(current) = current {
+            let normalized = normalize_relative_path(current)?;
+            if files
+                .iter()
+                .any(|entry| entry.path == normalized && entry.extension == ".typ")
+            {
+                return Ok(normalized);
+            }
+        }
         let mut main_files = files
             .iter()
             .filter(|entry| {
@@ -408,15 +417,6 @@ impl Project {
         main_files.sort_by_key(|entry| entry.path.matches('/').count());
         if let Some(entry) = main_files.first() {
             return Ok(entry.path.clone());
-        }
-        if let Some(current) = current {
-            let normalized = normalize_relative_path(current)?;
-            if files
-                .iter()
-                .any(|entry| entry.path == normalized && entry.extension == ".typ")
-            {
-                return Ok(normalized);
-            }
         }
         files
             .iter()
@@ -564,6 +564,18 @@ mod tests {
         assert_eq!(text[0].line, 2);
         project.delete_permanently("chapters/renamed.typ").unwrap();
         assert!(!project.root().join("chapters/renamed.typ").exists());
+    }
+
+    #[test]
+    fn compilation_follows_open_typst_file_before_main() {
+        let (_temporary, project) = fixture();
+        assert_eq!(
+            project.resolve_main_file(Some("chapters/one.typ")).unwrap(),
+            "chapters/one.typ"
+        );
+        for current in [None, Some("missing.typ"), Some("image.png")] {
+            assert_eq!(project.resolve_main_file(current).unwrap(), "main.typ");
+        }
     }
 
     #[test]

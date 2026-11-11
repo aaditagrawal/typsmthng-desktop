@@ -180,6 +180,23 @@ impl SourceMap {
         self.column
     }
 
+    /// External link under a preview click, restricted to browser/email schemes.
+    pub fn external_link(&self, page: usize, x: f64, y: f64) -> Option<String> {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        let position = PagedPosition {
+            page: page.checked_add(1)?.try_into().ok()?,
+            point: Point::new(Abs::pt(x), Abs::pt(y)),
+        };
+        let Jump::Url(uri) = typst_ide::jump_from_click(&self.world, &self.document, &position)?
+        else {
+            return None;
+        };
+        let url = url::Url::parse(uri.as_str()).ok()?;
+        matches!(url.scheme(), "http" | "https" | "mailto").then(|| uri.to_string())
+    }
+
     pub fn jump(&self, page: usize, x: f64, y: f64) -> Option<SourceLocation> {
         if !x.is_finite() || !y.is_finite() {
             return None;
@@ -1473,6 +1490,40 @@ mod tests {
             compiled(&compiler, &other).pages,
             compiled(&compiler, &project).pages
         );
+    }
+
+    #[test]
+    fn preview_links_are_clickable_in_place_and_reject_unsafe_schemes() {
+        let (_dir, project) = fixture(
+            "#set page(width: 300pt, height: 200pt, margin: 20pt)\n\
+             #link(\"https://example.com/docs?a=1&b=2\")[Website]\n\n\
+             #link(\"mailto:hello@example.com\")[Email]\n\n\
+             #link(\"http://example.org\")[HTTP]\n\n\
+             #link(\"javascript:alert(1)\")[Unsafe]\n\nPlain text",
+        );
+        let preview = compiled(&PreviewCompiler::default(), &project);
+        let map = preview.source_map;
+        let mut links = std::collections::BTreeSet::new();
+        for y in (20..180).step_by(2) {
+            for x in (20..280).step_by(2) {
+                if let Some(uri) = map.external_link(0, f64::from(x), f64::from(y)) {
+                    links.insert(uri);
+                }
+            }
+        }
+        assert_eq!(
+            links,
+            [
+                "https://example.com/docs?a=1&b=2".to_string(),
+                "mailto:hello@example.com".to_string(),
+                "http://example.org".to_string(),
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(map.external_link(0, 290., 190.), None);
+        assert_eq!(map.external_link(1, 22., 25.), None);
+        assert_eq!(map.external_link(0, f64::NAN, 25.), None);
     }
 
     #[test]

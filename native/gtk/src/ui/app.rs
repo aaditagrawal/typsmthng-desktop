@@ -1144,6 +1144,7 @@ impl AppController {
                             .show_binary_file(&project.root().join(&path));
                     }
                 }
+                self.refresh_project_files();
             }
             Err(error) => self.show_error("Could not open file", &error.to_string()),
         }
