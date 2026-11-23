@@ -79,7 +79,9 @@ jobs:
             jq -ce 'keys | map(select(test("^fedora-[0-9]+-x86_64$"))) | select(length > 0)')
           configured=$(curl --fail --silent --show-error --retry 3 --get "$api/project" \
             --data-urlencode "ownername=${COPR_PROJECT%/*}" --data-urlencode "projectname=${COPR_PROJECT#*/}" |
-            jq -ce 'select(.enable_net == false) | .chroot_repos | keys')
+            jq -ce 'if .enable_net == false then .chroot_repos | keys
+                    else error("Disable build networking in the COPR project before publishing")
+                    end')
           if ! jq -en --argjson active "$active" --argjson configured "$configured" \
               '($active - $configured) == []' >/dev/null; then
             mapfile -t project_args < <(jq -nr --argjson active "$active" --argjson configured "$configured" \

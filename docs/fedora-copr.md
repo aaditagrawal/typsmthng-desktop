@@ -29,7 +29,8 @@ networking while rebuilding the RPM and launches the installed Fedora package.
 
 Create a Fedora account, sign in to [COPR](https://copr.fedorainfracloud.org/),
 and obtain the configuration from [the API page](https://copr.fedorainfracloud.org/api/).
-Follow [COPR's setup documentation](https://docs.pagure.org/copr.copr/user_documentation.html#quick-start).
+To submit builds, request **Builder** access on the [project permissions page](https://copr.fedorainfracloud.org/coprs/aaditagrawal/apps/permissions/) and wait for the owner to approve it.
+The release workflow also needs permission to edit project settings when it enables a new Fedora target.
 
 ```sh
 sudo dnf install copr-cli
