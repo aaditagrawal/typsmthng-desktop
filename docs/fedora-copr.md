@@ -6,8 +6,8 @@ their license notices, and the checksum-verified Typst 0.15.1 compiler. The bina
 RPM builds without network access and installs its own compiler at
 `/usr/lib/typsmthng/typst`, so it does not replace Fedora's `typst` package.
 
-The first supported architecture is x86_64. Fedora 44 is the recommended build
-chroot. Other chroots need Rust 1.93.1 or newer, GTK 4.12 or newer,
+The shared `aaditagrawal/apps` project builds for active numbered Fedora x86_64
+targets, including Fedora 43, 44 and 45 while COPR accepts builds. The RPM needs Rust 1.93.1 or newer, GTK 4.12 or newer,
 GtkSourceView 5.4 or newer, and libadwaita 1.5 or newer.
 
 ## Build a source RPM
@@ -33,18 +33,17 @@ Follow [COPR's setup documentation](https://docs.pagure.org/copr.copr/user_docum
 
 ```sh
 sudo dnf install copr-cli
-copr-cli create typsmthng --chroot fedora-44-x86_64
-copr-cli build OWNER/typsmthng build/copr/typsmthng-*.src.rpm
+copr-cli build aaditagrawal/apps build/copr/typsmthng-*.src.rpm
 ```
 
-The project must exist before submission. Select its desired x86_64 Fedora
-chroots in COPR; the publisher uses that project configuration.
+The project must exist before submission. The release workflow queries COPR for active numbered Fedora x86_64
+targets, enables any missing targets and submits the source RPM for each one.
 
 For GitHub Actions, configure:
 
 | Repository setting | Value |
 | --- | --- |
-| Variable `COPR_PROJECT` | `OWNER/typsmthng` |
+| Variable `COPR_PROJECT` | `aaditagrawal/apps` |
 | Secret `COPR_CONFIG` | The complete INI configuration from COPR's API page |
 
 `COPR_CONFIG` is written to a temporary file with mode 600 and removed after
@@ -72,9 +71,10 @@ release tag or full commit SHA for reproducible source selection.
 After a successful COPR build:
 
 ```sh
-sudo dnf copr enable OWNER/typsmthng
+sudo dnf copr enable aaditagrawal/apps
 sudo dnf install typsmthng
 ```
 
-Subsequent releases update through `dnf upgrade`. The native application does
+If you previously enabled `aaditagrawal/typsmthng-desktop`, enable the shared project
+once to receive new versions. Subsequent releases update through `dnf upgrade`. The native application does
 not replace a package-managed installation through its download updater.
