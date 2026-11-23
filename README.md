@@ -172,7 +172,7 @@ On macOS, use Command in place of Control.
 
 ## Packaging
 
-- [Fedora COPR packaging](docs/fedora-copr.md) builds a source RPM with vendored dependencies and can publish verified releases to a configured COPR project.
+- On Fedora x86_64, run `sudo dnf copr enable aaditagrawal/apps` and `sudo dnf install typsmthng`. New releases arrive through DNF. See [Fedora packaging](docs/fedora-copr.md).
 - Linux desktop metadata, Flatpak, AppImage, deb, and rpm files live in `packaging/linux` and `packaging/flatpak`.
 - The macOS bundler copies the GTK dylib closure and runtime data before signing the `.app` and creating a DMG.
 - The Windows collector copies the GTK DLL and data closure before NSIS builds the installer.

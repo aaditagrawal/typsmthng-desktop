@@ -182,7 +182,7 @@ jobs:
       matrix:
         include:
           - name: macOS arm64
-            os: macos-14
+            os: macos-15
           - name: macOS x64
             os: macos-15-intel
           - name: Windows x64

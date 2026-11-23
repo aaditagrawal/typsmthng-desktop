@@ -1,0 +1,1 @@
+- On Fedora x86_64, enable the shared aaditagrawal/apps COPR to install Typsmthng and receive updates through DNF.

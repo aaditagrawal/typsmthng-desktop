@@ -73,4 +73,20 @@ jobs:
           printf '%s\n' "$COPR_CONFIG" > "$config"
           srpms=(build/copr/*.src.rpm)
           test "${#srpms[@]}" -eq 1
-          uv tool run --from copr-cli==2.6 copr-cli --config "$config" build "$COPR_PROJECT" "${srpms[0]}"
+          copr=(uv tool run --from copr-cli==2.6 copr-cli --config "$config")
+          api=https://copr.fedorainfracloud.org/api_3
+          active=$(curl --fail --silent --show-error --retry 3 "$api/mock-chroots/list" |
+            jq -ce 'keys | map(select(test("^fedora-[0-9]+-x86_64$"))) | select(length > 0)')
+          configured=$(curl --fail --silent --show-error --retry 3 --get "$api/project" \
+            --data-urlencode "ownername=${COPR_PROJECT%/*}" --data-urlencode "projectname=${COPR_PROJECT#*/}" |
+            jq -ce 'if .enable_net == false then .chroot_repos | keys
+                    else error("Disable build networking in the COPR project before publishing")
+                    end')
+          if ! jq -en --argjson active "$active" --argjson configured "$configured" \
+              '($active - $configured) == []' >/dev/null; then
+            mapfile -t project_args < <(jq -nr --argjson active "$active" --argjson configured "$configured" \
+              '($configured + $active) | unique[] | "--chroot", .')
+            "${copr[@]}" modify "$COPR_PROJECT" "${project_args[@]}"
+          fi
+          mapfile -t build_args < <(jq -r '.[] | "--chroot", .' <<<"$active")
+          "${copr[@]}" build "$COPR_PROJECT" "${build_args[@]}" "${srpms[0]}"
